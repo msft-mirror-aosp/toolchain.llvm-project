@@ -31,10 +31,10 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <memory>
@@ -1758,8 +1758,8 @@ bool X86AsmParser::CreateMemForMSInlineAsm(
   // It is widely common for MS InlineAsm to use a global variable and one/two
   // registers in a mmory expression, and though unaccessible via rip/eip.
   if (IsGlobalLV && (BaseReg || IndexReg)) {
-    Operands.push_back(
-        X86Operand::CreateMem(getPointerWidth(), Disp, Start, End));
+    Operands.push_back(X86Operand::CreateMem(getPointerWidth(), Disp, Start,
+                                             End, Size, Identifier, Decl));
     return false;
   }
   // Otherwise, we set the base register to a non-zero value
@@ -2551,6 +2551,8 @@ bool X86AsmParser::ParseIntelOperand(OperandVector &Operands) {
   StringRef ErrMsg;
   unsigned BaseReg = SM.getBaseReg();
   unsigned IndexReg = SM.getIndexReg();
+  if (IndexReg && BaseReg == X86::RIP)
+    BaseReg = 0;
   unsigned Scale = SM.getScale();
   if (!PtrInOperand)
     Size = SM.getElementSize() << 3;
@@ -2655,7 +2657,7 @@ bool X86AsmParser::ParseATTOperand(OperandVector &Operands) {
         Expr = nullptr;
         Reg = RE->getRegNo();
 
-        // Sanity check register.
+        // Check the register.
         if (Reg == X86::EIZ || Reg == X86::RIZ)
           return Error(
               Loc, "%eiz and %riz can only be used as index registers",
@@ -2915,7 +2917,7 @@ bool X86AsmParser::ParseMemOperand(unsigned SegReg, const MCExpr *Disp,
         check(!isa<X86MCExpr>(E), BaseLoc, "expected register here"))
       return true;
 
-    // Sanity check register.
+    // Check the register.
     BaseReg = cast<X86MCExpr>(E)->getRegNo();
     if (BaseReg == X86::EIZ || BaseReg == X86::RIZ)
       return Error(BaseLoc, "eiz and riz can only be used as index registers",
@@ -4093,12 +4095,12 @@ void X86AsmParser::applyLVICFIMitigation(MCInst &Inst, MCStreamer &Out) {
   // be found here:
   // https://software.intel.com/security-software-guidance/insights/deep-dive-load-value-injection#specialinstructions
   switch (Inst.getOpcode()) {
-  case X86::RETW:
-  case X86::RETL:
-  case X86::RETQ:
-  case X86::RETIL:
-  case X86::RETIQ:
-  case X86::RETIW: {
+  case X86::RET16:
+  case X86::RET32:
+  case X86::RET64:
+  case X86::RETI16:
+  case X86::RETI32:
+  case X86::RETI64: {
     MCInst ShlInst, FenceInst;
     bool Parse32 = is32BitMode() || Code16GCC;
     unsigned Basereg =
@@ -4269,24 +4271,6 @@ unsigned X86AsmParser::checkTargetMatchPredicate(MCInst &Inst) {
        ForcedVEXEncoding != VEXEncoding_VEX2 &&
        ForcedVEXEncoding != VEXEncoding_VEX3))
     return Match_Unsupported;
-
-  // These instructions match ambiguously with their VEX encoded counterparts
-  // and appear first in the matching table. Reject them unless we're forcing
-  // EVEX encoding.
-  // FIXME: We really need a way to break the ambiguity.
-  switch (Opc) {
-  case X86::VCVTSD2SIZrm_Int:
-  case X86::VCVTSD2SI64Zrm_Int:
-  case X86::VCVTSS2SIZrm_Int:
-  case X86::VCVTSS2SI64Zrm_Int:
-  case X86::VCVTTSD2SIZrm:   case X86::VCVTTSD2SIZrm_Int:
-  case X86::VCVTTSD2SI64Zrm: case X86::VCVTTSD2SI64Zrm_Int:
-  case X86::VCVTTSS2SIZrm:   case X86::VCVTTSS2SIZrm_Int:
-  case X86::VCVTTSS2SI64Zrm: case X86::VCVTTSS2SI64Zrm_Int:
-    if (ForcedVEXEncoding != VEXEncoding_EVEX)
-      return Match_Unsupported;
-    break;
-  }
 
   return Match_Success;
 }
@@ -4855,7 +4839,7 @@ bool X86AsmParser::parseDirectiveArch() {
 bool X86AsmParser::parseDirectiveNops(SMLoc L) {
   int64_t NumBytes = 0, Control = 0;
   SMLoc NumBytesLoc, ControlLoc;
-  const MCSubtargetInfo STI = getSTI();
+  const MCSubtargetInfo& STI = getSTI();
   NumBytesLoc = getTok().getLoc();
   if (getParser().checkForValidSection() ||
       getParser().parseAbsoluteExpression(NumBytes))
@@ -4881,7 +4865,7 @@ bool X86AsmParser::parseDirectiveNops(SMLoc L) {
   }
 
   /// Emit nops
-  getParser().getStreamer().emitNops(NumBytes, Control, L);
+  getParser().getStreamer().emitNops(NumBytes, Control, L, STI);
 
   return false;
 }
@@ -4894,11 +4878,11 @@ bool X86AsmParser::parseDirectiveEven(SMLoc L) {
 
   const MCSection *Section = getStreamer().getCurrentSectionOnly();
   if (!Section) {
-    getStreamer().InitSections(false);
+    getStreamer().initSections(false, getSTI());
     Section = getStreamer().getCurrentSectionOnly();
   }
   if (Section->UseCodeAlign())
-    getStreamer().emitCodeAlignment(2, 0);
+    getStreamer().emitCodeAlignment(2, &getSTI(), 0);
   else
     getStreamer().emitValueToAlignment(2, 0, 1, 0);
   return false;

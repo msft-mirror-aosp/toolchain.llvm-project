@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -verify -std=c++17 -fcoroutines-ts -fsyntax-only %s
+// RUN: %clang_cc1 -verify -std=c++20 -fsyntax-only %s
 
 namespace std {
 template <class Promise = void> struct coroutine_handle {

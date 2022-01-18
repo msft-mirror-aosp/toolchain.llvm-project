@@ -1,6 +1,6 @@
-// This file is the same with coroutines.cpp except the coroutine components are defined in std::experimental namespace.
-// This intention of this test is to make sure the legacy imeplementation in std::experimental namespace could work.
-// TODO: Remove this test once we didn't support
+// This file is the same as coroutines.cpp, except the components are defined in namespace std::experimental.
+// The intent of this test is to make sure the std::experimental implementation still works.
+// TODO: Remove this test once we drop support for <experimental/coroutine>.
 
 // RUN: %clang_cc1 -std=c++2b                 -fsyntax-only -verify=expected,cxx20_2b,cxx2b    %s -fcxx-exceptions -fexceptions -Wunused-result
 // RUN: %clang_cc1 -std=c++20                 -fsyntax-only -verify=expected,cxx14_20,cxx20_2b %s -fcxx-exceptions -fexceptions -Wunused-result
@@ -83,7 +83,7 @@ struct auto_await_suspend {
 
 struct DummyVoidTag {};
 DummyVoidTag no_specialization() { // expected-error {{this function cannot be a coroutine: 'std::experimental::coroutine_traits<DummyVoidTag>' has no member named 'promise_type'}}
-  co_await a;                      // expected-warning {{coroutine_traits defined in std::experimental namespace is deprecated. Consider updating libcxx and include <coroutine> instead of <experimental/coroutine>}}
+  co_await a;                      // expected-warning {{Please move from std::experimental::coroutine_traits to std::coroutine_traits}}
 }
 
 template <typename... T>
@@ -193,7 +193,7 @@ void coreturn(int n) {
   if (n == 1)
     co_return {4}; // expected-warning {{braces around scalar initializer}}
   if (n == 2)
-    co_return "foo"; // expected-error {{cannot initialize a parameter of type 'int' with an lvalue of type 'const char [4]'}}
+    co_return "foo"; // expected-error {{cannot initialize a parameter of type 'int' with an lvalue of type 'const char[4]'}}
   co_return 42;
 }
 
@@ -772,7 +772,7 @@ template <> struct std::experimental::coroutine_handle<good_promise_2> {};
 
 template <> struct std::experimental::coroutine_traits<float> { using promise_type = good_promise_2; };
 
-float badly_specialized_coro_handle() { // expected-error {{std::coroutine_handle missing a member named 'from_address'}}
+float badly_specialized_coro_handle() { // expected-error {{std::coroutine_handle must have a member named 'from_address'}}
   //expected-note@-1 {{call to 'initial_suspend' implicitly required by the initial suspend point}}
   co_return; //expected-note {{function is a coroutine due to use of 'co_return' here}}
 }
@@ -1119,7 +1119,7 @@ struct TestType {
     static_assert(!TC.MatchesArgs<TestType *>, "");
   }
 
-  CoroMemberTag test_sanity(int *) const {
+  CoroMemberTag test_asserts(int *) const {
     auto TC = co_yield 0;
     static_assert(TC.MatchesArgs<const TestType &>, ""); // expected-error {{static_assert failed}}
     static_assert(TC.MatchesArgs<const TestType &>, ""); // expected-error {{static_assert failed}}
@@ -1211,7 +1211,7 @@ template CoroMemberTag TestType::test_static_template<void>(const char *volatile
 template <class... Args>
 struct DepTestType {
 
-  CoroMemberTag test_sanity(int *) const {
+  CoroMemberTag test_asserts(int *) const {
     auto TC = co_yield 0;
     static_assert(TC.template MatchesArgs<const DepTestType &>, ""); // expected-error {{static_assert failed}}
     static_assert(TC.template MatchesArgs<>, "");                    // expected-error {{static_assert failed}}

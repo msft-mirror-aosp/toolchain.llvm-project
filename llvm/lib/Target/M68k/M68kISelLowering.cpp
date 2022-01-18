@@ -1978,7 +1978,7 @@ SDValue M68kTargetLowering::LowerSETCCCARRY(SDValue Op,
   M68k::CondCode CC = TranslateIntegerM68kCC(cast<CondCodeSDNode>(Cond)->get());
 
   EVT CarryVT = Carry.getValueType();
-  APInt NegOne = APInt::getAllOnesValue(CarryVT.getScalarSizeInBits());
+  APInt NegOne = APInt::getAllOnes(CarryVT.getScalarSizeInBits());
   Carry = DAG.getNode(M68kISD::ADD, DL, DAG.getVTList(CarryVT, MVT::i32), Carry,
                       DAG.getConstant(NegOne, DL, CarryVT));
 
@@ -2202,7 +2202,7 @@ SDValue M68kTargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
       Op2.getOpcode() == ISD::TRUNCATE) {
     SDValue T1 = Op1.getOperand(0), T2 = Op2.getOperand(0);
     if (T1.getValueType() == T2.getValueType() &&
-        // Blacklist CopyFromReg to avoid partial register stalls.
+        // Block CopyFromReg so partial register stalls are avoided.
         T1.getOpcode() != ISD::CopyFromReg &&
         T2.getOpcode() != ISD::CopyFromReg) {
       SDVTList VTs = DAG.getVTList(T1.getValueType(), MVT::Glue);

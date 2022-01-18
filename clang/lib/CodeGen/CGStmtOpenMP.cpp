@@ -518,8 +518,10 @@ static llvm::Function *emitOutlinedFunctionPrologue(
   F->setDoesNotRecurse();
 
   // Always inline the outlined function if optimizations are enabled.
-  if (CGM.getCodeGenOpts().OptimizationLevel != 0)
+  if (CGM.getCodeGenOpts().OptimizationLevel != 0) {
+    F->removeFnAttr(llvm::Attribute::NoInline);
     F->addFnAttr(llvm::Attribute::AlwaysInline);
+  }
 
   // Generate the function.
   CGF.StartFunction(CD, Ctx.VoidTy, F, FuncInfo, TargetArgs,
@@ -1784,6 +1786,10 @@ void CodeGenFunction::EmitOMPParallelDirective(const OMPParallelDirective &S) {
   checkForLastprivateConditionalUpdate(*this, S);
 }
 
+void CodeGenFunction::EmitOMPMetaDirective(const OMPMetaDirective &S) {
+  EmitStmt(S.getIfStmt());
+}
+
 namespace {
 /// RAII to handle scopes for loop transformation directives.
 class OMPTransformDirectiveScopeRAII {
@@ -1825,9 +1831,7 @@ static void emitBody(CodeGenFunction &CGF, const Stmt *S, const Stmt *NextLoop,
     return;
   }
   if (SimplifiedS == NextLoop) {
-    if (auto *Dir = dyn_cast<OMPTileDirective>(SimplifiedS))
-      SimplifiedS = Dir->getTransformedStmt();
-    if (auto *Dir = dyn_cast<OMPUnrollDirective>(SimplifiedS))
+    if (auto *Dir = dyn_cast<OMPLoopTransformationDirective>(SimplifiedS))
       SimplifiedS = Dir->getTransformedStmt();
     if (const auto *CanonLoop = dyn_cast<OMPCanonicalLoop>(SimplifiedS))
       SimplifiedS = CanonLoop->getLoopStmt();
@@ -1951,11 +1955,27 @@ llvm::CanonicalLoopInfo *
 CodeGenFunction::EmitOMPCollapsedCanonicalLoopNest(const Stmt *S, int Depth) {
   assert(Depth == 1 && "Nested loops with OpenMPIRBuilder not yet implemented");
 
+  // The caller is processing the loop-associated directive processing the \p
+  // Depth loops nested in \p S. Put the previous pending loop-associated
+  // directive to the stack. If the current loop-associated directive is a loop
+  // transformation directive, it will push its generated loops onto the stack
+  // such that together with the loops left here they form the combined loop
+  // nest for the parent loop-associated directive.
+  int ParentExpectedOMPLoopDepth = ExpectedOMPLoopDepth;
+  ExpectedOMPLoopDepth = Depth;
+
   EmitStmt(S);
   assert(OMPLoopNestStack.size() >= (size_t)Depth && "Found too few loops");
 
   // The last added loop is the outermost one.
-  return OMPLoopNestStack.back();
+  llvm::CanonicalLoopInfo *Result = OMPLoopNestStack.back();
+
+  // Pop the \p Depth loops requested by the call from that stack and restore
+  // the previous context.
+  OMPLoopNestStack.set_size(OMPLoopNestStack.size() - Depth);
+  ExpectedOMPLoopDepth = ParentExpectedOMPLoopDepth;
+
+  return Result;
 }
 
 void CodeGenFunction::EmitOMPCanonicalLoop(const OMPCanonicalLoop *S) {
@@ -2585,6 +2605,46 @@ void CodeGenFunction::EmitOMPTileDirective(const OMPTileDirective &S) {
 }
 
 void CodeGenFunction::EmitOMPUnrollDirective(const OMPUnrollDirective &S) {
+  bool UseOMPIRBuilder = CGM.getLangOpts().OpenMPIRBuilder;
+
+  if (UseOMPIRBuilder) {
+    auto DL = SourceLocToDebugLoc(S.getBeginLoc());
+    const Stmt *Inner = S.getRawStmt();
+
+    // Consume nested loop. Clear the entire remaining loop stack because a
+    // fully unrolled loop is non-transformable. For partial unrolling the
+    // generated outer loop is pushed back to the stack.
+    llvm::CanonicalLoopInfo *CLI = EmitOMPCollapsedCanonicalLoopNest(Inner, 1);
+    OMPLoopNestStack.clear();
+
+    llvm::OpenMPIRBuilder &OMPBuilder = CGM.getOpenMPRuntime().getOMPBuilder();
+
+    bool NeedsUnrolledCLI = ExpectedOMPLoopDepth >= 1;
+    llvm::CanonicalLoopInfo *UnrolledCLI = nullptr;
+
+    if (S.hasClausesOfKind<OMPFullClause>()) {
+      assert(ExpectedOMPLoopDepth == 0);
+      OMPBuilder.unrollLoopFull(DL, CLI);
+    } else if (auto *PartialClause = S.getSingleClause<OMPPartialClause>()) {
+      uint64_t Factor = 0;
+      if (Expr *FactorExpr = PartialClause->getFactor()) {
+        Factor = FactorExpr->EvaluateKnownConstInt(getContext()).getZExtValue();
+        assert(Factor >= 1 && "Only positive factors are valid");
+      }
+      OMPBuilder.unrollLoopPartial(DL, CLI, Factor,
+                                   NeedsUnrolledCLI ? &UnrolledCLI : nullptr);
+    } else {
+      OMPBuilder.unrollLoopHeuristic(DL, CLI);
+    }
+
+    assert((!NeedsUnrolledCLI || UnrolledCLI) &&
+           "NeedsUnrolledCLI implies UnrolledCLI to be set");
+    if (UnrolledCLI)
+      OMPLoopNestStack.push_back(UnrolledCLI);
+
+    return;
+  }
+
   // This function is only called if the unrolled loop is not consumed by any
   // other loop-associated construct. Such a loop-associated construct will have
   // used the transformed AST.
@@ -4450,6 +4510,9 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(
         Address Replacement(CGF.Builder.CreateLoad(Pair.second),
                             CGF.getContext().getDeclAlign(Pair.first));
         Scope.addPrivate(Pair.first, [Replacement]() { return Replacement; });
+        if (auto *DI = CGF.getDebugInfo())
+          DI->EmitDeclareOfAutoVariable(Pair.first, Pair.second.getPointer(),
+                                        CGF.Builder, /*UsePointerValue*/ true);
       }
       // Adjust mapping for internal locals by mapping actual memory instead of
       // a pointer to this memory.
@@ -4660,7 +4723,7 @@ void CodeGenFunction::EmitOMPTargetTaskBasedDirective(
                            [&InputInfo]() { return InputInfo.SizesArray; });
     // If there is no user-defined mapper, the mapper array will be nullptr. In
     // this case, we don't need to privatize it.
-    if (!dyn_cast_or_null<llvm::ConstantPointerNull>(
+    if (!isa_and_nonnull<llvm::ConstantPointerNull>(
             InputInfo.MappersArray.getPointer())) {
       MVD = createImplicitFirstprivateForType(
           getContext(), Data, BaseAndPointerAndMapperType, CD, S.getBeginLoc());
@@ -4785,7 +4848,14 @@ void CodeGenFunction::EmitOMPBarrierDirective(const OMPBarrierDirective &S) {
 }
 
 void CodeGenFunction::EmitOMPTaskwaitDirective(const OMPTaskwaitDirective &S) {
-  CGM.getOpenMPRuntime().emitTaskwaitCall(*this, S.getBeginLoc());
+  OMPTaskDataTy Data;
+  // Build list of dependences
+  for (const auto *C : S.getClausesOfKind<OMPDependClause>()) {
+    OMPTaskDataTy::DependData &DD =
+        Data.Dependences.emplace_back(C->getDependencyKind(), C->getModifier());
+    DD.DepExprs.append(C->varlist_begin(), C->varlist_end());
+  }
+  CGM.getOpenMPRuntime().emitTaskwaitCall(*this, S.getBeginLoc(), Data);
 }
 
 void CodeGenFunction::EmitOMPTaskgroupDirective(
@@ -5306,8 +5376,6 @@ static llvm::Function *emitOutlinedOrderedFunction(CodeGenModule &CGM,
   CGF.CapturedStmtInfo = &CapStmtInfo;
   llvm::Function *Fn = CGF.GenerateOpenMPCapturedStmtFunction(*S, Loc);
   Fn->setDoesNotRecurse();
-  if (CGM.getCodeGenOpts().OptimizationLevel != 0)
-    Fn->addFnAttr(llvm::Attribute::AlwaysInline);
   return Fn;
 }
 
@@ -5930,6 +5998,12 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_novariants:
   case OMPC_nocontext:
   case OMPC_filter:
+  case OMPC_when:
+  case OMPC_adjust_args:
+  case OMPC_append_args:
+  case OMPC_memory_order:
+  case OMPC_bind:
+  case OMPC_align:
     llvm_unreachable("Clause is not allowed in 'omp atomic'.");
   }
 }
@@ -7175,6 +7249,16 @@ void CodeGenFunction::EmitOMPTargetUpdateDirective(
 
   OMPLexicalScope Scope(*this, S, OMPD_task);
   CGM.getOpenMPRuntime().emitTargetDataStandAloneCall(*this, S, IfCond, Device);
+}
+
+void CodeGenFunction::EmitOMPGenericLoopDirective(
+    const OMPGenericLoopDirective &S) {
+  // Unimplemented, just inline the underlying statement for now.
+  auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
+    CGF.EmitStmt(cast<CapturedStmt>(S.getAssociatedStmt())->getCapturedStmt());
+  };
+  OMPLexicalScope Scope(*this, S, OMPD_unknown);
+  CGM.getOpenMPRuntime().emitInlinedDirective(*this, OMPD_loop, CodeGen);
 }
 
 void CodeGenFunction::EmitSimpleOMPExecutableDirective(

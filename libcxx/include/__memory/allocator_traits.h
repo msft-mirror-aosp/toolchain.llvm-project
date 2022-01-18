@@ -263,7 +263,7 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
     }
 
     template <class _Ap = _Alloc, class =
-        _EnableIf<__has_allocate_hint<_Ap, size_type, const_void_pointer>::value> >
+        __enable_if_t<__has_allocate_hint<_Ap, size_type, const_void_pointer>::value> >
     _LIBCPP_NODISCARD_AFTER_CXX17 _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static pointer allocate(allocator_type& __a, size_type __n, const_void_pointer __hint) {
         _LIBCPP_SUPPRESS_DEPRECATED_PUSH
@@ -271,7 +271,7 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
         _LIBCPP_SUPPRESS_DEPRECATED_POP
     }
     template <class _Ap = _Alloc, class = void, class =
-        _EnableIf<!__has_allocate_hint<_Ap, size_type, const_void_pointer>::value> >
+        __enable_if_t<!__has_allocate_hint<_Ap, size_type, const_void_pointer>::value> >
     _LIBCPP_NODISCARD_AFTER_CXX17 _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static pointer allocate(allocator_type& __a, size_type __n, const_void_pointer) {
         return __a.allocate(__n);
@@ -283,7 +283,7 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
     }
 
     template <class _Tp, class... _Args, class =
-        _EnableIf<__has_construct<allocator_type, _Tp*, _Args...>::value> >
+        __enable_if_t<__has_construct<allocator_type, _Tp*, _Args...>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static void construct(allocator_type& __a, _Tp* __p, _Args&&... __args) {
         _LIBCPP_SUPPRESS_DEPRECATED_PUSH
@@ -291,7 +291,7 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
         _LIBCPP_SUPPRESS_DEPRECATED_POP
     }
     template <class _Tp, class... _Args, class = void, class =
-        _EnableIf<!__has_construct<allocator_type, _Tp*, _Args...>::value> >
+        __enable_if_t<!__has_construct<allocator_type, _Tp*, _Args...>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static void construct(allocator_type&, _Tp* __p, _Args&&... __args) {
 #if _LIBCPP_STD_VER > 17
@@ -302,7 +302,7 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
     }
 
     template <class _Tp, class =
-        _EnableIf<__has_destroy<allocator_type, _Tp*>::value> >
+        __enable_if_t<__has_destroy<allocator_type, _Tp*>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static void destroy(allocator_type& __a, _Tp* __p) {
         _LIBCPP_SUPPRESS_DEPRECATED_PUSH
@@ -310,7 +310,7 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
         _LIBCPP_SUPPRESS_DEPRECATED_POP
     }
     template <class _Tp, class = void, class =
-        _EnableIf<!__has_destroy<allocator_type, _Tp*>::value> >
+        __enable_if_t<!__has_destroy<allocator_type, _Tp*>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static void destroy(allocator_type&, _Tp* __p) {
 #if _LIBCPP_STD_VER > 17
@@ -321,7 +321,7 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
     }
 
     template <class _Ap = _Alloc, class =
-        _EnableIf<__has_max_size<const _Ap>::value> >
+        __enable_if_t<__has_max_size<const _Ap>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static size_type max_size(const allocator_type& __a) _NOEXCEPT {
         _LIBCPP_SUPPRESS_DEPRECATED_PUSH
@@ -329,25 +329,33 @@ struct _LIBCPP_TEMPLATE_VIS allocator_traits
         _LIBCPP_SUPPRESS_DEPRECATED_POP
     }
     template <class _Ap = _Alloc, class = void, class =
-        _EnableIf<!__has_max_size<const _Ap>::value> >
+        __enable_if_t<!__has_max_size<const _Ap>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static size_type max_size(const allocator_type&) _NOEXCEPT {
         return numeric_limits<size_type>::max() / sizeof(value_type);
     }
 
     template <class _Ap = _Alloc, class =
-        _EnableIf<__has_select_on_container_copy_construction<const _Ap>::value> >
+        __enable_if_t<__has_select_on_container_copy_construction<const _Ap>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static allocator_type select_on_container_copy_construction(const allocator_type& __a) {
         return __a.select_on_container_copy_construction();
     }
     template <class _Ap = _Alloc, class = void, class =
-        _EnableIf<!__has_select_on_container_copy_construction<const _Ap>::value> >
+        __enable_if_t<!__has_select_on_container_copy_construction<const _Ap>::value> >
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
     static allocator_type select_on_container_copy_construction(const allocator_type& __a) {
         return __a;
     }
 };
+
+// A version of `allocator_traits` for internal usage that SFINAEs away if the
+// given allocator doesn't have a nested `value_type`. This helps avoid hard
+// errors when forming implicit deduction guides for a container that has an
+// invalid Allocator type. See https://wg21.link/LWGXXXXX.
+// TODO(varconst): use the actual link once available.
+template <class _Alloc, class _ValueType = typename _Alloc::value_type>
+struct _LIBCPP_TEMPLATE_VIS __allocator_traits : allocator_traits<_Alloc> {};
 
 template <class _Traits, class _Tp>
 struct __rebind_alloc_helper {
@@ -374,7 +382,7 @@ struct __is_cpp17_move_insertable
 { };
 
 template <class _Alloc>
-struct __is_cpp17_move_insertable<_Alloc, _EnableIf<
+struct __is_cpp17_move_insertable<_Alloc, __enable_if_t<
     !__is_default_allocator<_Alloc>::value &&
     __has_construct<_Alloc, typename _Alloc::value_type*, typename _Alloc::value_type&&>::value
 > > : true_type { };
@@ -389,7 +397,7 @@ struct __is_cpp17_copy_insertable
 { };
 
 template <class _Alloc>
-struct __is_cpp17_copy_insertable<_Alloc, _EnableIf<
+struct __is_cpp17_copy_insertable<_Alloc, __enable_if_t<
     !__is_default_allocator<_Alloc>::value &&
     __has_construct<_Alloc, typename _Alloc::value_type*, const typename _Alloc::value_type&>::value
 > >

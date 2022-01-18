@@ -7,11 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "compute-offsets.h"
-#include "../../runtime/descriptor.h"
 #include "flang/Evaluate/fold-designator.h"
 #include "flang/Evaluate/fold.h"
 #include "flang/Evaluate/shape.h"
 #include "flang/Evaluate/type.h"
+#include "flang/Runtime/descriptor.h"
 #include "flang/Semantics/scope.h"
 #include "flang/Semantics/semantics.h"
 #include "flang/Semantics/symbol.h"
@@ -154,7 +154,7 @@ void ComputeOffsetsHelper::DoCommonBlock(Symbol &commonBlock) {
     auto eqIter{equivalenceBlock_.end()};
     auto iter{dependents_.find(symbol)};
     if (iter == dependents_.end()) {
-      auto eqIter = equivalenceBlock_.find(symbol);
+      eqIter = equivalenceBlock_.find(symbol);
       if (eqIter != equivalenceBlock_.end()) {
         DoEquivalenceBlockBase(symbol, eqIter->second);
       }

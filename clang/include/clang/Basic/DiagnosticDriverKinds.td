@@ -16,6 +16,8 @@ def err_drv_unsupported_opt_with_suggestion : Error<
   "unsupported option '%0'; did you mean '%1'?">;
 def err_drv_unsupported_opt_for_target : Error<
   "unsupported option '%0' for target '%1'">;
+def err_drv_unsupported_opt_for_language_mode : Error<
+  "unsupported option '%0' for language mode '%1'">;
 def err_drv_unsupported_option_argument : Error<
   "unsupported argument '%1' to option '%0'">;
 def err_drv_unknown_stdin_type : Error<
@@ -98,6 +100,14 @@ def err_drv_bad_offload_arch_combo : Error<
   "invalid offload arch combinations: '%0' and '%1' (for a specific processor, "
   "a feature should either exist in all offload archs, or not exist in any "
   "offload archs)">;
+def warn_drv_unsupported_option_for_offload_arch_req_feature : Warning<
+  "ignoring '%0' option as it is not currently supported for "
+  "offload arch '%1'. Use it with an offload arch containing '%2' instead">,
+  InGroup<OptionIgnored>;
+def warn_drv_unsupported_option_for_target : Warning<
+  "ignoring '%0' option as it is not currently supported for target '%1'">,
+  InGroup<OptionIgnored>;
+
 def err_drv_invalid_thread_model_for_target : Error<
   "invalid thread model '%0' in '%1' for this target">;
 def err_drv_invalid_linker_name : Error<
@@ -179,14 +189,20 @@ def err_drv_invalid_mtp : Error<
   "invalid thread pointer reading mode '%0'">;
 def err_drv_missing_arg_mtp : Error<
   "missing argument to '%0'">;
+def warn_drv_missing_plugin_name : Warning<
+  "missing plugin name in %0">,
+  InGroup<InvalidCommandLineArgument>;
+def warn_drv_missing_plugin_arg : Warning<
+  "missing plugin argument for plugin %0 in %1">,
+  InGroup<InvalidCommandLineArgument>;
 def err_drv_invalid_libcxx_deployment : Error<
   "invalid deployment target for -stdlib=libc++ (requires %0 or later)">;
 def err_drv_invalid_argument_to_option : Error<
   "invalid argument '%0' to -%1">;
 def err_drv_malformed_sanitizer_ignorelist : Error<
   "malformed sanitizer ignorelist: '%0'">;
-def err_drv_malformed_sanitizer_coverage_whitelist : Error<
-  "malformed sanitizer coverage whitelist: '%0'">;
+def err_drv_malformed_sanitizer_coverage_allowlist : Error<
+  "malformed sanitizer coverage allowlist: '%0'">;
 def err_drv_malformed_sanitizer_coverage_ignorelist : Error<
   "malformed sanitizer coverage ignorelist: '%0'">;
 def err_drv_duplicate_config : Error<
@@ -278,6 +294,7 @@ def err_drv_optimization_remark_format : Error<
   "unknown remark serializer format: '%0'">;
 def err_drv_no_neon_modifier : Error<"[no]neon is not accepted as modifier, please use [no]simd instead">;
 def err_drv_invalid_omp_target : Error<"OpenMP target is invalid: '%0'">;
+def err_drv_debug_no_new_runtime : Error<"OpenMP target device debugging enabled with incompatible runtime">;
 def err_drv_incompatible_omp_arch : Error<"OpenMP target architecture '%0' pointer size is incompatible with host '%1'">;
 def err_drv_omp_host_ir_file_not_found : Error<
   "provided host compiler IR file '%0' is required to generate code for OpenMP "
@@ -589,4 +606,7 @@ def err_cc1_round_trip_ok_then_fail : Error<
   "generated arguments parse failed in round-trip">;
 def err_cc1_round_trip_mismatch : Error<
   "generated arguments do not match in round-trip">;
+
+def err_drv_ssp_missing_offset_argument : Error<
+  "'%0' is used without '-mstack-protector-guard-offset', and there is no default">;
 }

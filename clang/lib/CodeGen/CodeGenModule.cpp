@@ -19,8 +19,7 @@
 #include "CGObjCRuntime.h"
 #include "CGOpenCLRuntime.h"
 #include "CGOpenMPRuntime.h"
-#include "CGOpenMPRuntimeAMDGCN.h"
-#include "CGOpenMPRuntimeNVPTX.h"
+#include "CGOpenMPRuntimeGPU.h"
 #include "CodeGenFunction.h"
 #include "CodeGenPGO.h"
 #include "ConstantEmitter.h"
@@ -244,14 +243,10 @@ void CodeGenModule::createOpenMPRuntime() {
   switch (getTriple().getArch()) {
   case llvm::Triple::nvptx:
   case llvm::Triple::nvptx64:
-    assert(getLangOpts().OpenMPIsDevice &&
-           "OpenMP NVPTX is only prepared to deal with device code.");
-    OpenMPRuntime.reset(new CGOpenMPRuntimeNVPTX(*this));
-    break;
   case llvm::Triple::amdgcn:
     assert(getLangOpts().OpenMPIsDevice &&
-           "OpenMP AMDGCN is only prepared to deal with device code.");
-    OpenMPRuntime.reset(new CGOpenMPRuntimeAMDGCN(*this));
+           "OpenMP AMDGPU/NVPTX is only prepared to deal with device code.");
+    OpenMPRuntime.reset(new CGOpenMPRuntimeGPU(*this));
     break;
   default:
     if (LangOpts.OpenMPSimd)
@@ -317,22 +312,58 @@ void CodeGenModule::applyGlobalValReplacements() {
 
 // This is only used in aliases that we created and we know they have a
 // linear structure.
-static const llvm::GlobalObject *getAliasedGlobal(
-    const llvm::GlobalIndirectSymbol &GIS) {
-  llvm::SmallPtrSet<const llvm::GlobalIndirectSymbol*, 4> Visited;
-  const llvm::Constant *C = &GIS;
-  for (;;) {
-    C = C->stripPointerCasts();
-    if (auto *GO = dyn_cast<llvm::GlobalObject>(C))
-      return GO;
-    // stripPointerCasts will not walk over weak aliases.
-    auto *GIS2 = dyn_cast<llvm::GlobalIndirectSymbol>(C);
-    if (!GIS2)
-      return nullptr;
-    if (!Visited.insert(GIS2).second)
-      return nullptr;
-    C = GIS2->getIndirectSymbol();
+static const llvm::GlobalValue *getAliasedGlobal(const llvm::GlobalValue *GV) {
+  const llvm::Constant *C;
+  if (auto *GA = dyn_cast<llvm::GlobalAlias>(GV))
+    C = GA->getAliasee();
+  else if (auto *GI = dyn_cast<llvm::GlobalIFunc>(GV))
+    C = GI->getResolver();
+  else
+    return GV;
+
+  const auto *AliaseeGV = dyn_cast<llvm::GlobalValue>(C->stripPointerCasts());
+  if (!AliaseeGV)
+    return nullptr;
+
+  const llvm::GlobalValue *FinalGV = AliaseeGV->getAliaseeObject();
+  if (FinalGV == GV)
+    return nullptr;
+
+  return FinalGV;
+}
+
+static bool checkAliasedGlobal(DiagnosticsEngine &Diags,
+                               SourceLocation Location, bool IsIFunc,
+                               const llvm::GlobalValue *Alias,
+                               const llvm::GlobalValue *&GV) {
+  GV = getAliasedGlobal(Alias);
+  if (!GV) {
+    Diags.Report(Location, diag::err_cyclic_alias) << IsIFunc;
+    return false;
   }
+
+  if (GV->isDeclaration()) {
+    Diags.Report(Location, diag::err_alias_to_undefined) << IsIFunc << IsIFunc;
+    return false;
+  }
+
+  if (IsIFunc) {
+    // Check resolver function type.
+    const auto *F = dyn_cast<llvm::Function>(GV);
+    if (!F) {
+      Diags.Report(Location, diag::err_alias_to_undefined)
+          << IsIFunc << IsIFunc;
+      return false;
+    }
+
+    llvm::FunctionType *FTy = F->getFunctionType();
+    if (!FTy->getReturnType()->isPointerTy()) {
+      Diags.Report(Location, diag::err_ifunc_resolver_return);
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void CodeGenModule::checkAliases() {
@@ -349,27 +380,19 @@ void CodeGenModule::checkAliases() {
       Location = A->getLocation();
     else
       llvm_unreachable("Not an alias or ifunc?");
+
     StringRef MangledName = getMangledName(GD);
-    llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
-    auto *Alias  = cast<llvm::GlobalIndirectSymbol>(Entry);
-    const llvm::GlobalValue *GV = getAliasedGlobal(*Alias);
-    if (!GV) {
+    llvm::GlobalValue *Alias = GetGlobalValue(MangledName);
+    const llvm::GlobalValue *GV = nullptr;
+    if (!checkAliasedGlobal(Diags, Location, IsIFunc, Alias, GV)) {
       Error = true;
-      Diags.Report(Location, diag::err_cyclic_alias) << IsIFunc;
-    } else if (GV->isDeclaration()) {
-      Error = true;
-      Diags.Report(Location, diag::err_alias_to_undefined)
-          << IsIFunc << IsIFunc;
-    } else if (IsIFunc) {
-      // Check resolver function type.
-      llvm::FunctionType *FTy = dyn_cast<llvm::FunctionType>(
-          GV->getType()->getPointerElementType());
-      assert(FTy);
-      if (!FTy->getReturnType()->isPointerTy())
-        Diags.Report(Location, diag::err_ifunc_resolver_return);
+      continue;
     }
 
-    llvm::Constant *Aliasee = Alias->getIndirectSymbol();
+    llvm::Constant *Aliasee =
+        IsIFunc ? cast<llvm::GlobalIFunc>(Alias)->getResolver()
+                : cast<llvm::GlobalAlias>(Alias)->getAliasee();
+
     llvm::GlobalValue *AliaseeGV;
     if (auto CE = dyn_cast<llvm::ConstantExpr>(Aliasee))
       AliaseeGV = cast<llvm::GlobalValue>(CE->getOperand(0));
@@ -388,13 +411,17 @@ void CodeGenModule::checkAliases() {
     // compatibility with gcc we implement it by just pointing the alias
     // to its aliasee's aliasee. We also warn, since the user is probably
     // expecting the link to be weak.
-    if (auto GA = dyn_cast<llvm::GlobalIndirectSymbol>(AliaseeGV)) {
+    if (auto *GA = dyn_cast<llvm::GlobalAlias>(AliaseeGV)) {
       if (GA->isInterposable()) {
         Diags.Report(Location, diag::warn_alias_to_weak_alias)
             << GV->getName() << GA->getName() << IsIFunc;
         Aliasee = llvm::ConstantExpr::getPointerBitCastOrAddrSpaceCast(
-            GA->getIndirectSymbol(), Alias->getType());
-        Alias->setIndirectSymbol(Aliasee);
+            GA->getAliasee(), Alias->getType());
+
+        if (IsIFunc)
+          cast<llvm::GlobalIFunc>(Alias)->setResolver(Aliasee);
+        else
+          cast<llvm::GlobalAlias>(Alias)->setAliasee(Aliasee);
       }
     }
   }
@@ -403,8 +430,7 @@ void CodeGenModule::checkAliases() {
 
   for (const GlobalDecl &GD : Aliases) {
     StringRef MangledName = getMangledName(GD);
-    llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
-    auto *Alias = cast<llvm::GlobalIndirectSymbol>(Entry);
+    llvm::GlobalValue *Alias = GetGlobalValue(MangledName);
     Alias->replaceAllUsesWith(llvm::UndefValue::get(Alias->getType()));
     Alias->eraseFromParent();
   }
@@ -539,6 +565,7 @@ void CodeGenModule::Release() {
         "__amdgpu_device_library_preserve_asan_functions_ptr", nullptr,
         llvm::GlobalVariable::NotThreadLocal);
     addCompilerUsedGlobal(Var);
+    getModule().addModuleFlag(llvm::Module::Override, "amdgpu_hostcall", 1);
   }
 
   emitLLVMUsed();
@@ -813,6 +840,8 @@ void CodeGenModule::Release() {
         getCodeGenOpts().StackProtectorGuardOffset);
   if (getCodeGenOpts().StackAlignment)
     getModule().setOverrideStackAlignment(getCodeGenOpts().StackAlignment);
+  if (getCodeGenOpts().SkipRaxSetup)
+    getModule().addModuleFlag(llvm::Module::Override, "SkipRaxSetup", 1);
 
   getTargetCodeGenInfo().emitTargetMetadata(*this, MangledDeclNames);
 
@@ -1237,6 +1266,20 @@ static bool isUniqueInternalLinkageDecl(GlobalDecl GD,
          (CGM.getFunctionLinkage(GD) == llvm::GlobalValue::InternalLinkage);
 }
 
+static void AppendTargetClonesMangling(const CodeGenModule &CGM,
+                                       const TargetClonesAttr *Attr,
+                                       unsigned VersionIndex,
+                                       raw_ostream &Out) {
+  Out << '.';
+  StringRef FeatureStr = Attr->getFeatureStr(VersionIndex);
+  if (FeatureStr.startswith("arch="))
+    Out << "arch_" << FeatureStr.substr(sizeof("arch=") - 1);
+  else
+    Out << FeatureStr;
+
+  Out << '.' << Attr->getMangledIndex(VersionIndex);
+}
+
 static std::string getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD,
                                       const NamedDecl *ND,
                                       bool OmitMultiVersionMangling = false) {
@@ -1289,6 +1332,10 @@ static std::string getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD,
         break;
       case MultiVersionKind::Target:
         AppendTargetMangling(CGM, FD->getAttr<TargetAttr>(), Out);
+        break;
+      case MultiVersionKind::TargetClones:
+        AppendTargetClonesMangling(CGM, FD->getAttr<TargetClonesAttr>(),
+                                   GD.getMultiVersionIndex(), Out);
         break;
       case MultiVersionKind::None:
         llvm_unreachable("None multiversion type isn't valid here");
@@ -1926,7 +1973,7 @@ void CodeGenModule::setLLVMFunctionFEnvAttributes(const FunctionDecl *D,
 
 void CodeGenModule::SetCommonAttributes(GlobalDecl GD, llvm::GlobalValue *GV) {
   const Decl *D = GD.getDecl();
-  if (dyn_cast_or_null<NamedDecl>(D))
+  if (isa_and_nonnull<NamedDecl>(D))
     setGVProperties(GV, GD);
   else
     GV->setVisibility(llvm::GlobalValue::DefaultVisibility);
@@ -1954,8 +2001,9 @@ bool CodeGenModule::GetCPUAndFeaturesAttributes(GlobalDecl GD,
   FD = FD ? FD->getMostRecentDecl() : FD;
   const auto *TD = FD ? FD->getAttr<TargetAttr>() : nullptr;
   const auto *SD = FD ? FD->getAttr<CPUSpecificAttr>() : nullptr;
+  const auto *TC = FD ? FD->getAttr<TargetClonesAttr>() : nullptr;
   bool AddedAttr = false;
-  if (TD || SD) {
+  if (TD || SD || TC) {
     llvm::StringMap<bool> FeatureMap;
     getContext().getFunctionFeatureMap(FeatureMap, GD);
 
@@ -2138,8 +2186,12 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
   else if (const auto *SA = FD->getAttr<SectionAttr>())
      F->setSection(SA->getName());
 
-  if (FD->hasAttr<ErrorAttr>())
-    F->addFnAttr("dontcall");
+  if (const auto *EA = FD->getAttr<ErrorAttr>()) {
+    if (EA->isError())
+      F->addFnAttr("dontcall-error", EA->getUserDiagnostic());
+    else if (EA->isWarning())
+      F->addFnAttr("dontcall-warn", EA->getUserDiagnostic());
+  }
 
   // If we plan on emitting this inline builtin, we can't treat it as a builtin.
   if (FD->isInlineBuiltinDeclaration()) {
@@ -2284,9 +2336,9 @@ static void addLinkOptionsPostorder(CodeGenModule &CGM, Module *Mod,
   }
 
   // Import this module's dependencies.
-  for (unsigned I = Mod->Imports.size(); I > 0; --I) {
-    if (Visited.insert(Mod->Imports[I - 1]).second)
-      addLinkOptionsPostorder(CGM, Mod->Imports[I-1], Metadata, Visited);
+  for (Module *Import : llvm::reverse(Mod->Imports)) {
+    if (Visited.insert(Import).second)
+      addLinkOptionsPostorder(CGM, Import, Metadata, Visited);
   }
 
   // Add linker options to link against the libraries/frameworks
@@ -2299,13 +2351,12 @@ static void addLinkOptionsPostorder(CodeGenModule &CGM, Module *Mod,
   if (Mod->UseExportAsModuleLinkName)
     return;
 
-  for (unsigned I = Mod->LinkLibraries.size(); I > 0; --I) {
+  for (const Module::LinkLibrary &LL : llvm::reverse(Mod->LinkLibraries)) {
     // Link against a framework.  Frameworks are currently Darwin only, so we
     // don't to ask TargetCodeGenInfo for the spelling of the linker option.
-    if (Mod->LinkLibraries[I-1].IsFramework) {
-      llvm::Metadata *Args[2] = {
-          llvm::MDString::get(Context, "-framework"),
-          llvm::MDString::get(Context, Mod->LinkLibraries[I - 1].Library)};
+    if (LL.IsFramework) {
+      llvm::Metadata *Args[2] = {llvm::MDString::get(Context, "-framework"),
+                                 llvm::MDString::get(Context, LL.Library)};
 
       Metadata.push_back(llvm::MDNode::get(Context, Args));
       continue;
@@ -2315,13 +2366,12 @@ static void addLinkOptionsPostorder(CodeGenModule &CGM, Module *Mod,
     if (IsELF) {
       llvm::Metadata *Args[2] = {
           llvm::MDString::get(Context, "lib"),
-          llvm::MDString::get(Context, Mod->LinkLibraries[I - 1].Library),
+          llvm::MDString::get(Context, LL.Library),
       };
       Metadata.push_back(llvm::MDNode::get(Context, Args));
     } else {
       llvm::SmallString<24> Opt;
-      CGM.getTargetCodeGenInfo().getDependentLibraryOption(
-          Mod->LinkLibraries[I - 1].Library, Opt);
+      CGM.getTargetCodeGenInfo().getDependentLibraryOption(LL.Library, Opt);
       auto *OptString = llvm::MDString::get(Context, Opt);
       Metadata.push_back(llvm::MDNode::get(Context, OptString));
     }
@@ -3169,6 +3219,11 @@ bool CodeGenModule::shouldEmitFunction(GlobalDecl GD) {
     }
   }
 
+  // Inline builtins declaration must be emitted. They often are fortified
+  // functions.
+  if (F->isInlineBuiltinDeclaration())
+    return true;
+
   // PR9614. Avoid cases where the source code is lying to us. An available
   // externally function should have an equivalent function somewhere else,
   // but a function that calls itself through asm label/`__builtin_` trickery is
@@ -3190,6 +3245,12 @@ void CodeGenModule::EmitMultiVersionFunctionDefinition(GlobalDecl GD,
     for (unsigned I = 0; I < Spec->cpus_size(); ++I)
       EmitGlobalFunctionDefinition(GD.getWithMultiVersionIndex(I), nullptr);
     // Requires multiple emits.
+  } else if (FD->isTargetClonesMultiVersion()) {
+    auto *Clone = FD->getAttr<TargetClonesAttr>();
+    for (unsigned I = 0; I < Clone->featuresStrs_size(); ++I)
+      if (Clone->isFirstOfVersion(I))
+        EmitGlobalFunctionDefinition(GD.getWithMultiVersionIndex(I), nullptr);
+    EmitTargetClonesResolver(GD);
   } else
     EmitGlobalFunctionDefinition(GD, GV);
 }
@@ -3258,6 +3319,76 @@ TargetMVPriority(const TargetInfo &TI,
   return Priority;
 }
 
+// Multiversion functions should be at most 'WeakODRLinkage' so that a different
+// TU can forward declare the function without causing problems.  Particularly
+// in the cases of CPUDispatch, this causes issues. This also makes sure we
+// work with internal linkage functions, so that the same function name can be
+// used with internal linkage in multiple TUs.
+llvm::GlobalValue::LinkageTypes getMultiversionLinkage(CodeGenModule &CGM,
+                                                       GlobalDecl GD) {
+  const FunctionDecl *FD = cast<FunctionDecl>(GD.getDecl());
+  if (FD->getFormalLinkage() == InternalLinkage)
+    return llvm::GlobalValue::InternalLinkage;
+  return llvm::GlobalValue::WeakODRLinkage;
+}
+
+void CodeGenModule::EmitTargetClonesResolver(GlobalDecl GD) {
+  const auto *FD = cast<FunctionDecl>(GD.getDecl());
+  assert(FD && "Not a FunctionDecl?");
+  const auto *TC = FD->getAttr<TargetClonesAttr>();
+  assert(TC && "Not a target_clones Function?");
+
+  QualType CanonTy = Context.getCanonicalType(FD->getType());
+  llvm::Type *DeclTy = getTypes().ConvertType(CanonTy);
+
+  if (const auto *CXXFD = dyn_cast<CXXMethodDecl>(FD)) {
+    const CGFunctionInfo &FInfo = getTypes().arrangeCXXMethodDeclaration(CXXFD);
+    DeclTy = getTypes().GetFunctionType(FInfo);
+  }
+
+  llvm::Function *ResolverFunc;
+  if (getTarget().supportsIFunc()) {
+    auto *IFunc = cast<llvm::GlobalIFunc>(
+        GetOrCreateMultiVersionResolver(GD, DeclTy, FD));
+    ResolverFunc = cast<llvm::Function>(IFunc->getResolver());
+  } else
+    ResolverFunc =
+        cast<llvm::Function>(GetOrCreateMultiVersionResolver(GD, DeclTy, FD));
+
+  SmallVector<CodeGenFunction::MultiVersionResolverOption, 10> Options;
+  for (unsigned VersionIndex = 0; VersionIndex < TC->featuresStrs_size();
+       ++VersionIndex) {
+    if (!TC->isFirstOfVersion(VersionIndex))
+      continue;
+    StringRef Version = TC->getFeatureStr(VersionIndex);
+    StringRef MangledName =
+        getMangledName(GD.getWithMultiVersionIndex(VersionIndex));
+    llvm::Constant *Func = GetGlobalValue(MangledName);
+    assert(Func &&
+           "Should have already been created before calling resolver emit");
+
+    StringRef Architecture;
+    llvm::SmallVector<StringRef, 1> Feature;
+
+    if (Version.startswith("arch="))
+      Architecture = Version.drop_front(sizeof("arch=") - 1);
+    else if (Version != "default")
+      Feature.push_back(Version);
+
+    Options.emplace_back(cast<llvm::Function>(Func), Architecture, Feature);
+  }
+
+  const TargetInfo &TI = getTarget();
+  std::stable_sort(
+      Options.begin(), Options.end(),
+      [&TI](const CodeGenFunction::MultiVersionResolverOption &LHS,
+            const CodeGenFunction::MultiVersionResolverOption &RHS) {
+        return TargetMVPriority(TI, LHS) > TargetMVPriority(TI, RHS);
+      });
+  CodeGenFunction CGF(*this);
+  CGF.EmitMultiVersionResolver(ResolverFunc, Options);
+}
+
 void CodeGenModule::emitMultiVersionFunctions() {
   std::vector<GlobalDecl> MVFuncsToEmit;
   MultiVersionFuncs.swap(MVFuncsToEmit);
@@ -3298,7 +3429,7 @@ void CodeGenModule::emitMultiVersionFunctions() {
     if (TI.supportsIFunc() || FD->isTargetMultiVersion()) {
       ResolverFunc = cast<llvm::Function>(
           GetGlobalValue((getMangledName(GD) + ".resolver").str()));
-      ResolverFunc->setLinkage(llvm::Function::WeakODRLinkage);
+      ResolverFunc->setLinkage(getMultiversionLinkage(*this, GD));
     } else {
       ResolverFunc = cast<llvm::Function>(GetGlobalValue(getMangledName(GD)));
     }
@@ -3356,7 +3487,7 @@ void CodeGenModule::emitCPUDispatchDefinition(GlobalDecl GD) {
 
   auto *ResolverFunc = cast<llvm::Function>(GetOrCreateLLVMFunction(
       ResolverName, ResolverType, ResolverGD, /*ForVTable=*/false));
-  ResolverFunc->setLinkage(llvm::Function::WeakODRLinkage);
+  ResolverFunc->setLinkage(getMultiversionLinkage(*this, GD));
   if (supportsCOMDAT())
     ResolverFunc->setComdat(
         getModule().getOrInsertComdat(ResolverFunc->getName()));
@@ -3392,10 +3523,9 @@ void CodeGenModule::emitCPUDispatchDefinition(GlobalDecl GD) {
     Target.getCPUSpecificCPUDispatchFeatures(II->getName(), Features);
     llvm::transform(Features, Features.begin(),
                     [](StringRef Str) { return Str.substr(1); });
-    Features.erase(std::remove_if(
-        Features.begin(), Features.end(), [&Target](StringRef Feat) {
-          return !Target.validateCpuSupports(Feat);
-        }), Features.end());
+    llvm::erase_if(Features, [&Target](StringRef Feat) {
+      return !Target.validateCpuSupports(Feat);
+    });
     Options.emplace_back(cast<llvm::Function>(Func), StringRef{}, Features);
     ++Index;
   }
@@ -3433,9 +3563,9 @@ void CodeGenModule::emitCPUDispatchDefinition(GlobalDecl GD) {
       auto *IFunc = cast<llvm::GlobalIFunc>(GetOrCreateLLVMFunction(
           AliasName, DeclTy, GD, /*ForVTable=*/false, /*DontDefer=*/true,
           /*IsThunk=*/false, llvm::AttributeList(), NotForDefinition));
-      auto *GA = llvm::GlobalAlias::create(
-         DeclTy, 0, getFunctionLinkage(GD), AliasName, IFunc, &getModule());
-      GA->setLinkage(llvm::Function::WeakODRLinkage);
+      auto *GA = llvm::GlobalAlias::create(DeclTy, 0,
+                                           getMultiversionLinkage(*this, GD),
+                                           AliasName, IFunc, &getModule());
       SetCommonAttributes(GD, GA);
     }
   }
@@ -3463,8 +3593,25 @@ llvm::Constant *CodeGenModule::GetOrCreateMultiVersionResolver(
   // Since this is the first time we've created this IFunc, make sure
   // that we put this multiversioned function into the list to be
   // replaced later if necessary (target multiversioning only).
-  if (!FD->isCPUDispatchMultiVersion() && !FD->isCPUSpecificMultiVersion())
+  if (FD->isTargetMultiVersion())
     MultiVersionFuncs.push_back(GD);
+  else if (FD->isTargetClonesMultiVersion()) {
+    // In target_clones multiversioning, make sure we emit this if used.
+    auto DDI =
+        DeferredDecls.find(getMangledName(GD.getWithMultiVersionIndex(0)));
+    if (DDI != DeferredDecls.end()) {
+      addDeferredDeclToEmit(GD);
+      DeferredDecls.erase(DDI);
+    } else {
+      // Emit the symbol of the 1st variant, so that the deferred decls know we
+      // need it, otherwise the only global value will be the resolver/ifunc,
+      // which end up getting broken if we search for them with GetGlobalValue'.
+      GetOrCreateLLVMFunction(
+          getMangledName(GD.getWithMultiVersionIndex(0)), DeclTy, FD,
+          /*ForVTable=*/false, /*DontDefer=*/true,
+          /*IsThunk=*/false, llvm::AttributeList(), ForDefinition);
+    }
+  }
 
   if (getTarget().supportsIFunc()) {
     llvm::Type *ResolverType = llvm::FunctionType::get(
@@ -3474,8 +3621,9 @@ llvm::Constant *CodeGenModule::GetOrCreateMultiVersionResolver(
     llvm::Constant *Resolver = GetOrCreateLLVMFunction(
         MangledName + ".resolver", ResolverType, GlobalDecl{},
         /*ForVTable=*/false);
-    llvm::GlobalIFunc *GIF = llvm::GlobalIFunc::create(
-        DeclTy, 0, llvm::Function::WeakODRLinkage, "", Resolver, &getModule());
+    llvm::GlobalIFunc *GIF =
+        llvm::GlobalIFunc::create(DeclTy, 0, getMultiversionLinkage(*this, GD),
+                                  "", Resolver, &getModule());
     GIF->setName(ResolverName);
     SetCommonAttributes(FD, GIF);
 
@@ -4262,11 +4410,6 @@ static bool shouldBeInCOMDAT(CodeGenModule &CGM, const Decl &D) {
   if (!CGM.supportsCOMDAT())
     return false;
 
-  // Do not set COMDAT attribute for CUDA/HIP stub functions to prevent
-  // them being "merged" by the COMDAT Folding linker optimization.
-  if (D.hasAttr<CUDAGlobalAttr>())
-    return false;
-
   if (D.hasAttr<SelectAnyAttr>())
     return true;
 
@@ -4765,7 +4908,7 @@ static void replaceUsesOfNonProtoConstant(llvm::Constant *old,
     callSite->getOperandBundlesAsDefs(newBundles);
 
     llvm::CallBase *newCall;
-    if (dyn_cast<llvm::CallInst>(callSite)) {
+    if (isa<llvm::CallInst>(callSite)) {
       newCall =
           llvm::CallInst::Create(newFn, newArgs, newBundles, "", callSite);
     } else {
@@ -4986,8 +5129,9 @@ void CodeGenModule::emitIFuncDefinition(GlobalDecl GD) {
   Aliases.push_back(GD);
 
   llvm::Type *DeclTy = getTypes().ConvertTypeForMem(D->getType());
+  llvm::Type *ResolverTy = llvm::GlobalIFunc::getResolverFunctionType(DeclTy);
   llvm::Constant *Resolver =
-      GetOrCreateLLVMFunction(IFA->getResolver(), DeclTy, GD,
+      GetOrCreateLLVMFunction(IFA->getResolver(), ResolverTy, {},
                               /*ForVTable=*/false);
   llvm::GlobalIFunc *GIF =
       llvm::GlobalIFunc::create(DeclTy, 0, llvm::Function::ExternalLinkage,
@@ -5363,7 +5507,7 @@ CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S,
   if (!LangOpts.WritableStrings) {
     Entry = &ConstantStringMap[C];
     if (auto GV = *Entry) {
-      if (Alignment.getQuantity() > GV->getAlignment())
+      if (uint64_t(Alignment.getQuantity()) > GV->getAlignment())
         GV->setAlignment(Alignment.getAsAlign());
       return ConstantAddress(castStringLiteralToDefaultAddressSpace(*this, GV),
                              Alignment);
@@ -5426,7 +5570,7 @@ ConstantAddress CodeGenModule::GetAddrOfConstantCString(
   if (!LangOpts.WritableStrings) {
     Entry = &ConstantStringMap[C];
     if (auto GV = *Entry) {
-      if (Alignment.getQuantity() > GV->getAlignment())
+      if (uint64_t(Alignment.getQuantity()) > GV->getAlignment())
         GV->setAlignment(Alignment.getAsAlign());
       return ConstantAddress(castStringLiteralToDefaultAddressSpace(*this, GV),
                              Alignment);

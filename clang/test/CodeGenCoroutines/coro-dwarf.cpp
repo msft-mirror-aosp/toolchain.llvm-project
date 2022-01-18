@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -disable-llvm-optzns -std=c++2a -fcoroutines-ts \
+// RUN: %clang_cc1 -disable-llvm-optzns -std=c++20 \
 // RUN:            -triple=x86_64 -dwarf-version=4 -debug-info-kind=limited \
 // RUN:            -emit-llvm -o - %s | \
 // RUN:            FileCheck %s --implicit-check-not=DILocalVariable

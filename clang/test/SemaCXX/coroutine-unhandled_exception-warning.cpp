@@ -1,8 +1,8 @@
-// RUN: %clang_cc1 -triple x86_64-apple-darwin9 %s -std=c++14 -fcoroutines-ts \
+// RUN: %clang_cc1 -triple x86_64-apple-darwin9 %s -std=c++20 \
 // RUN:    -fsyntax-only -Wignored-qualifiers -Wno-error=return-type -verify \
 // RUN:    -fblocks -Wno-unreachable-code -Wno-unused-value
 
-// RUN: %clang_cc1 -triple x86_64-apple-darwin9 %s -std=c++14 -fcoroutines-ts \
+// RUN: %clang_cc1 -triple x86_64-apple-darwin9 %s -std=c++20 \
 // RUN:    -fsyntax-only -Wignored-qualifiers -Wno-error=return-type -verify \
 // RUN:    -fblocks -Wno-unreachable-code -Wno-unused-value \
 // RUN:    -DDISABLE_WARNING -Wno-coroutine-missing-unhandled-exception

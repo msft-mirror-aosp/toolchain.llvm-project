@@ -1,7 +1,7 @@
 // This file contains references to sections of the Coroutines TS, which can be
 // found at http://wg21.link/coroutines.
 
-// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -verify %s -fcxx-exceptions -fexceptions -Wunused-result
+// RUN: %clang_cc1 -std=c++20 -verify %s -fcxx-exceptions -fexceptions -Wunused-result
 
 namespace std {
 

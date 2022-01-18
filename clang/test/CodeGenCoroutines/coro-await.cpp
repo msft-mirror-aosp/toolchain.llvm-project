@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines-ts -std=c++14 \
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++20 \
 // RUN:   -emit-llvm %s -o - -disable-llvm-passes -Wno-coroutine -Wno-unused | FileCheck %s
 
 namespace std {
@@ -19,7 +19,7 @@ struct coroutine_handle : coroutine_handle<> {
   static coroutine_handle from_address(void *) noexcept;
 };
 
-}
+} // namespace std
 
 struct init_susp {
   bool await_ready();

@@ -14,6 +14,7 @@
 #include "PassDetail.h"
 #include "mlir/Analysis/AffineStructures.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/SCF/Passes.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/SCF/Transforms.h"
@@ -54,10 +55,11 @@ static void specializeParallelLoopForUnrolling(ParallelOp op) {
   BlockAndValueMapping map;
   Value cond;
   for (auto bound : llvm::zip(op.upperBound(), constantIndices)) {
-    Value constant = b.create<ConstantIndexOp>(op.getLoc(), std::get<1>(bound));
-    Value cmp = b.create<CmpIOp>(op.getLoc(), CmpIPredicate::eq,
-                                 std::get<0>(bound), constant);
-    cond = cond ? b.create<AndOp>(op.getLoc(), cond, cmp) : cmp;
+    Value constant =
+        b.create<arith::ConstantIndexOp>(op.getLoc(), std::get<1>(bound));
+    Value cmp = b.create<arith::CmpIOp>(op.getLoc(), arith::CmpIPredicate::eq,
+                                        std::get<0>(bound), constant);
+    cond = cond ? b.create<arith::AndIOp>(op.getLoc(), cond, cmp) : cmp;
     map.map(std::get<0>(bound), constant);
   }
   auto ifOp = b.create<scf::IfOp>(op.getLoc(), cond, /*withElseRegion=*/true);
@@ -85,9 +87,9 @@ static void specializeForLoopForUnrolling(ForOp op) {
 
   OpBuilder b(op);
   BlockAndValueMapping map;
-  Value constant = b.create<ConstantIndexOp>(op.getLoc(), minConstant);
-  Value cond =
-      b.create<CmpIOp>(op.getLoc(), CmpIPredicate::eq, bound, constant);
+  Value constant = b.create<arith::ConstantIndexOp>(op.getLoc(), minConstant);
+  Value cond = b.create<arith::CmpIOp>(op.getLoc(), arith::CmpIPredicate::eq,
+                                       bound, constant);
   map.map(bound, constant);
   auto ifOp = b.create<scf::IfOp>(op.getLoc(), cond, /*withElseRegion=*/true);
   ifOp.getThenBodyBuilder().clone(*op.getOperation(), map);
@@ -106,8 +108,8 @@ static void specializeForLoopForUnrolling(ForOp op) {
 /// The newly generated scf.if operation is returned via `ifOp`. The boundary
 /// at which the loop is split (new upper bound) is returned via `splitBound`.
 /// The return value indicates whether the loop was rewritten or not.
-static LogicalResult peelForLoop(RewriterBase &b, ForOp forOp, scf::IfOp &ifOp,
-                                 Value &splitBound) {
+static LogicalResult peelForLoop(RewriterBase &b, ForOp forOp,
+                                 ForOp &partialIteration, Value &splitBound) {
   RewriterBase::InsertionGuard guard(b);
   auto lbInt = getConstantIntValue(forOp.lowerBound());
   auto ubInt = getConstantIntValue(forOp.upperBound());
@@ -130,34 +132,16 @@ static LogicalResult peelForLoop(RewriterBase &b, ForOp forOp, scf::IfOp &ifOp,
       loc, modMap,
       ValueRange{forOp.lowerBound(), forOp.upperBound(), forOp.step()});
 
+  // Create ForOp for partial iteration.
+  b.setInsertionPointAfter(forOp);
+  partialIteration = cast<ForOp>(b.clone(*forOp.getOperation()));
+  partialIteration.lowerBoundMutable().assign(splitBound);
+  forOp.replaceAllUsesWith(partialIteration->getResults());
+  partialIteration.initArgsMutable().assign(forOp->getResults());
+
   // Set new upper loop bound.
-  Value previousUb = forOp.upperBound();
   b.updateRootInPlace(forOp,
                       [&]() { forOp.upperBoundMutable().assign(splitBound); });
-  b.setInsertionPointAfter(forOp);
-
-  // Do we need one more iteration?
-  Value hasMoreIter =
-      b.create<CmpIOp>(loc, CmpIPredicate::slt, splitBound, previousUb);
-
-  // Create IfOp for last iteration.
-  auto resultTypes = forOp.getResultTypes();
-  ifOp = b.create<scf::IfOp>(loc, resultTypes, hasMoreIter,
-                             /*withElseRegion=*/!resultTypes.empty());
-  forOp.replaceAllUsesWith(ifOp->getResults());
-
-  // Build then case.
-  BlockAndValueMapping bvm;
-  bvm.map(forOp.region().getArgument(0), splitBound);
-  for (auto it : llvm::zip(forOp.getRegionIterArgs(), forOp->getResults())) {
-    bvm.map(std::get<0>(it), std::get<1>(it));
-  }
-  b.cloneRegionBefore(forOp.region(), ifOp.thenRegion(),
-                      ifOp.thenRegion().begin(), bvm);
-  // Build else case.
-  if (!resultTypes.empty())
-    ifOp.getElseBodyBuilder(b.getListener())
-        .create<scf::YieldOp>(loc, forOp->getResults());
 
   return success();
 }
@@ -188,6 +172,15 @@ static LogicalResult alignAndAddBound(FlatAffineValueConstraints &constraints,
   for (unsigned i = syms.size(); i < newSyms.size(); ++i)
     constraints.appendSymbolId(newSyms[i]);
   return constraints.addBound(type, pos, alignedMap);
+}
+
+/// Add `val` to each result of `map`.
+static AffineMap addConstToResults(AffineMap map, int64_t val) {
+  SmallVector<AffineExpr> newResults;
+  for (AffineExpr r : map.getResults())
+    newResults.push_back(r + val);
+  return AffineMap::get(map.getNumDims(), map.getNumSymbols(), newResults,
+                        map.getContext());
 }
 
 /// This function tries to canonicalize min/max operations by proving that their
@@ -244,18 +237,23 @@ canonicalizeMinMaxOp(RewriterBase &rewriter, Operation *op, AffineMap map,
   // isMin: op <= expr_i, !isMin: op >= expr_i
   auto boundType =
       isMin ? FlatAffineConstraints::UB : FlatAffineConstraints::LB;
-  if (failed(alignAndAddBound(constraints, boundType, dimOp, map, operands)))
+  // Upper bounds are exclusive, so add 1. (`affine.min` ops are inclusive.)
+  AffineMap mapLbUb = isMin ? addConstToResults(map, 1) : map;
+  if (failed(
+          alignAndAddBound(constraints, boundType, dimOp, mapLbUb, operands)))
     return failure();
 
   // Try to compute a lower/upper bound for op, expressed in terms of the other
   // `dims` and extra symbols.
   SmallVector<AffineMap> opLb(1), opUb(1);
   constraints.getSliceBounds(dimOp, 1, rewriter.getContext(), &opLb, &opUb);
-  AffineMap boundMap = isMin ? opUb[0] : opLb[0];
+  AffineMap sliceBound = isMin ? opUb[0] : opLb[0];
   // TODO: `getSliceBounds` may return multiple bounds at the moment. This is
   // a TODO of `getSliceBounds` and not handled here.
-  if (!boundMap || boundMap.getNumResults() != 1)
+  if (!sliceBound || sliceBound.getNumResults() != 1)
     return failure(); // No or multiple bounds found.
+  // Recover the inclusive UB in the case of an `affine.min`.
+  AffineMap boundMap = isMin ? addConstToResults(sliceBound, -1) : sliceBound;
 
   // Add an equality: Set dimOpBound to computed bound.
   // Add back dimension for op. (Was removed by `getSliceBounds`.)
@@ -324,25 +322,25 @@ canonicalizeMinMaxOp(RewriterBase &rewriter, Operation *op, AffineMap map,
 /// ```
 /// %r = %step
 /// ```
-/// min/max operations inside the generated scf.if operation are rewritten in
-/// a similar way.
+/// min/max operations inside the partial iteration are rewritten in a similar
+/// way.
 ///
 /// This function builds up a set of constraints, capable of proving that:
 /// * Inside the peeled loop: min(step, ub - iv) == step
-/// * Inside the scf.if operation: min(step, ub - iv) == ub - iv
+/// * Inside the partial iteration: min(step, ub - iv) == ub - iv
 ///
 /// Returns `success` if the given operation was replaced by a new operation;
 /// `failure` otherwise.
 ///
 /// Note: `ub` is the previous upper bound of the loop (before peeling).
 /// `insideLoop` must be true for min/max ops inside the loop and false for
-/// affine.min ops inside the scf.for op. For an explanation of the other
+/// affine.min ops inside the partial iteration. For an explanation of the other
 /// parameters, see comment of `canonicalizeMinMaxOpInLoop`.
-static LogicalResult rewritePeeledMinMaxOp(RewriterBase &rewriter,
-                                           Operation *op, AffineMap map,
-                                           ValueRange operands, bool isMin,
-                                           Value iv, Value ub, Value step,
-                                           bool insideLoop) {
+LogicalResult mlir::scf::rewritePeeledMinMaxOp(RewriterBase &rewriter,
+                                               Operation *op, AffineMap map,
+                                               ValueRange operands, bool isMin,
+                                               Value iv, Value ub, Value step,
+                                               bool insideLoop) {
   FlatAffineValueConstraints constraints;
   constraints.appendDimId({iv, ub, step});
   if (auto constUb = getConstantIntValue(ub))
@@ -370,35 +368,43 @@ static LogicalResult rewritePeeledMinMaxOp(RewriterBase &rewriter,
 }
 
 template <typename OpTy, bool IsMin>
-static void
-rewriteAffineOpAfterPeeling(RewriterBase &rewriter, ForOp forOp, scf::IfOp ifOp,
-                            Value iv, Value splitBound, Value ub, Value step) {
+static void rewriteAffineOpAfterPeeling(RewriterBase &rewriter, ForOp forOp,
+                                        ForOp partialIteration,
+                                        Value previousUb) {
+  Value mainIv = forOp.getInductionVar();
+  Value partialIv = partialIteration.getInductionVar();
+  assert(forOp.step() == partialIteration.step() &&
+         "expected same step in main and partial loop");
+  Value step = forOp.step();
+
   forOp.walk([&](OpTy affineOp) {
-    (void)rewritePeeledMinMaxOp(rewriter, affineOp, affineOp.getAffineMap(),
-                                affineOp.operands(), IsMin, iv, ub, step,
-                                /*insideLoop=*/true);
+    AffineMap map = affineOp.getAffineMap();
+    (void)scf::rewritePeeledMinMaxOp(rewriter, affineOp, map,
+                                     affineOp.operands(), IsMin, mainIv,
+                                     previousUb, step,
+                                     /*insideLoop=*/true);
   });
-  ifOp.walk([&](OpTy affineOp) {
-    (void)rewritePeeledMinMaxOp(rewriter, affineOp, affineOp.getAffineMap(),
-                                affineOp.operands(), IsMin, splitBound, ub,
-                                step, /*insideLoop=*/false);
+  partialIteration.walk([&](OpTy affineOp) {
+    AffineMap map = affineOp.getAffineMap();
+    (void)scf::rewritePeeledMinMaxOp(rewriter, affineOp, map,
+                                     affineOp.operands(), IsMin, partialIv,
+                                     previousUb, step, /*insideLoop=*/false);
   });
 }
 
 LogicalResult mlir::scf::peelAndCanonicalizeForLoop(RewriterBase &rewriter,
                                                     ForOp forOp,
-                                                    scf::IfOp &ifOp) {
-  Value ub = forOp.upperBound();
+                                                    ForOp &partialIteration) {
+  Value previousUb = forOp.upperBound();
   Value splitBound;
-  if (failed(peelForLoop(rewriter, forOp, ifOp, splitBound)))
+  if (failed(peelForLoop(rewriter, forOp, partialIteration, splitBound)))
     return failure();
 
   // Rewrite affine.min and affine.max ops.
-  Value iv = forOp.getInductionVar(), step = forOp.step();
   rewriteAffineOpAfterPeeling<AffineMinOp, /*IsMin=*/true>(
-      rewriter, forOp, ifOp, iv, splitBound, ub, step);
+      rewriter, forOp, partialIteration, previousUb);
   rewriteAffineOpAfterPeeling<AffineMaxOp, /*IsMin=*/false>(
-      rewriter, forOp, ifOp, iv, splitBound, ub, step);
+      rewriter, forOp, partialIteration, previousUb);
 
   return success();
 }
@@ -489,23 +495,24 @@ struct ForLoopPeelingPattern : public OpRewritePattern<ForOp> {
     if (forOp->hasAttr(kPeeledLoopLabel))
       return failure();
     if (skipPartial) {
-      // No peeling of loops inside the partial iteration (scf.if) of another
-      // peeled loop.
+      // No peeling of loops inside the partial iteration of another peeled
+      // loop.
       Operation *op = forOp.getOperation();
-      while ((op = op->getParentOfType<scf::IfOp>())) {
+      while ((op = op->getParentOfType<scf::ForOp>())) {
         if (op->hasAttr(kPartialIterationLabel))
           return failure();
       }
     }
     // Apply loop peeling.
-    scf::IfOp ifOp;
-    if (failed(peelAndCanonicalizeForLoop(rewriter, forOp, ifOp)))
+    scf::ForOp partialIteration;
+    if (failed(peelAndCanonicalizeForLoop(rewriter, forOp, partialIteration)))
       return failure();
     // Apply label, so that the same loop is not rewritten a second time.
+    partialIteration->setAttr(kPeeledLoopLabel, rewriter.getUnitAttr());
     rewriter.updateRootInPlace(forOp, [&]() {
       forOp->setAttr(kPeeledLoopLabel, rewriter.getUnitAttr());
     });
-    ifOp->setAttr(kPartialIterationLabel, rewriter.getUnitAttr());
+    partialIteration->setAttr(kPartialIterationLabel, rewriter.getUnitAttr());
     return success();
   }
 

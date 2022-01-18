@@ -1528,7 +1528,7 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
   if (GroType->isVoidType()) {
     // Trigger a nice error message.
     InitializedEntity Entity =
-        InitializedEntity::InitializeResult(Loc, FnRetType, false);
+        InitializedEntity::InitializeResult(Loc, FnRetType);
     S.PerformCopyInitialization(Entity, SourceLocation(), ReturnValue);
     noteMemberDeclaredHere(S, ReturnValue, Fn);
     return false;
@@ -1664,18 +1664,33 @@ ClassTemplateDecl *Sema::lookupCoroutineTraits(SourceLocation KwLoc,
     NamespaceDecl *CoroNamespace = getStdNamespace();
     LookupResult Result(*this, &PP.getIdentifierTable().get("coroutine_traits"),
                         FuncLoc, LookupOrdinaryName);
+
     if (!CoroNamespace || !LookupQualifiedName(Result, CoroNamespace)) {
-      /// TODO: lookup in std::expeirmental namespace for compability.
-      /// Remove this once users get familiar with coroutine under std
-      /// namespace.
+      /// Look up in namespace std::experimental, for compatibility.
+      /// TODO: Remove this extra lookup when <experimental/coroutine> is
+      /// removed.
       CoroNamespace = lookupStdExperimentalNamespace();
       if (!CoroNamespace || !LookupQualifiedName(Result, CoroNamespace)) {
         Diag(KwLoc, diag::err_implied_coroutine_type_not_found)
             << "std::coroutine_traits";
         return nullptr;
       }
-      Diag(KwLoc, diag::warn_coroutine_in_legacy_experimental_space);
+      Diag(KwLoc, diag::warn_deprecated_coroutine_namespace)
+          << "coroutine_traits";
+    } else {
+      /// When we found coroutine_traits in std namespace. Make sure there is no
+      /// misleading definition in std::experimental namespace.
+      NamespaceDecl *ExpNamespace = lookupStdExperimentalNamespace();
+      LookupResult ExpResult(*this,
+                             &PP.getIdentifierTable().get("coroutine_traits"),
+                             FuncLoc, LookupOrdinaryName);
+      if (ExpNamespace && LookupQualifiedName(ExpResult, ExpNamespace)) {
+        Diag(KwLoc,
+             diag::err_mixed_use_std_and_experimental_namespace_for_coroutine);
+        return nullptr;
+      }
     }
+
     if (!(StdCoroutineTraitsCache = Result.getAsSingle<ClassTemplateDecl>())) {
       Result.suppressDiagnostics();
       NamedDecl *Found = *Result.begin();

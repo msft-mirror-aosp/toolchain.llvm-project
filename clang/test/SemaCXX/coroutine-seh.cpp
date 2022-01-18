@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++1z -fcoroutines-ts -verify %s -fcxx-exceptions -fexceptions -triple x86_64-windows-msvc -fms-extensions
+// RUN: %clang_cc1 -std=c++20 -verify %s -fcxx-exceptions -fexceptions -triple x86_64-windows-msvc -fms-extensions
 namespace std {
 template <typename... T> struct coroutine_traits;
 

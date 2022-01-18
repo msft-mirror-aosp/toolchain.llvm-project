@@ -43,7 +43,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolELF.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
@@ -277,6 +277,9 @@ MCOperand X86MCInstLower::LowerSymbolOperand(const MachineOperand &MO,
   case X86II::MO_GOTPCREL:
     RefKind = MCSymbolRefExpr::VK_GOTPCREL;
     break;
+  case X86II::MO_GOTPCREL_NORELAX:
+    RefKind = MCSymbolRefExpr::VK_GOTPCREL_NORELAX;
+    break;
   case X86II::MO_GOT:
     RefKind = MCSymbolRefExpr::VK_GOT;
     break;
@@ -421,7 +424,7 @@ static void SimplifyShortMoveForm(X86AsmPrinter &Printer, MCInst &Inst,
 }
 
 static unsigned getRetOpcode(const X86Subtarget &Subtarget) {
-  return Subtarget.is64Bit() ? X86::RETQ : X86::RETL;
+  return Subtarget.is64Bit() ? X86::RET64 : X86::RET32;
 }
 
 Optional<MCOperand>
@@ -1525,7 +1528,7 @@ void X86AsmPrinter::emitAsanReportError(Module &M, unsigned Reg,
                                    .addReg(X86::NoRegister + Reg),
                                STI);
   OutStreamer->emitInstruction(
-      MCInstBuilder(X86::JMP_1)
+      MCInstBuilder(X86::JMP_4)
           .addExpr(MCSymbolRefExpr::create(ReportError, MCSymbolRefExpr::VK_PLT,
                                            OutContext)),
       STI);
@@ -1718,7 +1721,7 @@ void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
   // First we emit the label and the jump.
   auto CurSled = OutContext.createTempSymbol("xray_event_sled_", true);
   OutStreamer->AddComment("# XRay Custom Event Log");
-  OutStreamer->emitCodeAlignment(2);
+  OutStreamer->emitCodeAlignment(2, &getSubtargetInfo());
   OutStreamer->emitLabel(CurSled);
 
   // Use a two-byte `jmp`. This version of JMP takes an 8-bit relative offset as
@@ -1814,7 +1817,7 @@ void X86AsmPrinter::LowerPATCHABLE_TYPED_EVENT_CALL(const MachineInstr &MI,
   // First we emit the label and the jump.
   auto CurSled = OutContext.createTempSymbol("xray_typed_event_sled_", true);
   OutStreamer->AddComment("# XRay Typed Event Log");
-  OutStreamer->emitCodeAlignment(2);
+  OutStreamer->emitCodeAlignment(2, &getSubtargetInfo());
   OutStreamer->emitLabel(CurSled);
 
   // Use a two-byte `jmp`. This version of JMP takes an 8-bit relative offset as
@@ -1916,7 +1919,7 @@ void X86AsmPrinter::LowerPATCHABLE_FUNCTION_ENTER(const MachineInstr &MI,
   //   call <relative offset, 32-bits>   // 5 bytes
   //
   auto CurSled = OutContext.createTempSymbol("xray_sled_", true);
-  OutStreamer->emitCodeAlignment(2);
+  OutStreamer->emitCodeAlignment(2, &getSubtargetInfo());
   OutStreamer->emitLabel(CurSled);
 
   // Use a two-byte `jmp`. This version of JMP takes an 8-bit relative offset as
@@ -1946,7 +1949,7 @@ void X86AsmPrinter::LowerPATCHABLE_RET(const MachineInstr &MI,
   //
   // This just makes sure that the alignment for the next instruction is 2.
   auto CurSled = OutContext.createTempSymbol("xray_sled_", true);
-  OutStreamer->emitCodeAlignment(2);
+  OutStreamer->emitCodeAlignment(2, &getSubtargetInfo());
   OutStreamer->emitLabel(CurSled);
   unsigned OpCode = MI.getOperand(0).getImm();
   MCInst Ret;
@@ -1970,7 +1973,7 @@ void X86AsmPrinter::LowerPATCHABLE_TAIL_CALL(const MachineInstr &MI,
   // the PATCHABLE_FUNCTION_ENTER case, followed by the lowering of the actual
   // tail call much like how we have it in PATCHABLE_RET.
   auto CurSled = OutContext.createTempSymbol("xray_sled_", true);
-  OutStreamer->emitCodeAlignment(2);
+  OutStreamer->emitCodeAlignment(2, &getSubtargetInfo());
   OutStreamer->emitLabel(CurSled);
   auto Target = OutContext.createTempSymbol();
 

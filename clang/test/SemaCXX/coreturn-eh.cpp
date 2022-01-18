@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -triple x86_64-apple-darwin9 %s -std=c++14 -fcoroutines-ts -fcxx-exceptions -fsyntax-only -Wignored-qualifiers -Wno-error=return-type -verify -fblocks -Wall -Wextra -Wno-error=unreachable-code
+// RUN: %clang_cc1 -triple x86_64-apple-darwin9 %s -std=c++20 -fcxx-exceptions -fsyntax-only -Wignored-qualifiers -Wno-error=return-type -verify -fblocks -Wall -Wextra -Wno-error=unreachable-code
 // expected-no-diagnostics
 
 #include "Inputs/std-coroutine.h"

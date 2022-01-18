@@ -34,6 +34,16 @@ enum Kind {
   kFloorF,
   kNegF,
   kNegI,
+  kTruncF,
+  kExtF,
+  kCastFS, // signed
+  kCastFU, // unsigned
+  kCastSF, // signed
+  kCastUF, // unsigned
+  kCastS,  // signed
+  kCastU,  // unsigned
+  kTruncI,
+  kBitCast,
   // Binary operations.
   kMulF,
   kMulI,
@@ -73,8 +83,9 @@ struct TensorExp {
     Children children;
   };
 
-  /// Direct link to IR for an invariant. During code generation,
-  /// field is used to cache "hoisted" loop invariant tensor loads.
+  /// Direct link to IR for an invariant or the destination value (to
+  /// infer destination type) of a cast operation During code generation,
+  /// this field may be used to cache "hoisted" loop invariant tensor loads.
   Value val;
 };
 
@@ -111,10 +122,11 @@ public:
   /// invariant expressions in the kernel.
   Merger(unsigned t, unsigned l)
       : outTensor(t - 1), syntheticTensor(t), numTensors(t + 1), numLoops(l),
-        dims(t + 1, std::vector<Dim>(l, Dim::kUndef)) {}
+        hasSparseOut(false), dims(t + 1, std::vector<Dim>(l, Dim::kUndef)) {}
 
   /// Adds a tensor expression. Returns its index.
   unsigned addExp(Kind k, unsigned e0, unsigned e1 = -1u, Value v = Value());
+  unsigned addExp(Kind k, unsigned e, Value v) { return addExp(k, e, -1u, v); }
   unsigned addExp(Kind k, Value v) { return addExp(k, -1u, -1u, v); }
 
   /// Adds an iteration lattice point. Returns its index.
@@ -140,7 +152,7 @@ public:
   /// Maps the unary operator over the lattice set of the operand, i.e. each
   /// lattice point on an expression E is simply copied over, but with OP E
   /// as new expression. Returns the index of the new set.
-  unsigned mapSet(Kind kind, unsigned s0);
+  unsigned mapSet(Kind kind, unsigned s0, Value v = Value());
 
   /// Optimizes the iteration lattice points in the given set. This
   /// method should be called right before code generation to avoid
@@ -188,6 +200,9 @@ public:
   /// Dimension setter.
   void setDim(unsigned t, unsigned i, Dim d) { dims[t][i] = d; }
 
+  // Has sparse output tensor setter.
+  void setHasSparseOut(bool s) { hasSparseOut = s; }
+
   /// Convenience getters to immediately access the stored nodes.
   /// Typically it is inadvisible to keep the reference around, as in
   /// "TensorExpr &te = merger.exp(e))", since insertions into the merger
@@ -218,17 +233,20 @@ public:
                  Value v1);
 
 private:
+  /// Private helpers.
   bool maybeZero(unsigned e) const;
   bool isInvariant(unsigned e) const;
+  Type inferType(unsigned e, Value src);
 
   /// Traverses the SSA tree (possibly a DAG) to build a tensor expression.
   Optional<unsigned> buildTensorExp(linalg::GenericOp op, Value v);
 
+  /// Merger data structures.
   const unsigned outTensor;
   const unsigned syntheticTensor;
   const unsigned numTensors;
   const unsigned numLoops;
-
+  bool hasSparseOut;
   std::vector<std::vector<Dim>> dims;
   llvm::SmallVector<TensorExp, 32> tensorExps;
   llvm::SmallVector<LatPoint, 16> latPoints;

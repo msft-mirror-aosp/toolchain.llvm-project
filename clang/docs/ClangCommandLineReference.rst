@@ -483,7 +483,7 @@ Enable migration to use NS\_NONATOMIC\_IOSONLY macro for setting property's 'ato
 
 Enable migration to annotate property with NS\_RETURNS\_INNER\_POINTER
 
-.. option:: -objcmt-whitelist-dir-path=<arg>, -objcmt-white-list-dir-path=<arg>
+.. option:: -objcmpt-allowlist-dir-path=<arg>, -objcmt-whitelist-dir-path=<arg>, -objcmt-white-list-dir-path=<arg>
 
 Only modify files with a filename contained in the provided directory path
 
@@ -3228,6 +3228,10 @@ Reserve the r9 register (ARM only)
 
 Allow use of CMSE (Armv8-M Security Extensions)
 
+.. option:: -mfix-cmse-cve-2021-35465, -mno-fix-cmse-cve-2021-35465
+
+Enable the cve-2021-35465 security vulnerability mitigation (ARM only).
+
 .. option:: -mexecute-only, -mno-execute-only, -mpure-code
 
 Disallow generation of data access to code sections (ARM only)
@@ -3589,6 +3593,8 @@ X86
 .. option:: -mclwb, -mno-clwb
 
 .. option:: -mclzero, -mno-clzero
+
+.. option:: -mcrc32, -mno-crc32
 
 .. option:: -mcx16, -mno-cx16
 

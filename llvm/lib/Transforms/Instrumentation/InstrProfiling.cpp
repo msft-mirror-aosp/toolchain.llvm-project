@@ -64,10 +64,10 @@ cl::opt<bool> DoHashBasedCounterSplit(
     cl::desc("Rename counter variable of a comdat function based on cfg hash"),
     cl::init(true));
 
-cl::opt<bool> RuntimeCounterRelocation(
-    "runtime-counter-relocation",
-    cl::desc("Enable relocating counters at runtime."),
-    cl::init(false));
+cl::opt<bool>
+    RuntimeCounterRelocation("runtime-counter-relocation",
+                             cl::desc("Enable relocating counters at runtime."),
+                             cl::init(false));
 
 cl::opt<bool> ValueProfileStaticAlloc(
     "vp-static-alloc",
@@ -331,8 +331,9 @@ private:
 
   // Check whether the loop satisfies the basic conditions needed to perform
   // Counter Promotions.
-  bool isPromotionPossible(Loop *LP,
-                           const SmallVectorImpl<BasicBlock *> &LoopExitBlocks) {
+  bool
+  isPromotionPossible(Loop *LP,
+                      const SmallVectorImpl<BasicBlock *> &LoopExitBlocks) {
     // We can't insert into a catchswitch.
     if (llvm::any_of(LoopExitBlocks, [](BasicBlock *Exit) {
           return isa<CatchSwitchInst>(Exit->getTerminator());
@@ -421,13 +422,13 @@ PreservedAnalyses InstrProfiling::run(Module &M, ModuleAnalysisManager &AM) {
 }
 
 char InstrProfilingLegacyPass::ID = 0;
-INITIALIZE_PASS_BEGIN(
-    InstrProfilingLegacyPass, "instrprof",
-    "Frontend instrumentation-based coverage lowering.", false, false)
+INITIALIZE_PASS_BEGIN(InstrProfilingLegacyPass, "instrprof",
+                      "Frontend instrumentation-based coverage lowering.",
+                      false, false)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-INITIALIZE_PASS_END(
-    InstrProfilingLegacyPass, "instrprof",
-    "Frontend instrumentation-based coverage lowering.", false, false)
+INITIALIZE_PASS_END(InstrProfilingLegacyPass, "instrprof",
+                    "Frontend instrumentation-based coverage lowering.", false,
+                    false)
 
 ModulePass *
 llvm::createInstrProfilingLegacyPass(const InstrProfOptions &Options,
@@ -446,13 +447,12 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
   bool MadeChange = false;
   PromotionCandidates.clear();
   for (BasicBlock &BB : *F) {
-    for (auto I = BB.begin(), E = BB.end(); I != E;) {
-      auto Instr = I++;
-      InstrProfIncrementInst *Inc = castToIncrementInst(&*Instr);
+    for (Instruction &Instr : llvm::make_early_inc_range(BB)) {
+      InstrProfIncrementInst *Inc = castToIncrementInst(&Instr);
       if (Inc) {
         lowerIncrement(Inc);
         MadeChange = true;
-      } else if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(Instr)) {
+      } else if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(&Instr)) {
         lowerValueProfileInst(Ind);
         MadeChange = true;
       }
@@ -693,7 +693,7 @@ void InstrProfiling::lowerIncrement(InstrProfIncrementInst *Inc) {
 
   IRBuilder<> Builder(Inc);
   uint64_t Index = Inc->getIndex()->getZExtValue();
-  Value *Addr = Builder.CreateConstInBoundsGEP2_64(Counters->getValueType(),
+  Value *Addr = Builder.CreateConstInBoundsGEP2_32(Counters->getValueType(),
                                                    Counters, 0, Index);
 
   if (isRuntimeCounterRelocationEnabled()) {
@@ -704,14 +704,15 @@ void InstrProfiling::lowerIncrement(InstrProfIncrementInst *Inc) {
     LoadInst *LI = dyn_cast<LoadInst>(&I);
     if (!LI) {
       IRBuilder<> Builder(&I);
-      GlobalVariable *Bias = M->getGlobalVariable(getInstrProfCounterBiasVarName());
+      GlobalVariable *Bias =
+          M->getGlobalVariable(getInstrProfCounterBiasVarName());
       if (!Bias) {
         // Compiler must define this variable when runtime counter relocation
         // is being used. Runtime has a weak external reference that is used
         // to check whether that's the case or not.
-        Bias = new GlobalVariable(*M, Int64Ty, false, GlobalValue::LinkOnceODRLinkage,
-                                  Constant::getNullValue(Int64Ty),
-                                  getInstrProfCounterBiasVarName());
+        Bias = new GlobalVariable(
+            *M, Int64Ty, false, GlobalValue::LinkOnceODRLinkage,
+            Constant::getNullValue(Int64Ty), getInstrProfCounterBiasVarName());
         Bias->setVisibility(GlobalVariable::HiddenVisibility);
         // A definition that's weak (linkonce_odr) without being in a COMDAT
         // section wouldn't lead to link errors, but it would lead to a dead
@@ -840,8 +841,7 @@ static bool needsRuntimeRegistrationOfSectionRange(const Triple &TT) {
     return false;
   // Use linker script magic to get data/cnts/name start/end.
   if (TT.isOSLinux() || TT.isOSFreeBSD() || TT.isOSNetBSD() ||
-      TT.isOSSolaris() || TT.isOSFuchsia() || TT.isPS4CPU() ||
-      TT.isOSWindows())
+      TT.isOSSolaris() || TT.isOSFuchsia() || TT.isPS4CPU() || TT.isOSWindows())
     return false;
 
   return true;
@@ -863,6 +863,15 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   GlobalValue::LinkageTypes Linkage = NamePtr->getLinkage();
   GlobalValue::VisibilityTypes Visibility = NamePtr->getVisibility();
 
+  // Due to the limitation of binder as of 2021/09/28, the duplicate weak
+  // symbols in the same csect won't be discarded. When there are duplicate weak
+  // symbols, we can NOT guarantee that the relocations get resolved to the
+  // intended weak symbol, so we can not ensure the correctness of the relative
+  // CounterPtr, so we have to use private linkage for counter and data symbols.
+  if (TT.isOSBinFormatXCOFF()) {
+    Linkage = GlobalValue::PrivateLinkage;
+    Visibility = GlobalValue::DefaultVisibility;
+  }
   // Move the name variable to the right section. Place them in a COMDAT group
   // if the associated function is a COMDAT. This will make sure that only one
   // copy of counters of the COMDAT function will be emitted after linking. Keep
@@ -1066,12 +1075,12 @@ void InstrProfiling::emitNameData() {
   std::string CompressedNameStr;
   if (Error E = collectPGOFuncNameStrings(ReferencedNames, CompressedNameStr,
                                           DoInstrProfNameCompression)) {
-    report_fatal_error(toString(std::move(E)), false);
+    report_fatal_error(Twine(toString(std::move(E))), false);
   }
 
   auto &Ctx = M->getContext();
-  auto *NamesVal = ConstantDataArray::getString(
-      Ctx, StringRef(CompressedNameStr), false);
+  auto *NamesVal =
+      ConstantDataArray::getString(Ctx, StringRef(CompressedNameStr), false);
   NamesVar = new GlobalVariable(*M, NamesVal->getType(), true,
                                 GlobalValue::PrivateLinkage, NamesVal,
                                 getInstrProfNamesVarName());

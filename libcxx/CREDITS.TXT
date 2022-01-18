@@ -12,6 +12,10 @@ N: Saleem Abdulrasool
 E: compnerd@compnerd.org
 D: Minor patches and Linux fixes.
 
+N: Muiez Ahmed
+E: muiez@ibm.com
+D: z/OS port.
+
 N: Dan Albert
 E: danalbert@google.com
 D: Android support and test runner improvements.
@@ -144,6 +148,10 @@ D: Minor patches.
 N: Klaas de Vries
 E: klaas at klaasgaaf dot nl
 D: Minor bug fix.
+
+N: Mark de Wever
+E: koraq at xs4all dot nl
+D: Format library support.
 
 N: Zhang Xiongpang
 E: zhangxiongpang@gmail.com

@@ -712,6 +712,9 @@ class VectorType;
                                       Align Alignment,
                                       const DataLayout &DL) const;
 
+    bool isMulAddWithConstProfitable(const SDValue &AddNode,
+                                     const SDValue &ConstNode) const override;
+
     bool alignLoopsWithOptSize() const override;
 
     /// Returns the number of interleaved accesses that will be generated when
@@ -732,6 +735,8 @@ class VectorType;
                                            CombineLevel Level) const override;
 
     bool preferIncOfAddToSubOfNot(EVT VT) const override;
+
+    bool shouldConvertFpToSat(unsigned Op, EVT FPVT, EVT VT) const override;
 
   protected:
     std::pair<const TargetRegisterClass *, uint8_t>

@@ -38,10 +38,8 @@ void signal_handler(int signum) {
   _Exit(-1);
 }
 
-int* faultyPointer = NULL;
-
 __attribute__((noinline)) void crashing_leaf_func(void) {
-  *faultyPointer = 0;
+  raise(SIGSEGV);
 }
 
 int main(int, char**) {

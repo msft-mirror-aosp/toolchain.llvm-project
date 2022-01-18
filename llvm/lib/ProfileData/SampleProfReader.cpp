@@ -57,7 +57,7 @@ static cl::opt<bool> ProfileIsFSDisciminator(
 
 /// Dump the function profile for \p FName.
 ///
-/// \param FName Name of the function to print.
+/// \param FContext Name + context of the function to print.
 /// \param OS Stream to emit the output to.
 void SampleProfileReader::dumpFunctionProfile(SampleContext FContext,
                                               raw_ostream &OS) {
@@ -1228,6 +1228,12 @@ static std::string getSecFlagsStr(const SecHdrTableEntry &Entry) {
     if (hasSecFlag(Entry, SecFuncOffsetFlags::SecFlagOrdered))
       Flags.append("ordered,");
     break;
+  case SecFuncMetadata:
+    if (hasSecFlag(Entry, SecFuncMetadataFlags::SecFlagIsProbeBased))
+      Flags.append("probe,");
+    if (hasSecFlag(Entry, SecFuncMetadataFlags::SecFlagHasAttribute))
+      Flags.append("attr,");
+    break;
   default:
     break;
   }
@@ -1703,7 +1709,7 @@ setupMemoryBuffer(const Twine &Filename) {
     return EC;
   auto Buffer = std::move(BufferOrErr.get());
 
-  // Sanity check the file.
+  // Check the file.
   if (uint64_t(Buffer->getBufferSize()) > std::numeric_limits<uint32_t>::max())
     return sampleprof_error::too_large;
 

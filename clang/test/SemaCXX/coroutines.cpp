@@ -1,9 +1,8 @@
 // This file contains references to sections of the Coroutines TS, which can be
 // found at http://wg21.link/coroutines.
 
-// RUN: %clang_cc1 -std=c++2b                 -fsyntax-only -verify=expected,cxx20_2b,cxx2b    %s -fcxx-exceptions -fexceptions -Wunused-result
-// RUN: %clang_cc1 -std=c++20                 -fsyntax-only -verify=expected,cxx14_20,cxx20_2b %s -fcxx-exceptions -fexceptions -Wunused-result
-// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -fsyntax-only -verify=expected,cxx14_20          %s -fcxx-exceptions -fexceptions -Wunused-result
+// RUN: %clang_cc1 -std=c++2b -fsyntax-only -verify=expected,cxx20_2b,cxx2b    %s -fcxx-exceptions -fexceptions -Wunused-result
+// RUN: %clang_cc1 -std=c++20 -fsyntax-only -verify=expected,cxx14_20,cxx20_2b %s -fcxx-exceptions -fexceptions -Wunused-result
 
 void no_coroutine_traits_bad_arg_await() {
   co_await a; // expected-error {{include <coroutine>}}
@@ -186,7 +185,7 @@ void coreturn(int n) {
   if (n == 1)
     co_return {4}; // expected-warning {{braces around scalar initializer}}
   if (n == 2)
-    co_return "foo"; // expected-error {{cannot initialize a parameter of type 'int' with an lvalue of type 'const char [4]'}}
+    co_return "foo"; // expected-error {{cannot initialize a parameter of type 'int' with an lvalue of type 'const char[4]'}}
   co_return 42;
 }
 
@@ -761,7 +760,7 @@ template <> struct std::coroutine_handle<good_promise_2> {};
 
 template <> struct std::coroutine_traits<float> { using promise_type = good_promise_2; };
 
-float badly_specialized_coro_handle() { // expected-error {{std::coroutine_handle missing a member named 'from_address'}}
+float badly_specialized_coro_handle() { // expected-error {{std::coroutine_handle must have a member named 'from_address'}}
   //expected-note@-1 {{call to 'initial_suspend' implicitly required by the initial suspend point}}
   co_return; //expected-note {{function is a coroutine due to use of 'co_return' here}}
 }
@@ -1112,7 +1111,7 @@ struct TestType {
     static_assert(!TC.MatchesArgs<TestType *>, "");
   }
 
-  CoroMemberTag test_sanity(int *) const {
+  CoroMemberTag test_asserts(int *) const {
     auto TC = co_yield 0;
     static_assert(TC.MatchesArgs<const TestType &>, ""); // expected-error {{static_assert failed}}
     static_assert(TC.MatchesArgs<const TestType &>, ""); // expected-error {{static_assert failed}}
@@ -1204,7 +1203,7 @@ template CoroMemberTag TestType::test_static_template<void>(const char *volatile
 template <class... Args>
 struct DepTestType {
 
-  CoroMemberTag test_sanity(int *) const {
+  CoroMemberTag test_asserts(int *) const {
     auto TC = co_yield 0;
     static_assert(TC.template MatchesArgs<const DepTestType &>, ""); // expected-error {{static_assert failed}}
     static_assert(TC.template MatchesArgs<>, ""); // expected-error {{static_assert failed}}

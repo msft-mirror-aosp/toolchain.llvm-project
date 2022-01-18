@@ -17,6 +17,7 @@ include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Dialect/LLVMIR/LLVMOpsInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 def FMFnnan     : BitEnumAttrCase<"nnan", 0x1>;
@@ -28,7 +29,7 @@ def FMFafn      : BitEnumAttrCase<"afn", 0x20>;
 def FMFreassoc  : BitEnumAttrCase<"reassoc", 0x40>;
 def FMFfast     : BitEnumAttrCase<"fast", 0x80>;
 
-def FastmathFlags : BitEnumAttr<
+def FastmathFlags_DoNotUse : BitEnumAttr<
     "FastmathFlags",
     "LLVM fastmath flags",
     [FMFnnan, FMFninf, FMFnsz, FMFarcp, FMFcontract, FMFafn, FMFreassoc, FMFfast
@@ -72,9 +73,8 @@ def LLVM_OneResultOpBuilder :
   [{
     if (resultType) $_state.addTypes(resultType);
     $_state.addOperands(operands);
-    for (auto namedAttr : attributes) {
-      $_state.addAttribute(namedAttr.first, namedAttr.second);
-    }
+    for (auto namedAttr : attributes)
+      $_state.addAttribute(namedAttr.getName(), namedAttr.getValue());
   }]>;
 
 def LLVM_ZeroResultOpBuilder :
@@ -82,9 +82,8 @@ def LLVM_ZeroResultOpBuilder :
     CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes),
   [{
     $_state.addOperands(operands);
-    for (auto namedAttr : attributes) {
-      $_state.addAttribute(namedAttr.first, namedAttr.second);
-    }
+    for (auto namedAttr : attributes)
+      $_state.addAttribute(namedAttr.getName(), namedAttr.getValue());
   }]>;
 
 // Compatibility builder that takes an instance of wrapped llvm::VoidType
@@ -443,7 +442,7 @@ def LLVM_InvokeOp : LLVM_Op<"invoke", [
                       DeclareOpInterfaceMethods<BranchOpInterface>,
                       Terminator]> {
   let arguments = (ins OptionalAttr<FlatSymbolRefAttr>:$callee,
-                   Variadic<LLVM_Type>:$operands,
+                   Variadic<LLVM_Type>:$callee_operands,
                    Variadic<LLVM_Type>:$normalDestOperands,
                    Variadic<LLVM_Type>:$unwindDestOperands);
   let results = (outs Variadic<LLVM_Type>);
@@ -622,11 +621,6 @@ def LLVM_SelectOp
   let arguments = (ins LLVM_ScalarOrVectorOf<I1>:$condition,
                    LLVM_Type:$trueValue, LLVM_Type:$falseValue);
   let results = (outs LLVM_Type:$res);
-  let builders = [
-    OpBuilder<(ins "Value":$condition, "Value":$lhs, "Value":$rhs),
-    [{
-      build($_builder, $_state, lhs.getType(), condition, lhs, rhs);
-    }]>];
   let assemblyFormat = "operands attr-dict `:` type($condition) `,` type($res)";
 }
 def LLVM_FreezeOp : LLVM_Op<"freeze", [SameOperandsAndResultType]> {
@@ -724,7 +718,7 @@ def LLVM_SwitchOp : LLVM_TerminatorOp<"switch",
     [AttrSizedOperandSegments, DeclareOpInterfaceMethods<BranchOpInterface>,
      NoSideEffect]> {
   let arguments = (ins
-    I32:$value,
+    AnyInteger:$value,
     Variadic<AnyType>:$defaultOperands,
     VariadicOfVariadic<AnyType, "case_operand_segments">:$caseOperands,
     OptionalAttr<ElementsAttr>:$case_values,
@@ -738,9 +732,9 @@ def LLVM_SwitchOp : LLVM_TerminatorOp<"switch",
 
   let verifier = [{ return ::verify(*this); }];
   let assemblyFormat = [{
-    $value `,`
+    $value `:` type($value) `,`
     $defaultDestination (`(` $defaultOperands^ `:` type($defaultOperands) `)`)?
-    `[` `\n` custom<SwitchOpCases>($case_values, $caseDestinations,
+    `[` `\n` custom<SwitchOpCases>(ref(type($value)), $case_values, $caseDestinations,
                                    $caseOperands, type($caseOperands)) `]`
     attr-dict
   }];
@@ -803,15 +797,27 @@ def LinkageWeakODR
 def LinkageExternal
     : LLVM_EnumAttrCase<"External", "external", "ExternalLinkage", 10>;
 
-def Linkage : LLVM_EnumAttr<
+def LinkageEnum : LLVM_EnumAttr<
     "Linkage",
     "::llvm::GlobalValue::LinkageTypes",
     "LLVM linkage types",
     [LinkagePrivate, LinkageInternal, LinkageAvailableExternally,
      LinkageLinkonce, LinkageWeak, LinkageCommon, LinkageAppending,
      LinkageExternWeak, LinkageLinkonceODR, LinkageWeakODR, LinkageExternal]> {
-  let cppNamespace = "::mlir::LLVM";
+  let cppNamespace = "::mlir::LLVM::linkage";
 }
+
+def Linkage : DialectAttr<
+    LLVM_Dialect,
+    CPred<"$_self.isa<::mlir::LLVM::LinkageAttr>()">,
+    "LLVM Linkage specification"> {
+  let storageType = "::mlir::LLVM::LinkageAttr";
+  let returnType = "::mlir::LLVM::Linkage";
+  let convertFromStorage = "$_self.getLinkage()";
+  let constBuilderCall =
+          "::mlir::LLVM::LinkageAttr::get($_builder.getContext(), $0)";
+}
+
 
 def UnnamedAddrNone : LLVM_EnumAttrCase<"None", "", "None", 0>;
 def UnnamedAddrLocal : LLVM_EnumAttrCase<"Local", "local_unnamed_addr", "Local", 1>;
@@ -994,7 +1000,7 @@ def LLVM_AccessGroupMetadataOp : LLVM_Op<"access_group", [
 def LLVM_GlobalOp : LLVM_Op<"mlir.global",
     [IsolatedFromAbove, SingleBlockImplicitTerminator<"ReturnOp">, Symbol]> {
   let arguments = (ins
-    TypeAttr:$type,
+    TypeAttr:$global_type,
     UnitAttr:$constant,
     StrAttr:$sym_name,
     Linkage:$linkage,
@@ -1116,7 +1122,7 @@ def LLVM_GlobalOp : LLVM_Op<"mlir.global",
   let extraClassDeclaration = [{
     /// Return the LLVM type of the global.
     Type getType() {
-      return type();
+      return getGlobalType();
     }
     /// Return the initializer attribute if it exists, or a null attribute.
     Attribute getValueOrNull() {
@@ -1139,6 +1145,66 @@ def LLVM_GlobalOp : LLVM_Op<"mlir.global",
   let printer = "printGlobalOp(p, *this);";
   let parser = "return parseGlobalOp(parser, result);";
   let verifier = "return ::verify(*this);";
+}
+
+def LLVM_GlobalCtorsOp : LLVM_Op<"mlir.global_ctors", [
+                           DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let arguments = (ins FlatSymbolRefArrayAttr
+                   : $ctors, I32ArrayAttr
+                   : $priorities);
+  let summary = "LLVM dialect global_ctors.";
+  let description = [{
+    Specifies a list of constructor functions and priorities. The functions
+    referenced by this array will be called in ascending order of priority (i.e.
+    lowest first) when the module is loaded. The order of functions with the
+    same priority is not defined. This operation is translated to LLVM's
+    global_ctors global variable. The initializer functions are run at load
+    time. The `data` field present in LLVM's global_ctors variable is not
+    modeled here.
+
+    Examples:
+
+    ```mlir
+    llvm.mlir.global_ctors {@ctor}
+
+    llvm.func @ctor() {
+      ...
+      llvm.return
+    }
+    ```
+
+  }];
+  let verifier = [{ return ::verify(*this); }];
+  let assemblyFormat = "attr-dict";
+}
+
+def LLVM_GlobalDtorsOp : LLVM_Op<"mlir.global_dtors", [
+                           DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let arguments = (ins
+    FlatSymbolRefArrayAttr:$dtors,
+    I32ArrayAttr:$priorities
+  );
+  let summary = "LLVM dialect global_dtors.";
+  let description = [{
+    Specifies a list of destructor functions and priorities. The functions
+    referenced by this array will be called in descending order of priority (i.e.
+    highest first) when the module is unloaded. The order of functions with the
+    same priority is not defined. This operation is translated to LLVM's
+    global_dtors global variable. The `data` field present in LLVM's
+    global_dtors variable is not modeled here.
+
+    Examples:
+
+    ```mlir
+    llvm.func @dtor() {
+      llvm.return
+    }
+    llvm.mlir.global_dtors {@dtor}
+    ```
+
+  }];
+  let verifier = [{ return ::verify(*this); }];
+  let assemblyFormat = "attr-dict";
 }
 
 def LLVM_LLVMFuncOp : LLVM_Op<"func",
@@ -1369,6 +1435,11 @@ def LLVM_MemcpyOp : LLVM_ZeroResultIntrOp<"memcpy", [0, 1, 2]> {
 }
 def LLVM_MemcpyInlineOp : LLVM_ZeroResultIntrOp<"memcpy.inline", [0, 1, 2]> {
   let arguments = (ins LLVM_Type:$dst, LLVM_Type:$src, LLVM_Type:$len,
+                   LLVM_Type:$isVolatile);
+}
+
+def LLVM_MemsetOp : LLVM_ZeroResultIntrOp<"memset", [0, 2]> {
+  let arguments = (ins LLVM_Type:$dst, LLVM_Type:$val, LLVM_Type:$len,
                    LLVM_Type:$isVolatile);
 }
 
