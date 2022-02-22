@@ -90,18 +90,24 @@ public:
   /// type identification.
   enum {
     VPValueSC,
-    VPVBlendSC,
     VPVInstructionSC,
     VPVMemoryInstructionSC,
-    VPVPredInstPHI,
     VPVReductionSC,
     VPVReplicateSC,
     VPVWidenSC,
     VPVWidenCallSC,
+    VPVWidenCanonicalIVSC,
     VPVWidenGEPSC,
-    VPVWidenIntOrFpIndcutionSC,
-    VPVWidenPHISC,
     VPVWidenSelectSC,
+
+    // Phi-like VPValues. Need to be kept together.
+    VPVBlendSC,
+    VPVCanonicalIVPHISC,
+    VPVFirstOrderRecurrencePHISC,
+    VPVWidenPHISC,
+    VPVWidenIntOrFpInductionSC,
+    VPVPredInstPHI,
+    VPVReductionPHISC,
   };
 
   VPValue(Value *UV = nullptr, VPDef *Def = nullptr)
@@ -172,11 +178,17 @@ public:
   void replaceAllUsesWith(VPValue *New);
 
   VPDef *getDef() { return Def; }
+  const VPDef *getDef() const { return Def; }
 
   /// Returns the underlying IR value, if this VPValue is defined outside the
   /// scope of VPlan. Returns nullptr if the VPValue is defined by a VPDef
   /// inside a VPlan.
   Value *getLiveInIRValue() {
+    assert(!getDef() &&
+           "VPValue is not a live-in; it is defined by a VPDef inside a VPlan");
+    return getUnderlyingValue();
+  }
+  const Value *getLiveInIRValue() const {
     assert(!getDef() &&
            "VPValue is not a live-in; it is defined by a VPDef inside a VPlan");
     return getUnderlyingValue();
@@ -314,21 +326,28 @@ public:
   /// SubclassID field of the VPRecipeBase objects. They are used for concrete
   /// type identification.
   using VPRecipeTy = enum {
-    VPBlendSC,
     VPBranchOnMaskSC,
     VPInstructionSC,
     VPInterleaveSC,
-    VPPredInstPHISC,
     VPReductionSC,
     VPReplicateSC,
     VPWidenCallSC,
     VPWidenCanonicalIVSC,
     VPWidenGEPSC,
-    VPWidenIntOrFpInductionSC,
     VPWidenMemoryInstructionSC,
-    VPWidenPHISC,
     VPWidenSC,
-    VPWidenSelectSC
+    VPWidenSelectSC,
+
+    // Phi-like recipes. Need to be kept together.
+    VPBlendSC,
+    VPCanonicalIVPHISC,
+    VPFirstOrderRecurrencePHISC,
+    VPWidenPHISC,
+    VPWidenIntOrFpInductionSC,
+    VPPredInstPHISC,
+    VPReductionPHISC,
+    VPFirstPHISC = VPBlendSC,
+    VPLastPHISC = VPReductionPHISC,
   };
 
   VPDef(const unsigned char SC) : SubclassID(SC) {}
@@ -362,7 +381,7 @@ public:
     assert(DefinedValues[I] && "defined value must be non-null");
     return DefinedValues[I];
   }
-  const VPValue *getVPValue(unsigned I = 0) const {
+  const VPValue *getVPValue(unsigned I) const {
     assert(DefinedValues[I] && "defined value must be non-null");
     return DefinedValues[I];
   }
@@ -392,7 +411,6 @@ public:
 
 class VPlan;
 class VPBasicBlock;
-class VPRegionBlock;
 
 /// This class can be used to assign consecutive numbers to all VPValues in a
 /// VPlan and allows querying the numbering for printing, similar to the

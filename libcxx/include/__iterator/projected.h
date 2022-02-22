@@ -11,16 +11,12 @@
 
 #include <__config>
 #include <__iterator/concepts.h>
-#include <__iterator/indirect_concepts.h>
 #include <__iterator/incrementable_traits.h>
 #include <type_traits>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #pragma GCC system_header
 #endif
-
-_LIBCPP_PUSH_MACROS
-#include <__undef_macros>
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
@@ -40,7 +36,5 @@ struct incrementable_traits<projected<_It, _Proj>> {
 #endif // !defined(_LIBCPP_HAS_NO_RANGES)
 
 _LIBCPP_END_NAMESPACE_STD
-
-_LIBCPP_POP_MACROS
 
 #endif // _LIBCPP___ITERATOR_PROJECTED_H

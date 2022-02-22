@@ -8,7 +8,9 @@ add_mlir_conversion_library(MLIRVectorToSCF
   Core
 
   LINK_LIBS PUBLIC
+  MLIRArithmetic
   MLIRLLVMIR
   MLIRMemRef
   MLIRTransforms
+  MLIRVector
   )

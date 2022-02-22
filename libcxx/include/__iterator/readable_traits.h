@@ -18,9 +18,6 @@
 #pragma GCC system_header
 #endif
 
-_LIBCPP_PUSH_MACROS
-#include <__undef_macros>
-
 _LIBCPP_BEGIN_NAMESPACE_STD
 
 #if !defined(_LIBCPP_HAS_NO_RANGES)
@@ -60,14 +57,14 @@ template<__has_member_element_type _Tp>
 struct indirectly_readable_traits<_Tp>
   : __cond_value_type<typename _Tp::element_type> {};
 
-// Pre-emptively applies LWG3541
 template<__has_member_value_type _Tp>
-requires __has_member_element_type<_Tp>
+  requires __has_member_element_type<_Tp>
 struct indirectly_readable_traits<_Tp> {};
+
 template<__has_member_value_type _Tp>
-requires __has_member_element_type<_Tp> &&
-         same_as<remove_cv_t<typename _Tp::element_type>,
-                 remove_cv_t<typename _Tp::value_type>>
+  requires __has_member_element_type<_Tp> &&
+           same_as<remove_cv_t<typename _Tp::element_type>,
+                   remove_cv_t<typename _Tp::value_type>>
 struct indirectly_readable_traits<_Tp>
   : __cond_value_type<typename _Tp::value_type> {};
 
@@ -85,7 +82,5 @@ using iter_value_t = typename conditional_t<__is_primary_template<iterator_trait
 #endif // !defined(_LIBCPP_HAS_NO_RANGES)
 
 _LIBCPP_END_NAMESPACE_STD
-
-_LIBCPP_POP_MACROS
 
 #endif // _LIBCPP___ITERATOR_READABLE_TRAITS_H

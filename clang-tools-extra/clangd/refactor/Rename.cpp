@@ -159,19 +159,13 @@ llvm::DenseSet<const NamedDecl *> locateDeclAt(ParsedAST &AST,
   return Result;
 }
 
-// By default, we exclude C++ standard symbols and protobuf symbols as rename
-// these symbols would change system/generated files which are unlikely to be
-// modified.
+// By default, we exclude symbols from system headers and protobuf symbols as
+// renaming these symbols would change system/generated files which are unlikely
+// to be good candidates for modification.
 bool isExcluded(const NamedDecl &RenameDecl) {
-  if (isProtoFile(RenameDecl.getLocation(),
-                  RenameDecl.getASTContext().getSourceManager()))
-    return true;
-  static const auto *StdSymbols = new llvm::DenseSet<llvm::StringRef>({
-#define SYMBOL(Name, NameSpace, Header) {#NameSpace #Name},
-#include "StdSymbolMap.inc"
-#undef SYMBOL
-  });
-  return StdSymbols->count(printQualifiedName(RenameDecl));
+  const auto &SM = RenameDecl.getASTContext().getSourceManager();
+  return SM.isInSystemHeader(RenameDecl.getLocation()) ||
+         isProtoFile(RenameDecl.getLocation(), SM);
 }
 
 enum class ReasonToReject {
@@ -455,7 +449,7 @@ std::string toString(InvalidName::Kind K) {
 }
 
 llvm::Error makeError(InvalidName Reason) {
-  auto Message = [](InvalidName Reason) {
+  auto Message = [](const InvalidName &Reason) {
     switch (Reason.K) {
     case InvalidName::Keywords:
       return llvm::formatv("the chosen name \"{0}\" is a keyword",
@@ -478,10 +472,10 @@ static bool mayBeValidIdentifier(llvm::StringRef Ident) {
   // We don't check all the rules for non-ascii characters (most are allowed).
   bool AllowDollar = true; // lenient
   if (llvm::isASCII(Ident.front()) &&
-      !isIdentifierHead(Ident.front(), AllowDollar))
+      !isAsciiIdentifierStart(Ident.front(), AllowDollar))
     return false;
   for (char C : Ident) {
-    if (llvm::isASCII(C) && !isIdentifierBody(C, AllowDollar))
+    if (llvm::isASCII(C) && !isAsciiIdentifierContinue(C, AllowDollar))
       return false;
   }
   return true;
@@ -733,7 +727,7 @@ llvm::Expected<RenameResult> rename(const RenameInputs &RInputs) {
     return makeError(ReasonToReject::SameName);
   auto Invalid = checkName(RenameDecl, RInputs.NewName);
   if (Invalid)
-    return makeError(*Invalid);
+    return makeError(std::move(*Invalid));
 
   auto Reject = renameable(RenameDecl, RInputs.MainFilePath, RInputs.Index);
   if (Reject)
@@ -751,6 +745,26 @@ llvm::Expected<RenameResult> rename(const RenameInputs &RInputs) {
   auto MainFileRenameEdit = renameWithinFile(AST, RenameDecl, RInputs.NewName);
   if (!MainFileRenameEdit)
     return MainFileRenameEdit.takeError();
+
+  // Check the rename-triggering location is actually being renamed.
+  // This is a robustness check to avoid surprising rename results -- if the
+  // the triggering location is not actually the name of the node we identified
+  // (e.g. for broken code), then rename is likely not what users expect, so we
+  // reject this kind of rename.
+  auto StartOffset = positionToOffset(MainFileCode, CurrentIdentifier.start);
+  auto EndOffset = positionToOffset(MainFileCode, CurrentIdentifier.end);
+  if (!StartOffset)
+    return StartOffset.takeError();
+  if (!EndOffset)
+    return EndOffset.takeError();
+  if (llvm::find_if(
+          *MainFileRenameEdit,
+          [&StartOffset, &EndOffset](const clang::tooling::Replacement &R) {
+            return R.getOffset() == *StartOffset &&
+                   R.getLength() == *EndOffset - *StartOffset;
+          }) == MainFileRenameEdit->end()) {
+    return makeError(ReasonToReject::NoSymbolFound);
+  }
   RenameResult Result;
   Result.Target = CurrentIdentifier;
   Edit MainFileEdits = Edit(MainFileCode, std::move(*MainFileRenameEdit));
@@ -886,7 +900,7 @@ llvm::Optional<std::vector<Range>> getMappedRanges(ArrayRef<Range> Indexed,
 
   std::vector<size_t> Best;
   size_t BestCost = std::numeric_limits<size_t>::max();
-  bool HasMultiple = 0;
+  bool HasMultiple = false;
   std::vector<size_t> ResultStorage;
   int Fuel = 10000;
   findNearMiss(ResultStorage, Indexed, Lexed, 0, Fuel,

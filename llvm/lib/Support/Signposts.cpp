@@ -1,14 +1,12 @@
 //===-- Signposts.cpp - Interval debug annotations ------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/Signposts.h"
-#include "llvm/Support/Timer.h"
 
 #include "llvm/Config/config.h"
 #if LLVM_SUPPORT_XCODE_SIGNPOSTS
@@ -74,7 +72,7 @@ public:
       if (SIGNPOSTS_AVAILABLE()) {
         // Both strings used here are required to be constant literal strings.
         os_signpost_interval_begin(getLogger(), getSignpostForObject(O),
-                                   "LLVM Timers", "Begin %s", Name.data());
+                                   "LLVM Timers", "%s", Name.data());
       }
     }
   }
@@ -84,7 +82,7 @@ public:
       if (SIGNPOSTS_AVAILABLE()) {
         // Both strings used here are required to be constant literal strings.
         os_signpost_interval_end(getLogger(), getSignpostForObject(O),
-                                 "LLVM Timers", "End %s", Name.data());
+                                 "LLVM Timers", "");
       }
     }
   }

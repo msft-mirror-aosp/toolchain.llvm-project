@@ -12,6 +12,7 @@
 #ifndef LLVM_ADT_STRINGSWITCH_H
 #define LLVM_ADT_STRINGSWITCH_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
 #include <cassert>
@@ -138,21 +139,21 @@ public:
 
   // Case-insensitive case matchers.
   StringSwitch &CaseLower(StringLiteral S, T Value) {
-    if (!Result && Str.equals_lower(S))
+    if (!Result && Str.equals_insensitive(S))
       Result = std::move(Value);
 
     return *this;
   }
 
   StringSwitch &EndsWithLower(StringLiteral S, T Value) {
-    if (!Result && Str.endswith_lower(S))
+    if (!Result && Str.endswith_insensitive(S))
       Result = Value;
 
     return *this;
   }
 
   StringSwitch &StartsWithLower(StringLiteral S, T Value) {
-    if (!Result && Str.startswith_lower(S))
+    if (!Result && Str.startswith_insensitive(S))
       Result = std::move(Value);
 
     return *this;

@@ -1,4 +1,4 @@
-//===-- M68kSubtarget.h - Define Subtarget for the M68k -----*- C++ -*-===//
+//===-- M68kSubtarget.h - Define Subtarget for the M68k ---------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,14 +11,18 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_TARGET_CPU0_M68KSUBTARGET_H
-#define LLVM_LIB_TARGET_CPU0_M68KSUBTARGET_H
+#ifndef LLVM_LIB_TARGET_M68K_M68KSUBTARGET_H
+#define LLVM_LIB_TARGET_M68K_M68KSUBTARGET_H
 
 #include "M68kFrameLowering.h"
 #include "M68kISelLowering.h"
 #include "M68kInstrInfo.h"
 
 #include "llvm/ADT/BitVector.h"
+#include "llvm/CodeGen/GlobalISel/CallLowering.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
+#include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
+#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
 #include "llvm/CodeGen/SelectionDAGTargetInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
@@ -159,7 +163,20 @@ public:
   const InstrItineraryData *getInstrItineraryData() const override {
     return &InstrItins;
   }
+
+protected:
+  // GlobalISel related APIs.
+  std::unique_ptr<CallLowering> CallLoweringInfo;
+  std::unique_ptr<InstructionSelector> InstSelector;
+  std::unique_ptr<LegalizerInfo> Legalizer;
+  std::unique_ptr<RegisterBankInfo> RegBankInfo;
+
+public:
+  const CallLowering *getCallLowering() const override;
+  InstructionSelector *getInstructionSelector() const override;
+  const LegalizerInfo *getLegalizerInfo() const override;
+  const RegisterBankInfo *getRegBankInfo() const override;
 };
 } // namespace llvm
 
-#endif
+#endif // LLVM_LIB_TARGET_M68K_M68KSUBTARGET_H

@@ -110,8 +110,6 @@ public:
   ///     The number of bytes that this object occupies in memory.
   ///     The returned value does not include the bytes for any
   ///     shared string values.
-  ///
-  /// \see ConstString::StaticMemorySize ()
   virtual size_t MemorySize() const;
 
 protected:
@@ -238,8 +236,6 @@ public:
   ///     The number of bytes that this object occupies in memory.
   ///     The returned value does not include the bytes for any
   ///     shared string values.
-  ///
-  /// \see ConstString::StaticMemorySize ()
   size_t MemorySize() const override;
 
 private:
@@ -271,7 +267,7 @@ using CallSiteParameterArray = llvm::SmallVector<CallSiteParameter, 0>;
 class CallEdge {
 public:
   enum class AddrType : uint8_t { Call, AfterCall };
-  virtual ~CallEdge() {}
+  virtual ~CallEdge() = default;
 
   /// Get the callee's definition.
   ///
@@ -595,8 +591,6 @@ public:
   ///     The number of bytes that this object occupies in memory.
   ///     The returned value does not include the bytes for any
   ///     shared string values.
-  ///
-  /// \see ConstString::StaticMemorySize ()
   size_t MemorySize() const;
 
   /// Get whether compiler optimizations were enabled for this function

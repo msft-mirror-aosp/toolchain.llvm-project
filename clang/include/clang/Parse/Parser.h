@@ -114,6 +114,7 @@ class Parser : public CodeCompletionHandler {
   /// Contextual keywords for Microsoft extensions.
   IdentifierInfo *Ident__except;
   mutable IdentifierInfo *Ident_sealed;
+  mutable IdentifierInfo *Ident_abstract;
 
   /// Ident_super - IdentifierInfo for "super", to support fast
   /// comparison.
@@ -195,6 +196,7 @@ class Parser : public CodeCompletionHandler {
   std::unique_ptr<PragmaHandler> MSRuntimeChecks;
   std::unique_ptr<PragmaHandler> MSIntrinsic;
   std::unique_ptr<PragmaHandler> MSOptimize;
+  std::unique_ptr<PragmaHandler> MSFenvAccess;
   std::unique_ptr<PragmaHandler> CUDAForceHostDeviceHandler;
   std::unique_ptr<PragmaHandler> OptimizeHandler;
   std::unique_ptr<PragmaHandler> LoopHintHandler;
@@ -1473,8 +1475,7 @@ private:
   /// information that has been parsed prior to parsing declaration
   /// specifiers.
   struct ParsedTemplateInfo {
-    ParsedTemplateInfo()
-      : Kind(NonTemplate), TemplateParams(nullptr), TemplateLoc() { }
+    ParsedTemplateInfo() : Kind(NonTemplate), TemplateParams(nullptr) {}
 
     ParsedTemplateInfo(TemplateParameterLists *TemplateParams,
                        bool isSpecialization,
@@ -1974,8 +1975,12 @@ private:
   Sema::ConditionResult ParseCXXCondition(StmtResult *InitStmt,
                                           SourceLocation Loc,
                                           Sema::ConditionKind CK,
+                                          bool MissingOK,
                                           ForRangeInfo *FRI = nullptr,
                                           bool EnterForConditionScope = false);
+  DeclGroupPtrTy
+  ParseAliasDeclarationInInitStatement(DeclaratorContext Context,
+                                       ParsedAttributesWithRange &Attrs);
 
   //===--------------------------------------------------------------------===//
   // C++ Coroutines
@@ -2075,8 +2080,8 @@ private:
   bool ParseParenExprOrCondition(StmtResult *InitStmt,
                                  Sema::ConditionResult &CondResult,
                                  SourceLocation Loc, Sema::ConditionKind CK,
-                                 SourceLocation *LParenLoc = nullptr,
-                                 SourceLocation *RParenLoc = nullptr);
+                                 bool MissingOK, SourceLocation *LParenLoc,
+                                 SourceLocation *RParenLoc);
   StmtResult ParseIfStatement(SourceLocation *TrailingElseLoc);
   StmtResult ParseSwitchStatement(SourceLocation *TrailingElseLoc);
   StmtResult ParseWhileStatement(SourceLocation *TrailingElseLoc);
@@ -2395,7 +2400,8 @@ private:
     if (getLangOpts().OpenMP)
       Actions.startOpenMPLoop();
     if (getLangOpts().CPlusPlus)
-      return isCXXSimpleDeclaration(/*AllowForRangeDecl=*/true);
+      return Tok.is(tok::kw_using) ||
+             isCXXSimpleDeclaration(/*AllowForRangeDecl=*/true);
     return isDeclarationSpecifier(true);
   }
 
@@ -2557,6 +2563,10 @@ private:
   /// Try to skip a possibly empty sequence of 'attribute-specifier's without
   /// full validation of the syntactic structure of attributes.
   bool TrySkipAttributes();
+
+  /// Diagnoses use of _ExtInt as being deprecated, and diagnoses use of
+  /// _BitInt as an extension when appropriate.
+  void DiagnoseBitIntUse(const Token &Tok);
 
 public:
   TypeResult
@@ -2771,6 +2781,16 @@ private:
                           IdentifierInfo *ScopeName, SourceLocation ScopeLoc,
                           ParsedAttr::Syntax Syntax);
 
+  void ReplayOpenMPAttributeTokens(CachedTokens &OpenMPTokens) {
+    // If parsing the attributes found an OpenMP directive, emit those tokens
+    // to the parse stream now.
+    if (!OpenMPTokens.empty()) {
+      PP.EnterToken(Tok, /*IsReinject*/ true);
+      PP.EnterTokenStream(OpenMPTokens, /*DisableMacroExpansion*/ true,
+                          /*IsReinject*/ true);
+      ConsumeAnyToken(/*ConsumeCodeCompletionTok*/ true);
+    }
+  }
   void MaybeParseCXX11Attributes(Declarator &D) {
     if (standardAttributesAllowed() && isCXX11AttributeSpecifier()) {
       ParsedAttributesWithRange attrs(AttrFactory);
@@ -2800,8 +2820,18 @@ private:
     return false;
   }
 
-  void ParseCXX11AttributeSpecifier(ParsedAttributes &attrs,
-                                    SourceLocation *EndLoc = nullptr);
+  void ParseOpenMPAttributeArgs(IdentifierInfo *AttrName,
+                                CachedTokens &OpenMPTokens);
+
+  void ParseCXX11AttributeSpecifierInternal(ParsedAttributes &Attrs,
+                                            CachedTokens &OpenMPTokens,
+                                            SourceLocation *EndLoc = nullptr);
+  void ParseCXX11AttributeSpecifier(ParsedAttributes &Attrs,
+                                    SourceLocation *EndLoc = nullptr) {
+    CachedTokens OpenMPTokens;
+    ParseCXX11AttributeSpecifierInternal(Attrs, OpenMPTokens, EndLoc);
+    ReplayOpenMPAttributeTokens(OpenMPTokens);
+  }
   void ParseCXX11Attributes(ParsedAttributesWithRange &attrs,
                             SourceLocation *EndLoc = nullptr);
   /// Parses a C++11 (or C2x)-style attribute argument list. Returns true
@@ -2810,9 +2840,13 @@ private:
                                SourceLocation AttrNameLoc,
                                ParsedAttributes &Attrs, SourceLocation *EndLoc,
                                IdentifierInfo *ScopeName,
-                               SourceLocation ScopeLoc);
+                               SourceLocation ScopeLoc,
+                               CachedTokens &OpenMPTokens);
 
-  IdentifierInfo *TryParseCXX11AttributeIdentifier(SourceLocation &Loc);
+  IdentifierInfo *TryParseCXX11AttributeIdentifier(
+      SourceLocation &Loc,
+      Sema::AttributeCompletion Completion = Sema::AttributeCompletion::None,
+      const IdentifierInfo *EnclosingScope = nullptr);
 
   void MaybeParseMicrosoftAttributes(ParsedAttributes &attrs,
                                      SourceLocation *endLoc = nullptr) {
@@ -2917,6 +2951,7 @@ private:
                                           SourceLocation FriendLoc);
 
   bool isCXX11FinalKeyword() const;
+  bool isClassCompatibleKeyword() const;
 
   /// DeclaratorScopeObj - RAII object used in Parser::ParseDirectDeclarator to
   /// enter a new C++ declarator scope and exit it when the function is
@@ -3174,6 +3209,10 @@ private:
   /// Parses OpenMP context selectors.
   bool parseOMPContextSelectors(SourceLocation Loc, OMPTraitInfo &TI);
 
+  /// Parse an 'append_args' clause for '#pragma omp declare variant'.
+  bool parseOpenMPAppendArgs(
+      SmallVectorImpl<OMPDeclareVariantAttr::InteropType> &InterOpTypes);
+
   /// Parse a `match` clause for an '#pragma omp declare variant'. Return true
   /// if there was an error.
   bool parseOMPDeclareVariantMatchClause(SourceLocation Loc, OMPTraitInfo &TI,
@@ -3276,6 +3315,11 @@ private:
   /// nullptr.
   ///
   OMPClause *ParseOpenMPSimpleClause(OpenMPClauseKind Kind, bool ParseOnly);
+  /// Parses indirect clause
+  /// \param ParseOnly true to skip the clause's semantic actions and return
+  // false;
+  bool ParseOpenMPIndirectClause(Sema::DeclareTargetContextInfo &DTCI,
+                                 bool ParseOnly);
   /// Parses clause with a single expression and an additional argument
   /// of a kind \a Kind.
   ///
@@ -3415,7 +3459,8 @@ private:
   bool ParseTemplateIdAfterTemplateName(bool ConsumeLastToken,
                                         SourceLocation &LAngleLoc,
                                         TemplateArgList &TemplateArgs,
-                                        SourceLocation &RAngleLoc);
+                                        SourceLocation &RAngleLoc,
+                                        TemplateTy NameHint = nullptr);
 
   bool AnnotateTemplateIdToken(TemplateTy Template, TemplateNameKind TNK,
                                CXXScopeSpec &SS,
@@ -3425,7 +3470,8 @@ private:
                                bool TypeConstraint = false);
   void AnnotateTemplateIdTokenAsType(CXXScopeSpec &SS,
                                      bool IsClassName = false);
-  bool ParseTemplateArgumentList(TemplateArgList &TemplateArgs);
+  bool ParseTemplateArgumentList(TemplateArgList &TemplateArgs,
+                                 TemplateTy Template, SourceLocation OpenLoc);
   ParsedTemplateArgument ParseTemplateTemplateArgument();
   ParsedTemplateArgument ParseTemplateArgument();
   Decl *ParseExplicitInstantiation(DeclaratorContext Context,

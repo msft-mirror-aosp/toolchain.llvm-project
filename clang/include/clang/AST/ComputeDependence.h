@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_AST_COMPUTE_DEPENDENCE_H
-#define LLVM_CLANG_AST_COMPUTE_DEPENDENCE_H
+#ifndef LLVM_CLANG_AST_COMPUTEDEPENDENCE_H
+#define LLVM_CLANG_AST_COMPUTEDEPENDENCE_H
 
 #include "clang/AST/DependenceFlags.h"
 #include "clang/Basic/ExceptionSpecificationType.h"
@@ -71,6 +71,7 @@ class OverloadExpr;
 class DependentScopeDeclRefExpr;
 class CXXConstructExpr;
 class CXXDefaultInitExpr;
+class CXXDefaultArgExpr;
 class LambdaExpr;
 class CXXUnresolvedConstructExpr;
 class CXXDependentScopeMemberExpr;
@@ -156,6 +157,7 @@ ExprDependence computeDependence(OverloadExpr *E, bool KnownDependent,
 ExprDependence computeDependence(DependentScopeDeclRefExpr *E);
 ExprDependence computeDependence(CXXConstructExpr *E);
 ExprDependence computeDependence(CXXDefaultInitExpr *E);
+ExprDependence computeDependence(CXXDefaultArgExpr *E);
 ExprDependence computeDependence(LambdaExpr *E,
                                  bool ContainsUnexpandedParameterPack);
 ExprDependence computeDependence(CXXUnresolvedConstructExpr *E);

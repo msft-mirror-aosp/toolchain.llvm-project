@@ -324,14 +324,14 @@ void LookupResult::configure() {
   }
 }
 
-bool LookupResult::sanity() const {
+bool LookupResult::checkDebugAssumptions() const {
   // This function is never called by NDEBUG builds.
   assert(ResultKind != NotFound || Decls.size() == 0);
   assert(ResultKind != Found || Decls.size() == 1);
   assert(ResultKind != FoundOverloaded || Decls.size() > 1 ||
          (Decls.size() == 1 &&
           isa<FunctionTemplateDecl>((*begin())->getUnderlyingDecl())));
-  assert(ResultKind != FoundUnresolvedValue || sanityCheckUnresolved());
+  assert(ResultKind != FoundUnresolvedValue || checkUnresolved());
   assert(ResultKind != Ambiguous || Decls.size() > 1 ||
          (Decls.size() == 1 && (Ambiguity == AmbiguousBaseSubobjects ||
                                 Ambiguity == AmbiguousBaseSubobjectTypes)));
@@ -620,7 +620,7 @@ void LookupResult::resolveKind() {
     getSema().diagnoseEquivalentInternalLinkageDeclarations(
         getNameLoc(), HasNonFunction, EquivalentNonFunctions);
 
-  Decls.set_size(N);
+  Decls.truncate(N);
 
   if (HasNonFunction && (HasFunction || HasUnresolved))
     Ambiguous = true;
@@ -859,7 +859,8 @@ static void InsertOCLBuiltinDeclarationsFromTable(Sema &S, LookupResult &LR,
     for (const auto &FTy : FunctionList) {
       NewOpenCLBuiltin = FunctionDecl::Create(
           Context, Parent, Loc, Loc, II, FTy, /*TInfo=*/nullptr, SC_Extern,
-          false, FTy->isFunctionProtoType());
+          S.getCurFPFeatures().isFPConstrained(), false,
+          FTy->isFunctionProtoType());
       NewOpenCLBuiltin->setImplicit();
 
       // Create Decl objects for each parameter, adding them to the
@@ -2934,7 +2935,7 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result, QualType Ty) {
     case Type::ExtVector:
     case Type::ConstantMatrix:
     case Type::Complex:
-    case Type::ExtInt:
+    case Type::BitInt:
       break;
 
     // Non-deduced auto types only get here for error cases.
@@ -3159,7 +3160,7 @@ Sema::SpecialMemberOverloadResult Sema::LookupSpecialMember(CXXRecordDecl *RD,
       ArgType.addVolatile();
 
     // This isn't /really/ specified by the standard, but it's implied
-    // we should be working from an RValue in the case of move to ensure
+    // we should be working from a PRValue in the case of move to ensure
     // that we prefer to bind to rvalue references, and an LValue in the
     // case of copy to ensure we don't bind to rvalue references.
     // Possibly an XValue is actually correct in the case of move, but
@@ -3168,7 +3169,7 @@ Sema::SpecialMemberOverloadResult Sema::LookupSpecialMember(CXXRecordDecl *RD,
     if (SM == CXXCopyConstructor || SM == CXXCopyAssignment)
       VK = VK_LValue;
     else
-      VK = VK_RValue;
+      VK = VK_PRValue;
   }
 
   OpaqueValueExpr FakeArg(LookupLoc, ArgType, VK);
@@ -3185,8 +3186,8 @@ Sema::SpecialMemberOverloadResult Sema::LookupSpecialMember(CXXRecordDecl *RD,
   if (VolatileThis)
     ThisTy.addVolatile();
   Expr::Classification Classification =
-    OpaqueValueExpr(LookupLoc, ThisTy,
-                    RValueThis ? VK_RValue : VK_LValue).Classify(Context);
+      OpaqueValueExpr(LookupLoc, ThisTy, RValueThis ? VK_PRValue : VK_LValue)
+          .Classify(Context);
 
   // Now we perform lookup on the name we computed earlier and do overload
   // resolution. Lookup is only performed directly into the class since there
@@ -3732,7 +3733,7 @@ NamedDecl *VisibleDeclsRecord::checkHidden(NamedDecl *ND) {
       // A shadow declaration that's created by a resolved using declaration
       // is not hidden by the same using declaration.
       if (isa<UsingShadowDecl>(ND) && isa<UsingDecl>(D) &&
-          cast<UsingShadowDecl>(ND)->getUsingDecl() == D)
+          cast<UsingShadowDecl>(ND)->getIntroducer() == D)
         continue;
 
       // We've found a declaration that hides this one.
@@ -3835,6 +3836,7 @@ private:
     if (CXXRecordDecl *Class = dyn_cast<CXXRecordDecl>(Ctx))
       Result.getSema().ForceDeclarationOfImplicitMembers(Class);
 
+    llvm::SmallVector<NamedDecl *, 4> DeclsToVisit;
     // We sometimes skip loading namespace-level results (they tend to be huge).
     bool Load = LoadExternal ||
                 !(isa<TranslationUnitDecl>(Ctx) || isa<NamespaceDecl>(Ctx));
@@ -3844,11 +3846,20 @@ private:
               : Ctx->noload_lookups(/*PreserveInternalState=*/false)) {
       for (auto *D : R) {
         if (auto *ND = Result.getAcceptableDecl(D)) {
-          Consumer.FoundDecl(ND, Visited.checkHidden(ND), Ctx, InBaseClass);
-          Visited.add(ND);
+          // Rather than visit immediately, we put ND into a vector and visit
+          // all decls, in order, outside of this loop. The reason is that
+          // Consumer.FoundDecl() may invalidate the iterators used in the two
+          // loops above.
+          DeclsToVisit.push_back(ND);
         }
       }
     }
+
+    for (auto *ND : DeclsToVisit) {
+      Consumer.FoundDecl(ND, Visited.checkHidden(ND), Ctx, InBaseClass);
+      Visited.add(ND);
+    }
+    DeclsToVisit.clear();
 
     // Traverse using directives for qualified name lookup.
     if (QualifiedNameLookup) {
@@ -4296,18 +4307,35 @@ void TypoCorrectionConsumer::addCorrection(TypoCorrection Correction) {
   if (!CList.empty() && !CList.back().isResolved())
     CList.pop_back();
   if (NamedDecl *NewND = Correction.getCorrectionDecl()) {
-    std::string CorrectionStr = Correction.getAsString(SemaRef.getLangOpts());
-    for (TypoResultList::iterator RI = CList.begin(), RIEnd = CList.end();
-         RI != RIEnd; ++RI) {
-      // If the Correction refers to a decl already in the result list,
-      // replace the existing result if the string representation of Correction
-      // comes before the current result alphabetically, then stop as there is
-      // nothing more to be done to add Correction to the candidate set.
-      if (RI->getCorrectionDecl() == NewND) {
-        if (CorrectionStr < RI->getAsString(SemaRef.getLangOpts()))
-          *RI = Correction;
-        return;
-      }
+    auto RI = llvm::find_if(CList, [NewND](const TypoCorrection &TypoCorr) {
+      return TypoCorr.getCorrectionDecl() == NewND;
+    });
+    if (RI != CList.end()) {
+      // The Correction refers to a decl already in the list. No insertion is
+      // necessary and all further cases will return.
+
+      auto IsDeprecated = [](Decl *D) {
+        while (D) {
+          if (D->isDeprecated())
+            return true;
+          D = llvm::dyn_cast_or_null<NamespaceDecl>(D->getDeclContext());
+        }
+        return false;
+      };
+
+      // Prefer non deprecated Corrections over deprecated and only then
+      // sort using an alphabetical order.
+      std::pair<bool, std::string> NewKey = {
+          IsDeprecated(Correction.getFoundDecl()),
+          Correction.getAsString(SemaRef.getLangOpts())};
+
+      std::pair<bool, std::string> PrevKey = {
+          IsDeprecated(RI->getFoundDecl()),
+          RI->getAsString(SemaRef.getLangOpts())};
+
+      if (NewKey < PrevKey)
+        *RI = Correction;
+      return;
     }
   }
   if (CList.empty() || Correction.isResolved())
@@ -4585,9 +4613,7 @@ void TypoCorrectionConsumer::NamespaceSpecifierSet::addNameSpecifier(
                  dyn_cast_or_null<NamedDecl>(NamespaceDeclChain.back())) {
     IdentifierInfo *Name = ND->getIdentifier();
     bool SameNameSpecifier = false;
-    if (std::find(CurNameSpecifierIdentifiers.begin(),
-                  CurNameSpecifierIdentifiers.end(),
-                  Name) != CurNameSpecifierIdentifiers.end()) {
+    if (llvm::is_contained(CurNameSpecifierIdentifiers, Name)) {
       std::string NewNameSpecifier;
       llvm::raw_string_ostream SpecifierOStream(NewNameSpecifier);
       SmallVector<const IdentifierInfo *, 4> NewNameSpecifierIdentifiers;
@@ -4596,8 +4622,7 @@ void TypoCorrectionConsumer::NamespaceSpecifierSet::addNameSpecifier(
       SpecifierOStream.flush();
       SameNameSpecifier = NewNameSpecifier == CurNameSpecifier;
     }
-    if (SameNameSpecifier || llvm::find(CurContextIdentifiers, Name) !=
-                                 CurContextIdentifiers.end()) {
+    if (SameNameSpecifier || llvm::is_contained(CurContextIdentifiers, Name)) {
       // Rebuild the NestedNameSpecifier as a globally-qualified specifier.
       NNS = NestedNameSpecifier::GlobalSpecifier(Context);
       NumSpecifiers =
@@ -5315,11 +5340,8 @@ static NamedDecl *getDefinitionToImport(NamedDecl *D) {
     return FD->getDefinition();
   if (TagDecl *TD = dyn_cast<TagDecl>(D))
     return TD->getDefinition();
-  // The first definition for this ObjCInterfaceDecl might be in the TU
-  // and not associated with any module. Use the one we know to be complete
-  // and have just seen in a module.
   if (ObjCInterfaceDecl *ID = dyn_cast<ObjCInterfaceDecl>(D))
-    return ID;
+    return ID->getDefinition();
   if (ObjCProtocolDecl *PD = dyn_cast<ObjCProtocolDecl>(D))
     return PD->getDefinition();
   if (TemplateDecl *TD = dyn_cast<TemplateDecl>(D))

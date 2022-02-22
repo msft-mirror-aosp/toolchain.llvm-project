@@ -606,6 +606,18 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return nullptr;
     return new SPIR64TargetInfo(Triple, Opts);
   }
+  case llvm::Triple::spirv32: {
+    if (os != llvm::Triple::UnknownOS ||
+        Triple.getEnvironment() != llvm::Triple::UnknownEnvironment)
+      return nullptr;
+    return new SPIRV32TargetInfo(Triple, Opts);
+  }
+  case llvm::Triple::spirv64: {
+    if (os != llvm::Triple::UnknownOS ||
+        Triple.getEnvironment() != llvm::Triple::UnknownEnvironment)
+      return nullptr;
+    return new SPIRV64TargetInfo(Triple, Opts);
+  }
   case llvm::Triple::wasm32:
     if (Triple.getSubArch() != llvm::Triple::NoSubArch ||
         Triple.getVendor() != llvm::Triple::UnknownVendor ||
@@ -745,18 +757,9 @@ bool TargetInfo::validateOpenCLTarget(const LangOptions &Opts,
 
   // Validate that feature macros are set properly for OpenCL C 3.0.
   // In other cases assume that target is always valid.
-  if (Opts.OpenCLCPlusPlus || Opts.OpenCLVersion < 300)
+  if (Opts.getOpenCLCompatibleVersion() < 300)
     return true;
 
-  // Feature and corresponding equivalent extension must be set
-  // simultaneously to the same value.
-  for (auto &ExtAndFeat : {std::make_pair("cl_khr_fp64", "__opencl_c_fp64")})
-    if (hasFeatureEnabled(OpenCLFeaturesMap, ExtAndFeat.first) !=
-        hasFeatureEnabled(OpenCLFeaturesMap, ExtAndFeat.second)) {
-      Diags.Report(diag::err_opencl_extension_and_feature_differs)
-          << ExtAndFeat.first << ExtAndFeat.second;
-      return false;
-    }
-
-  return true;
+  return OpenCLOptions::diagnoseUnsupportedFeatureDependencies(*this, Diags) &&
+         OpenCLOptions::diagnoseFeatureExtensionDifferences(*this, Diags);
 }

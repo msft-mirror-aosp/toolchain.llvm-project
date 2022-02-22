@@ -56,13 +56,16 @@ if (MLIR_ENABLE_VULKAN_RUNNER)
   set(LIBS
     ${conversion_libs}
     MLIRAnalysis
+    MLIRArithmetic
     MLIRExecutionEngine
-    MLIRGPU
+    MLIRGPUOps
     MLIRIR
     MLIRJitRunner
     MLIRLLVMIR
+    MLIRLLVMCommonConversion
     MLIRLLVMToLLVMIRTranslation
     MLIRMemRef
+    MLIRMemRefToLLVM
     MLIRParser
     MLIRSPIRV
     MLIRSPIRVTransforms

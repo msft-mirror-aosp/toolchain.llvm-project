@@ -100,6 +100,7 @@ public:
     AU.addRequired<LoopInfoWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<LegacyDivergenceAnalysis>();
+    AU.addPreserved<LoopInfoWrapperPass>();
     AU.addPreserved<DominatorTreeWrapperPass>();
     AU.addRequired<TargetPassConfig>();
     FunctionPass::getAnalysisUsage(AU);
@@ -240,6 +241,12 @@ Value *SIAnnotateControlFlow::handleLoopCondition(
     Instruction *Insert = Cond == BoolTrue ?
       Term : L->getHeader()->getTerminator();
 
+    Value *Args[] = { Cond, Broken };
+    return CallInst::Create(IfBreak, Args, "", Insert);
+  }
+
+  if (isa<Argument>(Cond)) {
+    Instruction *Insert = L->getHeader()->getFirstNonPHIOrDbgOrLifetime();
     Value *Args[] = { Cond, Broken };
     return CallInst::Create(IfBreak, Args, "", Insert);
   }

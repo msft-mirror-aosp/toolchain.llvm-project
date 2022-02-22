@@ -19,21 +19,22 @@ using namespace mlir;
 
 namespace {
 
-struct TestLivenessPass : public PassWrapper<TestLivenessPass, FunctionPass> {
-  void runOnFunction() override {
-    llvm::errs() << "Testing : " << getFunction().getName() << "\n";
+struct TestLivenessPass
+    : public PassWrapper<TestLivenessPass, OperationPass<FuncOp>> {
+  StringRef getArgument() const final { return "test-print-liveness"; }
+  StringRef getDescription() const final {
+    return "Print the contents of a constructed liveness information.";
+  }
+  void runOnOperation() override {
+    llvm::errs() << "Testing : " << getOperation().getName() << "\n";
     getAnalysis<Liveness>().print(llvm::errs());
   }
 };
 
-} // end anonymous namespace
+} // namespace
 
 namespace mlir {
 namespace test {
-void registerTestLivenessPass() {
-  PassRegistration<TestLivenessPass>(
-      "test-print-liveness",
-      "Print the contents of a constructed liveness information.");
-}
+void registerTestLivenessPass() { PassRegistration<TestLivenessPass>(); }
 } // namespace test
 } // namespace mlir

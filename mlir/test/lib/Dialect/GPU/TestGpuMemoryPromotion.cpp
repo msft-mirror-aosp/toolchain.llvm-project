@@ -35,6 +35,10 @@ class TestGpuMemoryPromotionPass
     registry.insert<AffineDialect, memref::MemRefDialect, StandardOpsDialect,
                     scf::SCFDialect>();
   }
+  StringRef getArgument() const final { return "test-gpu-memory-promotion"; }
+  StringRef getDescription() const final {
+    return "Promotes the annotated arguments of gpu.func to workgroup memory.";
+  }
 
   void runOnOperation() override {
     gpu::GPUFuncOp op = getOperation();
@@ -44,12 +48,10 @@ class TestGpuMemoryPromotionPass
     }
   }
 };
-} // end namespace
+} // namespace
 
 namespace mlir {
 void registerTestGpuMemoryPromotionPass() {
-  PassRegistration<TestGpuMemoryPromotionPass>(
-      "test-gpu-memory-promotion",
-      "Promotes the annotated arguments of gpu.func to workgroup memory.");
+  PassRegistration<TestGpuMemoryPromotionPass>();
 }
 } // namespace mlir

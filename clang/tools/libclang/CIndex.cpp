@@ -55,6 +55,7 @@
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/thread.h"
 #include <mutex>
 
 #if LLVM_ENABLE_THREADS != 0 && defined(__APPLE__)
@@ -1665,6 +1666,8 @@ bool CursorVisitor::VisitRValueReferenceTypeLoc(RValueReferenceTypeLoc TL) {
   return Visit(TL.getPointeeLoc());
 }
 
+bool CursorVisitor::VisitUsingTypeLoc(UsingTypeLoc TL) { return false; }
+
 bool CursorVisitor::VisitAttributedTypeLoc(AttributedTypeLoc TL) {
   return Visit(TL.getModifiedLoc());
 }
@@ -1814,8 +1817,8 @@ DEFAULT_TYPELOC_IMPL(Enum, TagType)
 DEFAULT_TYPELOC_IMPL(SubstTemplateTypeParm, Type)
 DEFAULT_TYPELOC_IMPL(SubstTemplateTypeParmPack, Type)
 DEFAULT_TYPELOC_IMPL(Auto, Type)
-DEFAULT_TYPELOC_IMPL(ExtInt, Type)
-DEFAULT_TYPELOC_IMPL(DependentExtInt, Type)
+DEFAULT_TYPELOC_IMPL(BitInt, Type)
+DEFAULT_TYPELOC_IMPL(DependentBitInt, Type)
 
 bool CursorVisitor::VisitCXXRecordDecl(CXXRecordDecl *D) {
   // Visit the nested-name-specifier, if present.
@@ -1982,7 +1985,8 @@ public:
     return static_cast<const FieldDecl *>(data[0]);
   }
   SourceLocation getLoc() const {
-    return SourceLocation::getFromRawEncoding((unsigned)(uintptr_t)data[1]);
+    return SourceLocation::getFromRawEncoding(
+        (SourceLocation::UIntTy)(uintptr_t)data[1]);
   }
 };
 class EnqueueVisitor : public ConstStmtVisitor<EnqueueVisitor, void> {
@@ -2044,7 +2048,10 @@ public:
   void VisitOMPLoopDirective(const OMPLoopDirective *D);
   void VisitOMPParallelDirective(const OMPParallelDirective *D);
   void VisitOMPSimdDirective(const OMPSimdDirective *D);
+  void
+  VisitOMPLoopTransformationDirective(const OMPLoopTransformationDirective *D);
   void VisitOMPTileDirective(const OMPTileDirective *D);
+  void VisitOMPUnrollDirective(const OMPUnrollDirective *D);
   void VisitOMPForDirective(const OMPForDirective *D);
   void VisitOMPForSimdDirective(const OMPForSimdDirective *D);
   void VisitOMPSectionsDirective(const OMPSectionsDirective *D);
@@ -2223,6 +2230,12 @@ void OMPClauseEnqueue::VisitOMPSizesClause(const OMPSizesClause *C) {
     Visitor->AddStmt(E);
 }
 
+void OMPClauseEnqueue::VisitOMPFullClause(const OMPFullClause *C) {}
+
+void OMPClauseEnqueue::VisitOMPPartialClause(const OMPPartialClause *C) {
+  Visitor->AddStmt(C->getFactor());
+}
+
 void OMPClauseEnqueue::VisitOMPAllocatorClause(const OMPAllocatorClause *C) {
   Visitor->AddStmt(C->getAllocator());
 }
@@ -2261,6 +2274,8 @@ void OMPClauseEnqueue::VisitOMPWriteClause(const OMPWriteClause *) {}
 void OMPClauseEnqueue::VisitOMPUpdateClause(const OMPUpdateClause *) {}
 
 void OMPClauseEnqueue::VisitOMPCaptureClause(const OMPCaptureClause *) {}
+
+void OMPClauseEnqueue::VisitOMPCompareClause(const OMPCompareClause *) {}
 
 void OMPClauseEnqueue::VisitOMPSeqCstClause(const OMPSeqCstClause *) {}
 
@@ -2302,6 +2317,10 @@ void OMPClauseEnqueue::VisitOMPNocontextClause(const OMPNocontextClause *C) {
 void OMPClauseEnqueue::VisitOMPFilterClause(const OMPFilterClause *C) {
   VisitOMPClauseWithPreInit(C);
   Visitor->AddStmt(C->getThreadID());
+}
+
+void OMPClauseEnqueue::VisitOMPAlignClause(const OMPAlignClause *C) {
+  Visitor->AddStmt(C->getAlignment());
 }
 
 void OMPClauseEnqueue::VisitOMPUnifiedAddressClause(
@@ -2570,6 +2589,8 @@ void OMPClauseEnqueue::VisitOMPAffinityClause(const OMPAffinityClause *C) {
   for (const Expr *E : C->varlists())
     Visitor->AddStmt(E);
 }
+void OMPClauseEnqueue::VisitOMPBindClause(const OMPBindClause *C) {}
+
 } // namespace
 
 void EnqueueVisitor::EnqueueChildren(const OMPClause *S) {
@@ -2892,8 +2913,17 @@ void EnqueueVisitor::VisitOMPSimdDirective(const OMPSimdDirective *D) {
   VisitOMPLoopDirective(D);
 }
 
-void EnqueueVisitor::VisitOMPTileDirective(const OMPTileDirective *D) {
+void EnqueueVisitor::VisitOMPLoopTransformationDirective(
+    const OMPLoopTransformationDirective *D) {
   VisitOMPLoopBasedDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTileDirective(const OMPTileDirective *D) {
+  VisitOMPLoopTransformationDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPUnrollDirective(const OMPUnrollDirective *D) {
+  VisitOMPLoopTransformationDirective(D);
 }
 
 void EnqueueVisitor::VisitOMPForDirective(const OMPForDirective *D) {
@@ -4919,7 +4949,7 @@ CXStringSet *clang_Cursor_getObjCManglings(CXCursor C) {
 
 CXPrintingPolicy clang_getCursorPrintingPolicy(CXCursor C) {
   if (clang_Cursor_isNull(C))
-    return 0;
+    return nullptr;
   return new PrintingPolicy(getCursorContext(C).getPrintingPolicy());
 }
 
@@ -5569,12 +5599,16 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("ModuleImport");
   case CXCursor_OMPCanonicalLoop:
     return cxstring::createRef("OMPCanonicalLoop");
+  case CXCursor_OMPMetaDirective:
+    return cxstring::createRef("OMPMetaDirective");
   case CXCursor_OMPParallelDirective:
     return cxstring::createRef("OMPParallelDirective");
   case CXCursor_OMPSimdDirective:
     return cxstring::createRef("OMPSimdDirective");
   case CXCursor_OMPTileDirective:
     return cxstring::createRef("OMPTileDirective");
+  case CXCursor_OMPUnrollDirective:
+    return cxstring::createRef("OMPUnrollDirective");
   case CXCursor_OMPForDirective:
     return cxstring::createRef("OMPForDirective");
   case CXCursor_OMPForSimdDirective:
@@ -5686,6 +5720,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPDispatchDirective");
   case CXCursor_OMPMaskedDirective:
     return cxstring::createRef("OMPMaskedDirective");
+  case CXCursor_OMPGenericLoopDirective:
+    return cxstring::createRef("OMPGenericLoopDirective");
   case CXCursor_OverloadCandidate:
     return cxstring::createRef("OverloadCandidate");
   case CXCursor_TypeAliasTemplateDecl:
@@ -6466,6 +6502,7 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
   case Decl::Concept:
   case Decl::LifetimeExtendedTemporary:
   case Decl::RequiresExprBody:
+  case Decl::UnresolvedUsingIfExists:
     return C;
 
   // Declaration kinds that don't make any sense here, but are
@@ -6540,7 +6577,8 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
   }
 
   case Decl::Using:
-    return MakeCursorOverloadedDeclRef(cast<UsingDecl>(D), D->getLocation(),
+  case Decl::UsingEnum:
+    return MakeCursorOverloadedDeclRef(cast<BaseUsingDecl>(D), D->getLocation(),
                                        TU);
 
   case Decl::UsingShadow:
@@ -6770,10 +6808,10 @@ void clang_enableStackTraces(void) {
 
 void clang_executeOnThread(void (*fn)(void *), void *user_data,
                            unsigned stack_size) {
-  llvm::llvm_execute_on_thread(fn, user_data,
-                               stack_size == 0
-                                   ? clang::DesiredStackSize
-                                   : llvm::Optional<unsigned>(stack_size));
+  llvm::thread Thread(stack_size == 0 ? clang::DesiredStackSize
+                                      : llvm::Optional<unsigned>(stack_size),
+                      fn, user_data);
+  Thread.join();
 }
 
 //===----------------------------------------------------------------------===//
@@ -6937,16 +6975,16 @@ CXToken *clang_getToken(CXTranslationUnit TU, CXSourceLocation Location) {
 
   if (isNotUsableTU(TU)) {
     LOG_BAD_TU(TU);
-    return NULL;
+    return nullptr;
   }
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   if (!CXXUnit)
-    return NULL;
+    return nullptr;
 
   SourceLocation Begin = cxloc::translateSourceLocation(Location);
   if (Begin.isInvalid())
-    return NULL;
+    return nullptr;
   SourceManager &SM = CXXUnit->getSourceManager();
   std::pair<FileID, unsigned> DecomposedEnd = SM.getDecomposedLoc(Begin);
   DecomposedEnd.second +=
@@ -6959,7 +6997,7 @@ CXToken *clang_getToken(CXTranslationUnit TU, CXSourceLocation Location) {
   getTokens(CXXUnit, SourceRange(Begin, End), CXTokens);
 
   if (CXTokens.empty())
-    return NULL;
+    return nullptr;
 
   CXTokens.resize(1);
   CXToken *Token = static_cast<CXToken *>(llvm::safe_malloc(sizeof(CXToken)));
@@ -9061,7 +9099,7 @@ cxindex::checkForMacroInMacroDefinition(const MacroInfo *MI, const Token &Tok,
     return nullptr;
 
   // Check that the identifier is not one of the macro arguments.
-  if (std::find(MI->param_begin(), MI->param_end(), &II) != MI->param_end())
+  if (llvm::is_contained(MI->params(), &II))
     return nullptr;
 
   MacroDirective *InnerMD = PP.getLocalMacroDirectiveHistory(&II);

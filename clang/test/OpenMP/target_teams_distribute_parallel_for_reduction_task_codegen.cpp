@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
 
 #endif
 // CHECK1-LABEL: define {{[^@]+}}@main
-// CHECK1-SAME: (i32 [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR0:[0-9]+]] {
+// CHECK1-SAME: (i32 noundef [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR0:[0-9]+]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[ARGC_ADDR:%.*]] = alloca i32, align 4
 // CHECK1-NEXT:    [[ARGV_ADDR:%.*]] = alloca i8**, align 8
@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@{{__omp_offloading_[0-9a-z]+_[0-9a-z]+}}_main_l14
-// CHECK1-SAME: (i32* nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR1:[0-9]+]] {
+// CHECK1-SAME: (i32* noundef nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR1:[0-9]+]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[ARGC_ADDR:%.*]] = alloca i32*, align 8
 // CHECK1-NEXT:    [[ARGV_ADDR:%.*]] = alloca i8**, align 8
@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.omp_outlined.
-// CHECK1-SAME: (i32* noalias [[DOTGLOBAL_TID_:%.*]], i32* noalias [[DOTBOUND_TID_:%.*]], i32* nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR1]] {
+// CHECK1-SAME: (i32* noalias noundef [[DOTGLOBAL_TID_:%.*]], i32* noalias noundef [[DOTBOUND_TID_:%.*]], i32* noundef nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR1]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca i32*, align 8
 // CHECK1-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca i32*, align 8
@@ -315,7 +315,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_init.
-// CHECK1-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3:[0-9]+]] {
+// CHECK1-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3:[0-9]+]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -328,7 +328,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_comb.
-// CHECK1-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -346,7 +346,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_init..1
-// CHECK1-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -368,7 +368,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_comb..2
-// CHECK1-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -399,7 +399,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.omp_outlined..3
-// CHECK1-SAME: (i32* noalias [[DOTGLOBAL_TID_:%.*]], i32* noalias [[DOTBOUND_TID_:%.*]], i64 [[DOTPREVIOUS_LB_:%.*]], i64 [[DOTPREVIOUS_UB_:%.*]], i32* nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR1]] {
+// CHECK1-SAME: (i32* noalias noundef [[DOTGLOBAL_TID_:%.*]], i32* noalias noundef [[DOTBOUND_TID_:%.*]], i64 noundef [[DOTPREVIOUS_LB_:%.*]], i64 noundef [[DOTPREVIOUS_UB_:%.*]], i32* noundef nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR1]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca i32*, align 8
 // CHECK1-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca i32*, align 8
@@ -688,7 +688,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_init..4
-// CHECK1-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -701,7 +701,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_comb..5
-// CHECK1-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -719,7 +719,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_init..6
-// CHECK1-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -741,7 +741,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.red_comb..7
-// CHECK1-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -772,7 +772,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.omp_task_privates_map.
-// CHECK1-SAME: (%struct..kmp_privates.t* noalias [[TMP0:%.*]], i8*** noalias [[TMP1:%.*]]) #[[ATTR6:[0-9]+]] {
+// CHECK1-SAME: (%struct..kmp_privates.t* noalias noundef [[TMP0:%.*]], i8*** noalias noundef [[TMP1:%.*]]) #[[ATTR6:[0-9]+]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca %struct..kmp_privates.t*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8***, align 8
@@ -786,7 +786,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.omp_task_entry.
-// CHECK1-SAME: (i32 [[TMP0:%.*]], %struct.kmp_task_t_with_privates* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i32 noundef [[TMP0:%.*]], %struct.kmp_task_t_with_privates* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTGLOBAL_TID__ADDR_I:%.*]] = alloca i32, align 4
 // CHECK1-NEXT:    [[DOTPART_ID__ADDR_I:%.*]] = alloca i32*, align 8
@@ -811,26 +811,26 @@ int main(int argc, char **argv) {
 // CHECK1-NEXT:    [[TMP9:%.*]] = getelementptr inbounds [[STRUCT_KMP_TASK_T_WITH_PRIVATES]], %struct.kmp_task_t_with_privates* [[TMP3]], i32 0, i32 1
 // CHECK1-NEXT:    [[TMP10:%.*]] = bitcast %struct..kmp_privates.t* [[TMP9]] to i8*
 // CHECK1-NEXT:    [[TMP11:%.*]] = bitcast %struct.kmp_task_t_with_privates* [[TMP3]] to i8*
-// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META2:![0-9]+]])
-// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META5:![0-9]+]])
-// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META7:![0-9]+]])
-// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META9:![0-9]+]])
-// CHECK1-NEXT:    store i32 [[TMP2]], i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !11
-// CHECK1-NEXT:    store i32* [[TMP5]], i32** [[DOTPART_ID__ADDR_I]], align 8, !noalias !11
-// CHECK1-NEXT:    store i8* [[TMP10]], i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !11
-// CHECK1-NEXT:    store void (i8*, ...)* bitcast (void (%struct..kmp_privates.t*, i8***)* @.omp_task_privates_map. to void (i8*, ...)*), void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !11
-// CHECK1-NEXT:    store i8* [[TMP11]], i8** [[DOTTASK_T__ADDR_I]], align 8, !noalias !11
-// CHECK1-NEXT:    store %struct.anon* [[TMP8]], %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !11
-// CHECK1-NEXT:    [[TMP12:%.*]] = load %struct.anon*, %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !11
-// CHECK1-NEXT:    [[TMP13:%.*]] = load void (i8*, ...)*, void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !11
-// CHECK1-NEXT:    [[TMP14:%.*]] = load i8*, i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !11
+// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META3:![0-9]+]])
+// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META6:![0-9]+]])
+// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META8:![0-9]+]])
+// CHECK1-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META10:![0-9]+]])
+// CHECK1-NEXT:    store i32 [[TMP2]], i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !12
+// CHECK1-NEXT:    store i32* [[TMP5]], i32** [[DOTPART_ID__ADDR_I]], align 8, !noalias !12
+// CHECK1-NEXT:    store i8* [[TMP10]], i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !12
+// CHECK1-NEXT:    store void (i8*, ...)* bitcast (void (%struct..kmp_privates.t*, i8***)* @.omp_task_privates_map. to void (i8*, ...)*), void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !12
+// CHECK1-NEXT:    store i8* [[TMP11]], i8** [[DOTTASK_T__ADDR_I]], align 8, !noalias !12
+// CHECK1-NEXT:    store %struct.anon* [[TMP8]], %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !12
+// CHECK1-NEXT:    [[TMP12:%.*]] = load %struct.anon*, %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !12
+// CHECK1-NEXT:    [[TMP13:%.*]] = load void (i8*, ...)*, void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !12
+// CHECK1-NEXT:    [[TMP14:%.*]] = load i8*, i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !12
 // CHECK1-NEXT:    [[TMP15:%.*]] = bitcast void (i8*, ...)* [[TMP13]] to void (i8*, i8***)*
 // CHECK1-NEXT:    call void [[TMP15]](i8* [[TMP14]], i8*** [[DOTFIRSTPRIV_PTR_ADDR_I]]) #[[ATTR5]]
-// CHECK1-NEXT:    [[TMP16:%.*]] = load i8**, i8*** [[DOTFIRSTPRIV_PTR_ADDR_I]], align 8, !noalias !11
+// CHECK1-NEXT:    [[TMP16:%.*]] = load i8**, i8*** [[DOTFIRSTPRIV_PTR_ADDR_I]], align 8, !noalias !12
 // CHECK1-NEXT:    [[TMP17:%.*]] = getelementptr inbounds [[STRUCT_ANON:%.*]], %struct.anon* [[TMP12]], i32 0, i32 1
 // CHECK1-NEXT:    [[TMP18:%.*]] = load i32*, i32** [[TMP17]], align 8
 // CHECK1-NEXT:    [[TMP19:%.*]] = load i8*, i8** [[TMP16]], align 8
-// CHECK1-NEXT:    [[TMP20:%.*]] = load i32, i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !11
+// CHECK1-NEXT:    [[TMP20:%.*]] = load i32, i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !12
 // CHECK1-NEXT:    [[TMP21:%.*]] = bitcast i32* [[TMP18]] to i8*
 // CHECK1-NEXT:    [[TMP22:%.*]] = call i8* @__kmpc_task_reduction_get_th_data(i32 [[TMP20]], i8* [[TMP19]], i8* [[TMP21]]) #[[ATTR5]]
 // CHECK1-NEXT:    [[CONV_I:%.*]] = bitcast i8* [[TMP22]] to i32*
@@ -864,13 +864,13 @@ int main(int argc, char **argv) {
 // CHECK1-NEXT:    [[TMP46:%.*]] = sub i64 [[TMP44]], [[TMP45]]
 // CHECK1-NEXT:    [[TMP47:%.*]] = sdiv exact i64 [[TMP46]], ptrtoint (i8* getelementptr (i8, i8* null, i32 1) to i64)
 // CHECK1-NEXT:    [[TMP48:%.*]] = getelementptr i8, i8* [[TMP40]], i64 [[TMP47]]
-// CHECK1-NEXT:    store i8** [[TMP4_I]], i8*** [[TMP_I]], align 8, !noalias !11
-// CHECK1-NEXT:    store i8* [[TMP48]], i8** [[TMP4_I]], align 8, !noalias !11
+// CHECK1-NEXT:    store i8** [[TMP4_I]], i8*** [[TMP_I]], align 8, !noalias !12
+// CHECK1-NEXT:    store i8* [[TMP48]], i8** [[TMP4_I]], align 8, !noalias !12
 // CHECK1-NEXT:    ret i32 0
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.omp.reduction.reduction_func
-// CHECK1-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -919,7 +919,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK1-LABEL: define {{[^@]+}}@.omp.reduction.reduction_func.9
-// CHECK1-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK1-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK1-NEXT:  entry:
 // CHECK1-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK1-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -968,7 +968,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@main
-// CHECK2-SAME: (i32 [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR0:[0-9]+]] {
+// CHECK2-SAME: (i32 noundef [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR0:[0-9]+]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[ARGC_ADDR:%.*]] = alloca i32, align 4
 // CHECK2-NEXT:    [[ARGV_ADDR:%.*]] = alloca i8**, align 8
@@ -980,7 +980,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@{{__omp_offloading_[0-9a-z]+_[0-9a-z]+}}_main_l14
-// CHECK2-SAME: (i32* nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR1:[0-9]+]] {
+// CHECK2-SAME: (i32* noundef nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR1:[0-9]+]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[ARGC_ADDR:%.*]] = alloca i32*, align 8
 // CHECK2-NEXT:    [[ARGV_ADDR:%.*]] = alloca i8**, align 8
@@ -993,7 +993,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.omp_outlined.
-// CHECK2-SAME: (i32* noalias [[DOTGLOBAL_TID_:%.*]], i32* noalias [[DOTBOUND_TID_:%.*]], i32* nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR1]] {
+// CHECK2-SAME: (i32* noalias noundef [[DOTGLOBAL_TID_:%.*]], i32* noalias noundef [[DOTBOUND_TID_:%.*]], i32* noundef nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR1]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca i32*, align 8
 // CHECK2-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca i32*, align 8
@@ -1247,7 +1247,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_init.
-// CHECK2-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3:[0-9]+]] {
+// CHECK2-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3:[0-9]+]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1260,7 +1260,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_comb.
-// CHECK2-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1278,7 +1278,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_init..1
-// CHECK2-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1300,7 +1300,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_comb..2
-// CHECK2-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1331,7 +1331,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.omp_outlined..3
-// CHECK2-SAME: (i32* noalias [[DOTGLOBAL_TID_:%.*]], i32* noalias [[DOTBOUND_TID_:%.*]], i64 [[DOTPREVIOUS_LB_:%.*]], i64 [[DOTPREVIOUS_UB_:%.*]], i32* nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** [[ARGV:%.*]]) #[[ATTR1]] {
+// CHECK2-SAME: (i32* noalias noundef [[DOTGLOBAL_TID_:%.*]], i32* noalias noundef [[DOTBOUND_TID_:%.*]], i64 noundef [[DOTPREVIOUS_LB_:%.*]], i64 noundef [[DOTPREVIOUS_UB_:%.*]], i32* noundef nonnull align 4 dereferenceable(4) [[ARGC:%.*]], i8** noundef [[ARGV:%.*]]) #[[ATTR1]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTGLOBAL_TID__ADDR:%.*]] = alloca i32*, align 8
 // CHECK2-NEXT:    [[DOTBOUND_TID__ADDR:%.*]] = alloca i32*, align 8
@@ -1620,7 +1620,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_init..4
-// CHECK2-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1633,7 +1633,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_comb..5
-// CHECK2-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1651,7 +1651,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_init..6
-// CHECK2-SAME: (i8* noalias [[TMP0:%.*]], i8* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noalias noundef [[TMP0:%.*]], i8* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1673,7 +1673,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.red_comb..7
-// CHECK2-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1704,7 +1704,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.omp_task_privates_map.
-// CHECK2-SAME: (%struct..kmp_privates.t* noalias [[TMP0:%.*]], i8*** noalias [[TMP1:%.*]]) #[[ATTR6:[0-9]+]] {
+// CHECK2-SAME: (%struct..kmp_privates.t* noalias noundef [[TMP0:%.*]], i8*** noalias noundef [[TMP1:%.*]]) #[[ATTR6:[0-9]+]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca %struct..kmp_privates.t*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8***, align 8
@@ -1718,7 +1718,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.omp_task_entry.
-// CHECK2-SAME: (i32 [[TMP0:%.*]], %struct.kmp_task_t_with_privates* noalias [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i32 noundef [[TMP0:%.*]], %struct.kmp_task_t_with_privates* noalias noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTGLOBAL_TID__ADDR_I:%.*]] = alloca i32, align 4
 // CHECK2-NEXT:    [[DOTPART_ID__ADDR_I:%.*]] = alloca i32*, align 8
@@ -1743,26 +1743,26 @@ int main(int argc, char **argv) {
 // CHECK2-NEXT:    [[TMP9:%.*]] = getelementptr inbounds [[STRUCT_KMP_TASK_T_WITH_PRIVATES]], %struct.kmp_task_t_with_privates* [[TMP3]], i32 0, i32 1
 // CHECK2-NEXT:    [[TMP10:%.*]] = bitcast %struct..kmp_privates.t* [[TMP9]] to i8*
 // CHECK2-NEXT:    [[TMP11:%.*]] = bitcast %struct.kmp_task_t_with_privates* [[TMP3]] to i8*
-// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META2:![0-9]+]])
-// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META5:![0-9]+]])
-// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META7:![0-9]+]])
-// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META9:![0-9]+]])
-// CHECK2-NEXT:    store i32 [[TMP2]], i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !11
-// CHECK2-NEXT:    store i32* [[TMP5]], i32** [[DOTPART_ID__ADDR_I]], align 8, !noalias !11
-// CHECK2-NEXT:    store i8* [[TMP10]], i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !11
-// CHECK2-NEXT:    store void (i8*, ...)* bitcast (void (%struct..kmp_privates.t*, i8***)* @.omp_task_privates_map. to void (i8*, ...)*), void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !11
-// CHECK2-NEXT:    store i8* [[TMP11]], i8** [[DOTTASK_T__ADDR_I]], align 8, !noalias !11
-// CHECK2-NEXT:    store %struct.anon* [[TMP8]], %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !11
-// CHECK2-NEXT:    [[TMP12:%.*]] = load %struct.anon*, %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !11
-// CHECK2-NEXT:    [[TMP13:%.*]] = load void (i8*, ...)*, void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !11
-// CHECK2-NEXT:    [[TMP14:%.*]] = load i8*, i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !11
+// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META3:![0-9]+]])
+// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META6:![0-9]+]])
+// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META8:![0-9]+]])
+// CHECK2-NEXT:    call void @llvm.experimental.noalias.scope.decl(metadata [[META10:![0-9]+]])
+// CHECK2-NEXT:    store i32 [[TMP2]], i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !12
+// CHECK2-NEXT:    store i32* [[TMP5]], i32** [[DOTPART_ID__ADDR_I]], align 8, !noalias !12
+// CHECK2-NEXT:    store i8* [[TMP10]], i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !12
+// CHECK2-NEXT:    store void (i8*, ...)* bitcast (void (%struct..kmp_privates.t*, i8***)* @.omp_task_privates_map. to void (i8*, ...)*), void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !12
+// CHECK2-NEXT:    store i8* [[TMP11]], i8** [[DOTTASK_T__ADDR_I]], align 8, !noalias !12
+// CHECK2-NEXT:    store %struct.anon* [[TMP8]], %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !12
+// CHECK2-NEXT:    [[TMP12:%.*]] = load %struct.anon*, %struct.anon** [[__CONTEXT_ADDR_I]], align 8, !noalias !12
+// CHECK2-NEXT:    [[TMP13:%.*]] = load void (i8*, ...)*, void (i8*, ...)** [[DOTCOPY_FN__ADDR_I]], align 8, !noalias !12
+// CHECK2-NEXT:    [[TMP14:%.*]] = load i8*, i8** [[DOTPRIVATES__ADDR_I]], align 8, !noalias !12
 // CHECK2-NEXT:    [[TMP15:%.*]] = bitcast void (i8*, ...)* [[TMP13]] to void (i8*, i8***)*
 // CHECK2-NEXT:    call void [[TMP15]](i8* [[TMP14]], i8*** [[DOTFIRSTPRIV_PTR_ADDR_I]]) #[[ATTR5]]
-// CHECK2-NEXT:    [[TMP16:%.*]] = load i8**, i8*** [[DOTFIRSTPRIV_PTR_ADDR_I]], align 8, !noalias !11
+// CHECK2-NEXT:    [[TMP16:%.*]] = load i8**, i8*** [[DOTFIRSTPRIV_PTR_ADDR_I]], align 8, !noalias !12
 // CHECK2-NEXT:    [[TMP17:%.*]] = getelementptr inbounds [[STRUCT_ANON:%.*]], %struct.anon* [[TMP12]], i32 0, i32 1
 // CHECK2-NEXT:    [[TMP18:%.*]] = load i32*, i32** [[TMP17]], align 8
 // CHECK2-NEXT:    [[TMP19:%.*]] = load i8*, i8** [[TMP16]], align 8
-// CHECK2-NEXT:    [[TMP20:%.*]] = load i32, i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !11
+// CHECK2-NEXT:    [[TMP20:%.*]] = load i32, i32* [[DOTGLOBAL_TID__ADDR_I]], align 4, !noalias !12
 // CHECK2-NEXT:    [[TMP21:%.*]] = bitcast i32* [[TMP18]] to i8*
 // CHECK2-NEXT:    [[TMP22:%.*]] = call i8* @__kmpc_task_reduction_get_th_data(i32 [[TMP20]], i8* [[TMP19]], i8* [[TMP21]]) #[[ATTR5]]
 // CHECK2-NEXT:    [[CONV_I:%.*]] = bitcast i8* [[TMP22]] to i32*
@@ -1796,13 +1796,13 @@ int main(int argc, char **argv) {
 // CHECK2-NEXT:    [[TMP46:%.*]] = sub i64 [[TMP44]], [[TMP45]]
 // CHECK2-NEXT:    [[TMP47:%.*]] = sdiv exact i64 [[TMP46]], ptrtoint (i8* getelementptr (i8, i8* null, i32 1) to i64)
 // CHECK2-NEXT:    [[TMP48:%.*]] = getelementptr i8, i8* [[TMP40]], i64 [[TMP47]]
-// CHECK2-NEXT:    store i8** [[TMP4_I]], i8*** [[TMP_I]], align 8, !noalias !11
-// CHECK2-NEXT:    store i8* [[TMP48]], i8** [[TMP4_I]], align 8, !noalias !11
+// CHECK2-NEXT:    store i8** [[TMP4_I]], i8*** [[TMP_I]], align 8, !noalias !12
+// CHECK2-NEXT:    store i8* [[TMP48]], i8** [[TMP4_I]], align 8, !noalias !12
 // CHECK2-NEXT:    ret i32 0
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.omp.reduction.reduction_func
-// CHECK2-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1851,7 +1851,7 @@ int main(int argc, char **argv) {
 //
 //
 // CHECK2-LABEL: define {{[^@]+}}@.omp.reduction.reduction_func.9
-// CHECK2-SAME: (i8* [[TMP0:%.*]], i8* [[TMP1:%.*]]) #[[ATTR3]] {
+// CHECK2-SAME: (i8* noundef [[TMP0:%.*]], i8* noundef [[TMP1:%.*]]) #[[ATTR3]] {
 // CHECK2-NEXT:  entry:
 // CHECK2-NEXT:    [[DOTADDR:%.*]] = alloca i8*, align 8
 // CHECK2-NEXT:    [[DOTADDR1:%.*]] = alloca i8*, align 8
@@ -1897,5 +1897,4 @@ int main(int argc, char **argv) {
 // CHECK2-NEXT:    br i1 [[OMP_ARRAYCPY_DONE]], label [[OMP_ARRAYCPY_DONE5]], label [[OMP_ARRAYCPY_BODY]]
 // CHECK2:       omp.arraycpy.done5:
 // CHECK2-NEXT:    ret void
-//
 //

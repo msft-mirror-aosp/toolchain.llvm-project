@@ -44,7 +44,6 @@
 namespace llvm {
 
 class BasicBlock;
-class CallInst;
 class Function;
 class LLVMTargetMachine;
 class MMIAddrLabelMap;
@@ -185,7 +184,7 @@ public:
   /// Machine Function map.
   void deleteMachineFunctionFor(Function &F);
 
-  /// Keep track of various per-function pieces of information for backends
+  /// Keep track of various per-module pieces of information for backends
   /// that would like to do so.
   template<typename Ty>
   Ty &getObjFileInfo() {

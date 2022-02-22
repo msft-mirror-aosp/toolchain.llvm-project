@@ -10,7 +10,6 @@
 #define LLVM_SUPPORT_BINARYSTREAMREADER_H
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/BinaryStreamArray.h"
@@ -18,7 +17,6 @@
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/type_traits.h"
 #include <type_traits>
 
 namespace llvm {
@@ -251,16 +249,16 @@ public:
   }
 
   bool empty() const { return bytesRemaining() == 0; }
-  void setOffset(uint32_t Off) { Offset = Off; }
-  uint32_t getOffset() const { return Offset; }
-  uint32_t getLength() const { return Stream.getLength(); }
-  uint32_t bytesRemaining() const { return getLength() - getOffset(); }
+  void setOffset(uint64_t Off) { Offset = Off; }
+  uint64_t getOffset() const { return Offset; }
+  uint64_t getLength() const { return Stream.getLength(); }
+  uint64_t bytesRemaining() const { return getLength() - getOffset(); }
 
   /// Advance the stream's offset by \p Amount bytes.
   ///
   /// \returns a success error code if at least \p Amount bytes remain in the
   /// stream, otherwise returns an appropriate error code.
-  Error skip(uint32_t Amount);
+  Error skip(uint64_t Amount);
 
   /// Examine the next byte of the underlying stream without advancing the
   /// stream's offset.  If the stream is empty the behavior is undefined.
@@ -271,11 +269,11 @@ public:
   Error padToAlignment(uint32_t Align);
 
   std::pair<BinaryStreamReader, BinaryStreamReader>
-  split(uint32_t Offset) const;
+  split(uint64_t Offset) const;
 
 private:
   BinaryStreamRef Stream;
-  uint32_t Offset = 0;
+  uint64_t Offset = 0;
 };
 } // namespace llvm
 

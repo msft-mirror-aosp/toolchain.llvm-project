@@ -14,13 +14,23 @@
 #include "RISCVBaseInfo.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/RISCVISAInfo.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace llvm {
+
+extern const SubtargetFeatureKV RISCVFeatureKV[RISCV::NumSubtargetFeatures];
+
 namespace RISCVSysReg {
 #define GET_SysRegsList_IMPL
 #include "RISCVGenSearchableTables.inc"
 } // namespace RISCVSysReg
+
+namespace RISCVInsnOpcode {
+#define GET_RISCVOpcodesList_IMPL
+#include "RISCVGenSearchableTables.inc"
+} // namespace RISCVInsnOpcode
 
 namespace RISCVABI {
 ABI computeTargetABI(const Triple &TT, FeatureBitset FeatureBits,
@@ -96,6 +106,15 @@ void validate(const Triple &TT, const FeatureBitset &FeatureBits) {
     report_fatal_error("RV32E can't be enabled for an RV64 target");
 }
 
+void toFeatureVector(std::vector<std::string> &FeatureVector,
+                     const FeatureBitset &FeatureBits) {
+  for (auto Feature : RISCVFeatureKV) {
+    if (FeatureBits[Feature.Value] &&
+        llvm::RISCVISAInfo::isSupportedExtensionFeature(Feature.Key))
+      FeatureVector.push_back(std::string("+") + Feature.Key);
+  }
+}
+
 } // namespace RISCVFeatures
 
 // Encode VTYPE into the binary format used by the the VSETVLI instruction which
@@ -123,7 +142,7 @@ unsigned RISCVVType::encodeVTYPE(RISCVII::VLMUL VLMUL, unsigned SEW,
 
 std::pair<unsigned, bool> RISCVVType::decodeVLMUL(RISCVII::VLMUL VLMUL) {
   switch (VLMUL) {
-  case RISCVII::VLMUL::LMUL_RESERVED:
+  default:
     llvm_unreachable("Unexpected LMUL value!");
   case RISCVII::VLMUL::LMUL_1:
   case RISCVII::VLMUL::LMUL_2:
@@ -146,20 +165,20 @@ void RISCVVType::printVType(unsigned VType, raw_ostream &OS) {
   std::tie(LMul, Fractional) = decodeVLMUL(getVLMUL(VType));
 
   if (Fractional)
-    OS << ",mf";
+    OS << ", mf";
   else
-    OS << ",m";
+    OS << ", m";
   OS << LMul;
 
   if (isTailAgnostic(VType))
-    OS << ",ta";
+    OS << ", ta";
   else
-    OS << ",tu";
+    OS << ", tu";
 
   if (isMaskAgnostic(VType))
-    OS << ",ma";
+    OS << ", ma";
   else
-    OS << ",mu";
+    OS << ", mu";
 }
 
 } // namespace llvm

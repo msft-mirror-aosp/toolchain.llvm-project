@@ -58,12 +58,13 @@
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCSymbolXCOFF.h"
 #include "llvm/MC/SectionKind.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Process.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -77,6 +78,10 @@ using namespace llvm;
 using namespace llvm::XCOFF;
 
 #define DEBUG_TYPE "asmprinter"
+
+static cl::opt<bool> EnableSSPCanaryBitInTB(
+    "aix-ssp-tb-bit", cl::init(false),
+    cl::desc("Enable Passing SSP Canary info in Trackback on AIX"), cl::Hidden);
 
 // Specialize DenseMapInfo to allow
 // std::pair<const MCSymbol *, MCSymbolRefExpr::VariantKind> in DenseMap.
@@ -103,6 +108,23 @@ struct DenseMapInfo<std::pair<const MCSymbol *, MCSymbolRefExpr::VariantKind>> {
 } // end namespace llvm
 
 namespace {
+
+enum {
+  // GNU attribute tags for PowerPC ABI
+  Tag_GNU_Power_ABI_FP = 4,
+  Tag_GNU_Power_ABI_Vector = 8,
+  Tag_GNU_Power_ABI_Struct_Return = 12,
+
+  // GNU attribute values for PowerPC float ABI, as combination of two parts
+  Val_GNU_Power_ABI_NoFloat = 0b00,
+  Val_GNU_Power_ABI_HardFloat_DP = 0b01,
+  Val_GNU_Power_ABI_SoftFloat_DP = 0b10,
+  Val_GNU_Power_ABI_HardFloat_SP = 0b11,
+
+  Val_GNU_Power_ABI_LDBL_IBM128 = 0b0100,
+  Val_GNU_Power_ABI_LDBL_64 = 0b1000,
+  Val_GNU_Power_ABI_LDBL_IEEE128 = 0b1100,
+};
 
 class PPCAsmPrinter : public AsmPrinter {
 protected:
@@ -173,6 +195,8 @@ public:
     return "Linux PPC Assembly Printer";
   }
 
+  void emitGNUAttributes(Module &M);
+
   void emitStartOfAsmFile(Module &M) override;
   void emitEndOfAsmFile(Module &) override;
 
@@ -198,6 +222,7 @@ private:
   DenseMap<const GlobalObject *, SmallVector<const GlobalAlias *, 1>>
       GOAliasMap;
 
+  uint16_t getNumberOfVRSaved();
   void emitTracebackTable();
 
   SmallVector<const GlobalVariable *, 8> TOCDataGlobalVars;
@@ -341,7 +366,6 @@ bool PPCAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
 // At the moment, all inline asm memory operands are a single register.
 // In any case, the output of this routine should always be just one
 // assembler operand.
-
 bool PPCAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
                                           const char *ExtraCode,
                                           raw_ostream &O) {
@@ -358,6 +382,12 @@ bool PPCAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
     case 'y': // A memory reference for an X-form instruction
       O << "0, ";
       printOperand(MI, OpNo, O);
+      return false;
+    case 'I':
+      // Write 'i' if an integer constant, otherwise nothing.  Used to print
+      // addi vs add, etc.
+      if (MI->getOperand(OpNo).isImm())
+        O << "i";
       return false;
     case 'U': // Print 'u' for update form.
     case 'X': // Print 'x' for indexed form.
@@ -863,18 +893,19 @@ void PPCAsmPrinter::emitInstruction(const MachineInstr *MI) {
     EmitToStreamer(*OutStreamer, TmpInst);
     return;
   }
-  case PPC::ADDItoc: {
+  case PPC::ADDItoc:
+  case PPC::ADDItoc8: {
     assert(IsAIX && TM.getCodeModel() == CodeModel::Small &&
-           "Operand only valid in AIX 32 bit mode");
+           "PseudoOp only valid for small code model AIX");
 
-    // Transform %rN = ADDItoc @op1, %r2.
+    // Transform %rN = ADDItoc/8 @op1, %r2.
     LowerPPCMachineInstrToMCInst(MI, TmpInst, *this);
 
     // Change the opcode to load address.
-    TmpInst.setOpcode(PPC::LA);
+    TmpInst.setOpcode((!IsPPC64) ? (PPC::LA) : (PPC::LA8));
 
     const MachineOperand &MO = MI->getOperand(1);
-    assert(MO.isGlobal() && "Invalid operand for ADDItoc.");
+    assert(MO.isGlobal() && "Invalid operand for ADDItoc[8].");
 
     // Map the operand to its corresponding MCSymbol.
     const MCSymbol *const MOSymbol = getMCSymbolForTOCPseudoMO(MO, *this);
@@ -1376,6 +1407,28 @@ void PPCAsmPrinter::emitInstruction(const MachineInstr *MI) {
   EmitToStreamer(*OutStreamer, TmpInst);
 }
 
+void PPCLinuxAsmPrinter::emitGNUAttributes(Module &M) {
+  // Emit float ABI into GNU attribute
+  Metadata *MD = M.getModuleFlag("float-abi");
+  MDString *FloatABI = dyn_cast_or_null<MDString>(MD);
+  if (!FloatABI)
+    return;
+  StringRef flt = FloatABI->getString();
+  // TODO: Support emitting soft-fp and hard double/single attributes.
+  if (flt == "doubledouble")
+    OutStreamer->emitGNUAttribute(Tag_GNU_Power_ABI_FP,
+                                  Val_GNU_Power_ABI_HardFloat_DP |
+                                      Val_GNU_Power_ABI_LDBL_IBM128);
+  else if (flt == "ieeequad")
+    OutStreamer->emitGNUAttribute(Tag_GNU_Power_ABI_FP,
+                                  Val_GNU_Power_ABI_HardFloat_DP |
+                                      Val_GNU_Power_ABI_LDBL_IEEE128);
+  else if (flt == "ieeedouble")
+    OutStreamer->emitGNUAttribute(Tag_GNU_Power_ABI_FP,
+                                  Val_GNU_Power_ABI_HardFloat_DP |
+                                      Val_GNU_Power_ABI_LDBL_64);
+}
+
 void PPCLinuxAsmPrinter::emitInstruction(const MachineInstr *MI) {
   if (!Subtarget->isPPC64())
     return PPCAsmPrinter::emitInstruction(MI);
@@ -1482,7 +1535,7 @@ void PPCLinuxAsmPrinter::emitInstruction(const MachineInstr *MI) {
     //
     // Update compiler-rt/lib/xray/xray_powerpc64.cc accordingly when number
     // of instructions change.
-    OutStreamer->emitCodeAlignment(8);
+    OutStreamer->emitCodeAlignment(8, &getSubtargetInfo());
     MCSymbol *BeginOfSled = OutContext.createTempSymbol();
     OutStreamer->emitLabel(BeginOfSled);
     EmitToStreamer(*OutStreamer, RetInst);
@@ -1629,6 +1682,8 @@ void PPCLinuxAsmPrinter::emitEndOfAsmFile(Module &M) {
 
   PPCTargetStreamer *TS =
       static_cast<PPCTargetStreamer *>(OutStreamer->getTargetStreamer());
+
+  emitGNUAttributes(M);
 
   if (!TOC.empty()) {
     const char *Name = isPPC64 ? ".toc" : ".got2";
@@ -1870,12 +1925,54 @@ void PPCAIXAsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   return AsmPrinter::SetupMachineFunction(MF);
 }
 
+uint16_t PPCAIXAsmPrinter::getNumberOfVRSaved() {
+  // Calculate the number of VRs be saved.
+  // Vector registers 20 through 31 are marked as reserved and cannot be used
+  // in the default ABI.
+  const PPCSubtarget &Subtarget = MF->getSubtarget<PPCSubtarget>();
+  if (Subtarget.isAIXABI() && Subtarget.hasAltivec() &&
+      TM.getAIXExtendedAltivecABI()) {
+    const MachineRegisterInfo &MRI = MF->getRegInfo();
+    for (unsigned Reg = PPC::V20; Reg <= PPC::V31; ++Reg)
+      if (MRI.isPhysRegModified(Reg))
+        // Number of VRs saved.
+        return PPC::V31 - Reg + 1;
+  }
+  return 0;
+}
+
 void PPCAIXAsmPrinter::emitFunctionBodyEnd() {
 
   if (!TM.getXCOFFTracebackTable())
     return;
 
   emitTracebackTable();
+
+  // If ShouldEmitEHBlock returns true, then the eh info table
+  // will be emitted via `AIXException::endFunction`. Otherwise, we
+  // need to emit a dumy eh info table when VRs are saved. We could not
+  // consolidate these two places into one because there is no easy way
+  // to access register information in `AIXException` class.
+  if (!TargetLoweringObjectFileXCOFF::ShouldEmitEHBlock(MF) &&
+      (getNumberOfVRSaved() > 0)) {
+    // Emit dummy EH Info Table.
+    OutStreamer->SwitchSection(getObjFileLowering().getCompactUnwindSection());
+    MCSymbol *EHInfoLabel =
+        TargetLoweringObjectFileXCOFF::getEHInfoTableSymbol(MF);
+    OutStreamer->emitLabel(EHInfoLabel);
+
+    // Version number.
+    OutStreamer->emitInt32(0);
+
+    const DataLayout &DL = MMI->getModule()->getDataLayout();
+    const unsigned PointerSize = DL.getPointerSize();
+    // Add necessary paddings in 64 bit mode.
+    OutStreamer->emitValueToAlignment(PointerSize);
+
+    OutStreamer->emitIntValue(0, PointerSize);
+    OutStreamer->emitIntValue(0, PointerSize);
+    OutStreamer->SwitchSection(MF->getSection());
+  }
 }
 
 void PPCAIXAsmPrinter::emitTracebackTable() {
@@ -1930,7 +2027,7 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
 
   // Check the function uses floating-point processor instructions or not
   for (unsigned Reg = PPC::F0; Reg <= PPC::F31; ++Reg) {
-    if (MRI.isPhysRegUsed(Reg)) {
+    if (MRI.isPhysRegUsed(Reg, /* SkipRegMaskTest */ true)) {
       FirstHalfOfMandatoryField |= TracebackTable::IsFloatingPointPresentMask;
       break;
     }
@@ -1969,8 +2066,10 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
   // Set the 4th byte of the mandatory field.
   FirstHalfOfMandatoryField |= TracebackTable::IsFunctionNamePresentMask;
 
-  static_assert(XCOFF::AllocRegNo == 31, "Unexpected register usage!");
-  if (MRI.isPhysRegUsed(Subtarget->isPPC64() ? PPC::X31 : PPC::R31))
+  const PPCRegisterInfo *RegInfo =
+      static_cast<const PPCRegisterInfo *>(Subtarget->getRegisterInfo());
+  Register FrameReg = RegInfo->getFrameRegister(*MF);
+  if (FrameReg == (Subtarget->isPPC64() ? PPC::X31 : PPC::R31))
     FirstHalfOfMandatoryField |= TracebackTable::IsAllocaUsedMask;
 
   const SmallVectorImpl<Register> &MustSaveCRs = FI->getMustSaveCRs();
@@ -2015,7 +2114,24 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
       (SecondHalfOfMandatoryField & 0xff000000) >> 24, 1);
 
   // Set the 6th byte of mandatory field.
-  bool ShouldEmitEHBlock = TargetLoweringObjectFileXCOFF::ShouldEmitEHBlock(MF);
+
+  // Check whether has Vector Instruction,We only treat instructions uses vector
+  // register as vector instructions.
+  bool HasVectorInst = false;
+  for (unsigned Reg = PPC::V0; Reg <= PPC::V31; ++Reg)
+    if (MRI.isPhysRegUsed(Reg, /* SkipRegMaskTest */ true)) {
+      // Has VMX instruction.
+      HasVectorInst = true;
+      break;
+    }
+
+  if (FI->hasVectorParms() || HasVectorInst)
+    SecondHalfOfMandatoryField |= TracebackTable::HasVectorInfoMask;
+
+  uint16_t NumOfVRSaved = getNumberOfVRSaved();
+  bool ShouldEmitEHBlock =
+      TargetLoweringObjectFileXCOFF::ShouldEmitEHBlock(MF) || NumOfVRSaved > 0;
+
   if (ShouldEmitEHBlock)
     SecondHalfOfMandatoryField |= TracebackTable::HasExtensionTableMask;
 
@@ -2035,17 +2151,17 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
   SecondHalfOfMandatoryField |= (GPRSaved << TracebackTable::GPRSavedShift) &
                                 TracebackTable::GPRSavedMask;
 
-  GENBOOLCOMMENT("", SecondHalfOfMandatoryField, HasVectorInfo);
-  GENBOOLCOMMENT(", ", SecondHalfOfMandatoryField, HasExtensionTable);
+  GENBOOLCOMMENT("", SecondHalfOfMandatoryField, HasExtensionTable);
+  GENBOOLCOMMENT(", ", SecondHalfOfMandatoryField, HasVectorInfo);
   GENVALUECOMMENT(", NumOfGPRsSaved", SecondHalfOfMandatoryField, GPRSaved);
   EmitComment();
   OutStreamer->emitIntValueInHexWithPadding(
       (SecondHalfOfMandatoryField & 0x00ff0000) >> 16, 1);
 
   // Set the 7th byte of mandatory field.
-  uint32_t NumberOfFixedPara = FI->getFixedParamNum();
+  uint32_t NumberOfFixedParms = FI->getFixedParmsNum();
   SecondHalfOfMandatoryField |=
-      (NumberOfFixedPara << TracebackTable::NumberOfFixedParmsShift) &
+      (NumberOfFixedParms << TracebackTable::NumberOfFixedParmsShift) &
       TracebackTable::NumberOfFixedParmsMask;
   GENVALUECOMMENT("NumberOfFixedParms", SecondHalfOfMandatoryField,
                   NumberOfFixedParms);
@@ -2058,9 +2174,9 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
   // Always set parameter on stack.
   SecondHalfOfMandatoryField |= TracebackTable::HasParmsOnStackMask;
 
-  uint32_t NumberOfFPPara = FI->getFloatingPointParamNum();
+  uint32_t NumberOfFPParms = FI->getFloatingPointParmsNum();
   SecondHalfOfMandatoryField |=
-      (NumberOfFPPara << TracebackTable::NumberOfFloatingPointParmsShift) &
+      (NumberOfFPParms << TracebackTable::NumberOfFloatingPointParmsShift) &
       TracebackTable::NumberOfFloatingPointParmsMask;
 
   GENVALUECOMMENT("NumberOfFPParms", SecondHalfOfMandatoryField,
@@ -2073,18 +2189,25 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
   // Generate the optional fields of traceback table.
 
   // Parameter type.
-  if (NumberOfFixedPara || NumberOfFPPara) {
-    assert((SecondHalfOfMandatoryField & TracebackTable::HasVectorInfoMask) ==
-               0 &&
-           "VectorInfo has not been implemented.");
-    uint32_t ParaType = FI->getParameterType();
-    CommentOS << "Parameter type = "
-              << XCOFF::parseParmsType(ParaType,
-                                       NumberOfFixedPara + NumberOfFPPara);
-    EmitComment();
-    OutStreamer->emitIntValueInHexWithPadding(ParaType, sizeof(ParaType));
-  }
+  if (NumberOfFixedParms || NumberOfFPParms) {
+    uint32_t ParmsTypeValue = FI->getParmsType();
 
+    Expected<SmallString<32>> ParmsType =
+        FI->hasVectorParms()
+            ? XCOFF::parseParmsTypeWithVecInfo(
+                  ParmsTypeValue, NumberOfFixedParms, NumberOfFPParms,
+                  FI->getVectorParmsNum())
+            : XCOFF::parseParmsType(ParmsTypeValue, NumberOfFixedParms,
+                                    NumberOfFPParms);
+
+    assert(ParmsType && toString(ParmsType.takeError()).c_str());
+    if (ParmsType) {
+      CommentOS << "Parameter type = " << ParmsType.get();
+      EmitComment();
+    }
+    OutStreamer->emitIntValueInHexWithPadding(ParmsTypeValue,
+                                              sizeof(ParmsTypeValue));
+  }
   // Traceback table offset.
   OutStreamer->AddComment("Function size");
   if (FirstHalfOfMandatoryField & TracebackTable::HasTraceBackTableOffsetMask) {
@@ -2116,10 +2239,66 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
     OutStreamer->emitIntValueInHex(AllocReg, sizeof(AllocReg));
   }
 
+  if (SecondHalfOfMandatoryField & TracebackTable::HasVectorInfoMask) {
+    uint16_t VRData = 0;
+    if (NumOfVRSaved) {
+      // Number of VRs saved.
+      VRData |= (NumOfVRSaved << TracebackTable::NumberOfVRSavedShift) &
+                TracebackTable::NumberOfVRSavedMask;
+      // This bit is supposed to set only when the special register
+      // VRSAVE is saved on stack.
+      // However, IBM XL compiler sets the bit when any vector registers
+      // are saved on the stack. We will follow XL's behavior on AIX
+      // so that we don't get surprise behavior change for C code.
+      VRData |= TracebackTable::IsVRSavedOnStackMask;
+    }
+
+    // Set has_varargs.
+    if (FI->getVarArgsFrameIndex())
+      VRData |= TracebackTable::HasVarArgsMask;
+
+    // Vector parameters number.
+    unsigned VectorParmsNum = FI->getVectorParmsNum();
+    VRData |= (VectorParmsNum << TracebackTable::NumberOfVectorParmsShift) &
+              TracebackTable::NumberOfVectorParmsMask;
+
+    if (HasVectorInst)
+      VRData |= TracebackTable::HasVMXInstructionMask;
+
+    GENVALUECOMMENT("NumOfVRsSaved", VRData, NumberOfVRSaved);
+    GENBOOLCOMMENT(", ", VRData, IsVRSavedOnStack);
+    GENBOOLCOMMENT(", ", VRData, HasVarArgs);
+    EmitComment();
+    OutStreamer->emitIntValueInHexWithPadding((VRData & 0xff00) >> 8, 1);
+
+    GENVALUECOMMENT("NumOfVectorParams", VRData, NumberOfVectorParms);
+    GENBOOLCOMMENT(", ", VRData, HasVMXInstruction);
+    EmitComment();
+    OutStreamer->emitIntValueInHexWithPadding(VRData & 0x00ff, 1);
+
+    uint32_t VecParmTypeValue = FI->getVecExtParmsType();
+
+    Expected<SmallString<32>> VecParmsType =
+        XCOFF::parseVectorParmsType(VecParmTypeValue, VectorParmsNum);
+    assert(VecParmsType && toString(VecParmsType.takeError()).c_str());
+    if (VecParmsType) {
+      CommentOS << "Vector Parameter type = " << VecParmsType.get();
+      EmitComment();
+    }
+    OutStreamer->emitIntValueInHexWithPadding(VecParmTypeValue,
+                                              sizeof(VecParmTypeValue));
+    // Padding 2 bytes.
+    CommentOS << "Padding";
+    EmitCommentAndValue(0, 2);
+  }
+
   uint8_t ExtensionTableFlag = 0;
   if (SecondHalfOfMandatoryField & TracebackTable::HasExtensionTableMask) {
     if (ShouldEmitEHBlock)
       ExtensionTableFlag |= ExtendedTBTableFlag::TB_EH_INFO;
+    if (EnableSSPCanaryBitInTB &&
+        TargetLoweringObjectFileXCOFF::ShouldSetSSPCanaryBitInTB(MF))
+      ExtensionTableFlag |= ExtendedTBTableFlag::TB_SSP_CANARY;
 
     CommentOS << "ExtensionTableFlag = "
               << getExtendedTBTableFlagString(ExtensionTableFlag);
@@ -2143,7 +2322,6 @@ void PPCAIXAsmPrinter::emitTracebackTable() {
     OutStreamer->AddComment("EHInfo Table");
     OutStreamer->emitValue(Exp, DL.getPointerSize());
   }
-
 #undef GENBOOLCOMMENT
 #undef GENVALUECOMMENT
 }
@@ -2222,7 +2400,7 @@ void PPCAIXAsmPrinter::emitGlobalVariableHelper(const GlobalVariable *GV) {
   if (GV->hasCommonLinkage() || GVKind.isBSSLocal() ||
       GVKind.isThreadBSSLocal()) {
     Align Alignment = GV->getAlign().getValueOr(DL.getPreferredAlign(GV));
-    uint64_t Size = DL.getTypeAllocSize(GV->getType()->getElementType());
+    uint64_t Size = DL.getTypeAllocSize(GV->getValueType());
     GVSym->setStorageClass(
         TargetLoweringObjectFileXCOFF::getStorageClassForGlobal(GV));
 
@@ -2393,7 +2571,7 @@ bool PPCAIXAsmPrinter::doInitialization(Module &M) {
 
   // Construct an aliasing list for each GlobalObject.
   for (const auto &Alias : M.aliases()) {
-    const GlobalObject *Base = Alias.getBaseObject();
+    const GlobalObject *Base = Alias.getAliaseeObject();
     if (!Base)
       report_fatal_error(
           "alias without a base object is not yet supported on AIX");
@@ -2440,6 +2618,18 @@ void PPCAIXAsmPrinter::emitInstruction(const MachineInstr *MI) {
     if (MI->getOperand(0).isSymbol())
       report_fatal_error("Tail call for extern symbol not yet supported.");
     break;
+  case PPC::DST:
+  case PPC::DST64:
+  case PPC::DSTT:
+  case PPC::DSTT64:
+  case PPC::DSTST:
+  case PPC::DSTST64:
+  case PPC::DSTSTT:
+  case PPC::DSTSTT64:
+    EmitToStreamer(
+        *OutStreamer,
+        MCInstBuilder(PPC::ORI).addReg(PPC::R0).addReg(PPC::R0).addImm(0));
+    return;
   }
   return PPCAsmPrinter::emitInstruction(MI);
 }

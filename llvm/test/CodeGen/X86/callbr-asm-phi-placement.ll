@@ -20,7 +20,7 @@ define void @test1(i8* %arg, i8** %mem) nounwind {
 ; CHECK-NEXT:  .LBB0_1: # %loop
 ; CHECK-NEXT:    # =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    movq (%r14), %rbx
-; CHECK-NEXT:    callq foo
+; CHECK-NEXT:    callq foo@PLT
 ; CHECK-NEXT:    movq %rbx, %rdi
 ; CHECK-NEXT:    #APP
 ; CHECK-NEXT:    #NO_APP
@@ -36,7 +36,7 @@ loop:
   %a = phi i8* [ %arg, %entry ], [ %b, %loop ]
   %b = load i8*, i8** %mem, align 8
   call void @foo(i8* %a)
-  callbr void asm sideeffect "", "*m,X"(i8* %b, i8* blockaddress(@test1, %loop))
+  callbr void asm sideeffect "", "*m,i"(i8* elementtype(i8) %b, i8* blockaddress(@test1, %loop))
           to label %end [label %loop]
 
 end:

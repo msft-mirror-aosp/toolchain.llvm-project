@@ -46,6 +46,10 @@ static void printAliasOperand(Value value) {
 namespace {
 struct TestAliasAnalysisPass
     : public PassWrapper<TestAliasAnalysisPass, OperationPass<>> {
+  StringRef getArgument() const final { return "test-alias-analysis"; }
+  StringRef getDescription() const final {
+    return "Test alias analysis results.";
+  }
   void runOnOperation() override {
     llvm::errs() << "Testing : " << getOperation()->getAttr("sym_name") << "\n";
 
@@ -63,7 +67,7 @@ struct TestAliasAnalysisPass
 
     // Check for aliasing behavior between each of the values.
     for (auto it = valsToCheck.begin(), e = valsToCheck.end(); it != e; ++it)
-      for (auto innerIt = valsToCheck.begin(); innerIt != it; ++innerIt)
+      for (auto *innerIt = valsToCheck.begin(); innerIt != it; ++innerIt)
         printAliasResult(aliasAnalysis.alias(*innerIt, *it), *innerIt, *it);
   }
 
@@ -75,7 +79,7 @@ struct TestAliasAnalysisPass
     llvm::errs() << ": " << result << "\n";
   }
 };
-} // end anonymous namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Testing ModRefResult
@@ -84,6 +88,10 @@ struct TestAliasAnalysisPass
 namespace {
 struct TestAliasAnalysisModRefPass
     : public PassWrapper<TestAliasAnalysisModRefPass, OperationPass<>> {
+  StringRef getArgument() const final { return "test-alias-analysis-modref"; }
+  StringRef getDescription() const final {
+    return "Test alias analysis ModRef results.";
+  }
   void runOnOperation() override {
     llvm::errs() << "Testing : " << getOperation()->getAttr("sym_name") << "\n";
 
@@ -100,11 +108,11 @@ struct TestAliasAnalysisModRefPass
     });
 
     // Check for aliasing behavior between each of the values.
-    for (auto it = valsToCheck.begin(), e = valsToCheck.end(); it != e; ++it) {
+    for (auto &it : valsToCheck) {
       getOperation()->walk([&](Operation *op) {
         if (!op->getAttr("test.ptr"))
           return;
-        printModRefResult(aliasAnalysis.getModRef(op, *it), op, *it);
+        printModRefResult(aliasAnalysis.getModRef(op, it), op, it);
       });
     }
   }
@@ -117,7 +125,7 @@ struct TestAliasAnalysisModRefPass
     llvm::errs() << ": " << result << "\n";
   }
 };
-} // end anonymous namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Pass Registration
@@ -126,10 +134,8 @@ struct TestAliasAnalysisModRefPass
 namespace mlir {
 namespace test {
 void registerTestAliasAnalysisPass() {
-  PassRegistration<TestAliasAnalysisPass> aliasPass(
-      "test-alias-analysis", "Test alias analysis results.");
-  PassRegistration<TestAliasAnalysisModRefPass> modRefPass(
-      "test-alias-analysis-modref", "Test alias analysis ModRef results.");
+  PassRegistration<TestAliasAnalysisPass>();
+  PassRegistration<TestAliasAnalysisModRefPass>();
 }
 } // namespace test
 } // namespace mlir

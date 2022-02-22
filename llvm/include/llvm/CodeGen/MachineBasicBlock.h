@@ -136,6 +136,10 @@ private:
   /// Alignment of the basic block. One if the basic block does not need to be
   /// aligned.
   Align Alignment;
+  /// Maximum amount of bytes that can be added to align the basic block. If the
+  /// alignment cannot be reached in this many bytes, no bytes are emitted.
+  /// Zero to represent no maximum.
+  unsigned MaxBytesForAlignment = 0;
 
   /// Indicate that this basic block is entered via an exception handler.
   bool IsEHPad = false;
@@ -521,6 +525,19 @@ public:
   /// Set alignment of the basic block.
   void setAlignment(Align A) { Alignment = A; }
 
+  void setAlignment(Align A, unsigned MaxBytes) {
+    setAlignment(A);
+    setMaxBytesForAlignment(MaxBytes);
+  }
+
+  /// Return the maximum amount of padding allowed for aligning the basic block.
+  unsigned getMaxBytesForAlignment() const { return MaxBytesForAlignment; }
+
+  /// Set the maximum amount of padding allowed for aligning the basic block
+  void setMaxBytesForAlignment(unsigned MaxBytes) {
+    MaxBytesForAlignment = MaxBytes;
+  }
+
   /// Returns true if the block is a landing pad. That is this basic block is
   /// entered via an exception handler.
   bool isEHPad() const { return IsEHPad; }
@@ -697,10 +714,6 @@ public:
   /// Transfers all the successors, as in transferSuccessors, and update PHI
   /// operands in the successor blocks which refer to FromMBB to refer to this.
   void transferSuccessorsAndUpdatePHIs(MachineBasicBlock *FromMBB);
-
-  /// move all pseudo probes in this block to the end of /c ToMBB To and tag
-  /// them dangling.
-  void moveAndDanglePseudoProbes(MachineBasicBlock *ToMBB);
 
   /// Return true if any of the successors have probabilities attached to them.
   bool hasSuccessorProbabilities() const { return !Probs.empty(); }

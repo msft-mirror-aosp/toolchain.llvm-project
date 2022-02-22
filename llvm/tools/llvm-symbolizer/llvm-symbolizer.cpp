@@ -19,6 +19,7 @@
 #include "llvm/Config/config.h"
 #include "llvm/DebugInfo/Symbolize/DIPrinter.h"
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
+#include "llvm/Debuginfod/HTTPClient.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
@@ -52,7 +53,7 @@ enum ID {
 #include "Opts.inc"
 #undef PREFIX
 
-static const opt::OptTable::Info InfoTable[] = {
+const opt::OptTable::Info InfoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   {                                                                            \
@@ -66,7 +67,9 @@ static const opt::OptTable::Info InfoTable[] = {
 
 class SymbolizerOptTable : public opt::OptTable {
 public:
-  SymbolizerOptTable() : OptTable(InfoTable, true) {}
+  SymbolizerOptTable() : OptTable(InfoTable) {
+    setGroupedShortOptions(true);
+  }
 };
 } // namespace
 
@@ -196,7 +199,7 @@ static void symbolizeInput(const opt::InputArgList &Args, uint64_t AdjustVMA,
 static void printHelp(StringRef ToolName, const SymbolizerOptTable &Tbl,
                       raw_ostream &OS) {
   const char HelpText[] = " [options] addresses...";
-  Tbl.PrintHelp(OS, (ToolName + HelpText).str().c_str(),
+  Tbl.printHelp(OS, (ToolName + HelpText).str().c_str(),
                 ToolName.str().c_str());
   // TODO Replace this with OptTable API once it adds extrahelp support.
   OS << "\nPass @FILE as argument to read options from FILE.\n";
@@ -206,7 +209,6 @@ static opt::InputArgList parseOptions(int Argc, char *Argv[], bool IsAddr2Line,
                                       StringSaver &Saver,
                                       SymbolizerOptTable &Tbl) {
   StringRef ToolName = IsAddr2Line ? "llvm-addr2line" : "llvm-symbolizer";
-  Tbl.setGroupedShortOptions(true);
   // The environment variable specifies initial options which can be overridden
   // by commnad line options.
   Tbl.setInitialOptionsFromEnvironment(IsAddr2Line ? "LLVM_ADDR2LINE_OPTS"
@@ -260,6 +262,8 @@ static FunctionNameKind decideHowToPrintFunctions(const opt::InputArgList &Args,
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
+  // The HTTPClient must be initialized for use by the debuginfod client.
+  HTTPClient::initialize();
   sys::InitializeCOMRAII COM(sys::COMThreadingMode::MultiThreaded);
 
   bool IsAddr2Line = sys::path::stem(argv[0]).contains("addr2line");

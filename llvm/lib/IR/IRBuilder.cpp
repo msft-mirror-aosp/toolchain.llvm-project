@@ -62,7 +62,7 @@ Type *IRBuilderBase::getCurrentFunctionReturnType() const {
 
 Value *IRBuilderBase::getCastedInt8PtrValue(Value *Ptr) {
   auto *PT = cast<PointerType>(Ptr->getType());
-  if (PT->getElementType()->isIntegerTy(8))
+  if (PT->isOpaqueOrPointeeTypeMatches(getInt8Ty()))
     return Ptr;
 
   // Otherwise, we need to insert a bitcast.
@@ -94,11 +94,22 @@ Value *IRBuilderBase::CreateVScale(Constant *Scaling, const Twine &Name) {
 }
 
 Value *IRBuilderBase::CreateStepVector(Type *DstType, const Twine &Name) {
-  if (isa<ScalableVectorType>(DstType))
-    return CreateIntrinsic(Intrinsic::experimental_stepvector, {DstType}, {},
-                           nullptr, Name);
-
   Type *STy = DstType->getScalarType();
+  if (isa<ScalableVectorType>(DstType)) {
+    Type *StepVecType = DstType;
+    // TODO: We expect this special case (element type < 8 bits) to be
+    // temporary - once the intrinsic properly supports < 8 bits this code
+    // can be removed.
+    if (STy->getScalarSizeInBits() < 8)
+      StepVecType =
+          VectorType::get(getInt8Ty(), cast<ScalableVectorType>(DstType));
+    Value *Res = CreateIntrinsic(Intrinsic::experimental_stepvector,
+                                 {StepVecType}, {}, nullptr, Name);
+    if (StepVecType != DstType)
+      Res = CreateTrunc(Res, DstType);
+    return Res;
+  }
+
   unsigned NumEls = cast<FixedVectorType>(DstType)->getNumElements();
 
   // Create a vector of consecutive numbers from zero to VF.
@@ -203,14 +214,14 @@ CallInst *IRBuilderBase::CreateMemTransferInst(
   return CI;
 }
 
-CallInst *IRBuilderBase::CreateMemCpyInline(Value *Dst, MaybeAlign DstAlign,
-                                            Value *Src, MaybeAlign SrcAlign,
-                                            Value *Size) {
+CallInst *IRBuilderBase::CreateMemCpyInline(
+    Value *Dst, MaybeAlign DstAlign, Value *Src, MaybeAlign SrcAlign,
+    Value *Size, bool IsVolatile, MDNode *TBAATag, MDNode *TBAAStructTag,
+    MDNode *ScopeTag, MDNode *NoAliasTag) {
   Dst = getCastedInt8PtrValue(Dst);
   Src = getCastedInt8PtrValue(Src);
-  Value *IsVolatile = getInt1(false);
 
-  Value *Ops[] = {Dst, Src, Size, IsVolatile};
+  Value *Ops[] = {Dst, Src, Size, getInt1(IsVolatile)};
   Type *Tys[] = {Dst->getType(), Src->getType(), Size->getType()};
   Function *F = BB->getParent();
   Module *M = F->getParent();
@@ -223,6 +234,20 @@ CallInst *IRBuilderBase::CreateMemCpyInline(Value *Dst, MaybeAlign DstAlign,
     MCI->setDestAlignment(*DstAlign);
   if (SrcAlign)
     MCI->setSourceAlignment(*SrcAlign);
+
+  // Set the TBAA info if present.
+  if (TBAATag)
+    MCI->setMetadata(LLVMContext::MD_tbaa, TBAATag);
+
+  // Set the TBAA Struct info if present.
+  if (TBAAStructTag)
+    MCI->setMetadata(LLVMContext::MD_tbaa_struct, TBAAStructTag);
+
+  if (ScopeTag)
+    MCI->setMetadata(LLVMContext::MD_alias_scope, ScopeTag);
+
+  if (NoAliasTag)
+    MCI->setMetadata(LLVMContext::MD_noalias, NoAliasTag);
 
   return CI;
 }
@@ -479,6 +504,7 @@ Instruction *IRBuilderBase::CreateNoAliasScopeDeclaration(Value *Scope) {
 }
 
 /// Create a call to a Masked Load intrinsic.
+/// \p Ty        - vector type to load
 /// \p Ptr       - base pointer for the load
 /// \p Alignment - alignment of the source location
 /// \p Mask      - vector of booleans which indicates what vector lanes should
@@ -486,16 +512,16 @@ Instruction *IRBuilderBase::CreateNoAliasScopeDeclaration(Value *Scope) {
 /// \p PassThru  - pass-through value that is used to fill the masked-off lanes
 ///                of the result
 /// \p Name      - name of the result variable
-CallInst *IRBuilderBase::CreateMaskedLoad(Value *Ptr, Align Alignment,
+CallInst *IRBuilderBase::CreateMaskedLoad(Type *Ty, Value *Ptr, Align Alignment,
                                           Value *Mask, Value *PassThru,
                                           const Twine &Name) {
   auto *PtrTy = cast<PointerType>(Ptr->getType());
-  Type *DataTy = PtrTy->getElementType();
-  assert(DataTy->isVectorTy() && "Ptr should point to a vector");
+  assert(Ty->isVectorTy() && "Type should be vector");
+  assert(PtrTy->isOpaqueOrPointeeTypeMatches(Ty) && "Wrong element type");
   assert(Mask && "Mask should not be all-ones (null)");
   if (!PassThru)
-    PassThru = UndefValue::get(DataTy);
-  Type *OverloadedTypes[] = { DataTy, PtrTy };
+    PassThru = UndefValue::get(Ty);
+  Type *OverloadedTypes[] = { Ty, PtrTy };
   Value *Ops[] = {Ptr, getInt32(Alignment.value()), Mask, PassThru};
   return CreateMaskedIntrinsic(Intrinsic::masked_load, Ops,
                                OverloadedTypes, Name);
@@ -510,8 +536,9 @@ CallInst *IRBuilderBase::CreateMaskedLoad(Value *Ptr, Align Alignment,
 CallInst *IRBuilderBase::CreateMaskedStore(Value *Val, Value *Ptr,
                                            Align Alignment, Value *Mask) {
   auto *PtrTy = cast<PointerType>(Ptr->getType());
-  Type *DataTy = PtrTy->getElementType();
-  assert(DataTy->isVectorTy() && "Ptr should point to a vector");
+  Type *DataTy = Val->getType();
+  assert(DataTy->isVectorTy() && "Val should be a vector");
+  assert(PtrTy->isOpaqueOrPointeeTypeMatches(DataTy) && "Wrong element type");
   assert(Mask && "Mask should not be all-ones (null)");
   Type *OverloadedTypes[] = { DataTy, PtrTy };
   Value *Ops[] = {Val, Ptr, getInt32(Alignment.value()), Mask};
@@ -531,6 +558,7 @@ CallInst *IRBuilderBase::CreateMaskedIntrinsic(Intrinsic::ID Id,
 }
 
 /// Create a call to a Masked Gather intrinsic.
+/// \p Ty       - vector type to gather
 /// \p Ptrs     - vector of pointers for loading
 /// \p Align    - alignment for one element
 /// \p Mask     - vector of booleans which indicates what vector lanes should
@@ -538,22 +566,27 @@ CallInst *IRBuilderBase::CreateMaskedIntrinsic(Intrinsic::ID Id,
 /// \p PassThru - pass-through value that is used to fill the masked-off lanes
 ///               of the result
 /// \p Name     - name of the result variable
-CallInst *IRBuilderBase::CreateMaskedGather(Value *Ptrs, Align Alignment,
-                                            Value *Mask, Value *PassThru,
+CallInst *IRBuilderBase::CreateMaskedGather(Type *Ty, Value *Ptrs,
+                                            Align Alignment, Value *Mask,
+                                            Value *PassThru,
                                             const Twine &Name) {
+  auto *VecTy = cast<VectorType>(Ty);
+  ElementCount NumElts = VecTy->getElementCount();
   auto *PtrsTy = cast<VectorType>(Ptrs->getType());
-  auto *PtrTy = cast<PointerType>(PtrsTy->getElementType());
-  ElementCount NumElts = PtrsTy->getElementCount();
-  auto *DataTy = VectorType::get(PtrTy->getElementType(), NumElts);
+  assert(cast<PointerType>(PtrsTy->getElementType())
+             ->isOpaqueOrPointeeTypeMatches(
+                 cast<VectorType>(Ty)->getElementType()) &&
+         "Element type mismatch");
+  assert(NumElts == PtrsTy->getElementCount() && "Element count mismatch");
 
   if (!Mask)
     Mask = Constant::getAllOnesValue(
         VectorType::get(Type::getInt1Ty(Context), NumElts));
 
   if (!PassThru)
-    PassThru = UndefValue::get(DataTy);
+    PassThru = UndefValue::get(Ty);
 
-  Type *OverloadedTypes[] = {DataTy, PtrsTy};
+  Type *OverloadedTypes[] = {Ty, PtrsTy};
   Value *Ops[] = {Ptrs, getInt32(Alignment.value()), Mask, PassThru};
 
   // We specify only one type when we create this intrinsic. Types of other
@@ -576,9 +609,9 @@ CallInst *IRBuilderBase::CreateMaskedScatter(Value *Data, Value *Ptrs,
   ElementCount NumElts = PtrsTy->getElementCount();
 
 #ifndef NDEBUG
-  auto PtrTy = cast<PointerType>(PtrsTy->getElementType());
+  auto *PtrTy = cast<PointerType>(PtrsTy->getElementType());
   assert(NumElts == DataTy->getElementCount() &&
-         PtrTy->getElementType() == DataTy->getElementType() &&
+         PtrTy->isOpaqueOrPointeeTypeMatches(DataTy->getElementType()) &&
          "Incompatible pointer and data types");
 #endif
 
@@ -646,7 +679,7 @@ static CallInst *CreateGCStatepointCallCommon(
     const Twine &Name) {
   // Extract out the type of the callee.
   auto *FuncPtrType = cast<PointerType>(ActualCallee->getType());
-  assert(isa<FunctionType>(FuncPtrType->getElementType()) &&
+  assert(isa<FunctionType>(FuncPtrType->getPointerElementType()) &&
          "actual callee must be a callable value");
 
   Module *M = Builder->GetInsertBlock()->getParent()->getParent();
@@ -703,7 +736,7 @@ static InvokeInst *CreateGCStatepointInvokeCommon(
     ArrayRef<T3> GCArgs, const Twine &Name) {
   // Extract out the type of the callee.
   auto *FuncPtrType = cast<PointerType>(ActualInvokee->getType());
-  assert(isa<FunctionType>(FuncPtrType->getElementType()) &&
+  assert(isa<FunctionType>(FuncPtrType->getPointerElementType()) &&
          "actual callee must be a callable value");
 
   Module *M = Builder->GetInsertBlock()->getParent()->getParent();
@@ -951,10 +984,8 @@ CallInst *IRBuilderBase::CreateConstrainedFPCall(
 
 Value *IRBuilderBase::CreateSelect(Value *C, Value *True, Value *False,
                                    const Twine &Name, Instruction *MDFrom) {
-  if (auto *CC = dyn_cast<Constant>(C))
-    if (auto *TC = dyn_cast<Constant>(True))
-      if (auto *FC = dyn_cast<Constant>(False))
-        return Insert(Folder.CreateSelect(CC, TC, FC), Name);
+  if (auto *V = Folder.FoldSelect(C, True, False))
+    return V;
 
   SelectInst *Sel = SelectInst::Create(C, True, False);
   if (MDFrom) {
@@ -967,16 +998,17 @@ Value *IRBuilderBase::CreateSelect(Value *C, Value *True, Value *False,
   return Insert(Sel, Name);
 }
 
-Value *IRBuilderBase::CreatePtrDiff(Value *LHS, Value *RHS,
+Value *IRBuilderBase::CreatePtrDiff(Type *ElemTy, Value *LHS, Value *RHS,
                                     const Twine &Name) {
   assert(LHS->getType() == RHS->getType() &&
          "Pointer subtraction operand types must match!");
-  auto *ArgType = cast<PointerType>(LHS->getType());
+  assert(cast<PointerType>(LHS->getType())
+             ->isOpaqueOrPointeeTypeMatches(ElemTy) &&
+         "Pointer type must match element type");
   Value *LHS_int = CreatePtrToInt(LHS, Type::getInt64Ty(Context));
   Value *RHS_int = CreatePtrToInt(RHS, Type::getInt64Ty(Context));
   Value *Difference = CreateSub(LHS_int, RHS_int);
-  return CreateExactSDiv(Difference,
-                         ConstantExpr::getSizeOf(ArgType->getElementType()),
+  return CreateExactSDiv(Difference, ConstantExpr::getSizeOf(ElemTy),
                          Name);
 }
 
@@ -1121,9 +1153,11 @@ Value *IRBuilderBase::CreateExtractInteger(
 Value *IRBuilderBase::CreatePreserveArrayAccessIndex(
     Type *ElTy, Value *Base, unsigned Dimension, unsigned LastIndex,
     MDNode *DbgInfo) {
-  assert(isa<PointerType>(Base->getType()) &&
-         "Invalid Base ptr type for preserve.array.access.index.");
   auto *BaseType = Base->getType();
+  assert(isa<PointerType>(BaseType) &&
+         "Invalid Base ptr type for preserve.array.access.index.");
+  assert(cast<PointerType>(BaseType)->isOpaqueOrPointeeTypeMatches(ElTy) &&
+         "Pointer element type mismatch");
 
   Value *LastIndexV = getInt32(LastIndex);
   Constant *Zero = ConstantInt::get(Type::getInt32Ty(Context), 0);
@@ -1140,6 +1174,8 @@ Value *IRBuilderBase::CreatePreserveArrayAccessIndex(
   Value *DimV = getInt32(Dimension);
   CallInst *Fn =
       CreateCall(FnPreserveArrayAccessIndex, {Base, DimV, LastIndexV});
+  Fn->addParamAttr(
+      0, Attribute::get(Fn->getContext(), Attribute::ElementType, ElTy));
   if (DbgInfo)
     Fn->setMetadata(LLVMContext::MD_preserve_access_index, DbgInfo);
 
@@ -1168,9 +1204,11 @@ Value *IRBuilderBase::CreatePreserveUnionAccessIndex(
 Value *IRBuilderBase::CreatePreserveStructAccessIndex(
     Type *ElTy, Value *Base, unsigned Index, unsigned FieldIndex,
     MDNode *DbgInfo) {
-  assert(isa<PointerType>(Base->getType()) &&
-         "Invalid Base ptr type for preserve.struct.access.index.");
   auto *BaseType = Base->getType();
+  assert(isa<PointerType>(BaseType) &&
+         "Invalid Base ptr type for preserve.struct.access.index.");
+  assert(cast<PointerType>(BaseType)->isOpaqueOrPointeeTypeMatches(ElTy) &&
+         "Pointer element type mismatch");
 
   Value *GEPIndex = getInt32(Index);
   Constant *Zero = ConstantInt::get(Type::getInt32Ty(Context), 0);
@@ -1184,6 +1222,8 @@ Value *IRBuilderBase::CreatePreserveStructAccessIndex(
   Value *DIIndex = getInt32(FieldIndex);
   CallInst *Fn = CreateCall(FnPreserveStructAccessIndex,
                             {Base, GEPIndex, DIIndex});
+  Fn->addParamAttr(
+      0, Attribute::get(Fn->getContext(), Attribute::ElementType, ElTy));
   if (DbgInfo)
     Fn->setMetadata(LLVMContext::MD_preserve_access_index, DbgInfo);
 

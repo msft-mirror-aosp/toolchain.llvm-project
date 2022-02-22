@@ -1,6 +1,6 @@
-// RUN: %clang_cc1 -std=c++2b -fsyntax-only -verify=expected,cxx20_2b -triple x86_64-linux -Wno-string-plus-int -Wno-pointer-arith -Wno-zero-length-array -Wno-c99-designator -fcxx-exceptions -pedantic %s -Wno-comment -Wno-tautological-pointer-compare -Wno-bool-conversion
-// RUN: %clang_cc1 -std=c++20 -fsyntax-only -verify=expected,cxx20_2b -triple x86_64-linux -Wno-string-plus-int -Wno-pointer-arith -Wno-zero-length-array -Wno-c99-designator -fcxx-exceptions -pedantic %s -Wno-comment -Wno-tautological-pointer-compare -Wno-bool-conversion
-// RUN: %clang_cc1 -std=c++11 -fsyntax-only -verify=expected,cxx11 -triple x86_64-linux -Wno-string-plus-int -Wno-pointer-arith -Wno-zero-length-array -Wno-c99-designator -fcxx-exceptions -pedantic %s -Wno-comment -Wno-tautological-pointer-compare -Wno-bool-conversion
+// RUN: %clang_cc1 -std=c++2b -fsyntax-only -verify=expected,cxx20_2b,cxx2b    -triple x86_64-linux -Wno-string-plus-int -Wno-pointer-arith -Wno-zero-length-array -Wno-c99-designator -fcxx-exceptions -pedantic %s -Wno-comment -Wno-tautological-pointer-compare -Wno-bool-conversion
+// RUN: %clang_cc1 -std=c++20 -fsyntax-only -verify=expected,cxx11_20,cxx20_2b -triple x86_64-linux -Wno-string-plus-int -Wno-pointer-arith -Wno-zero-length-array -Wno-c99-designator -fcxx-exceptions -pedantic %s -Wno-comment -Wno-tautological-pointer-compare -Wno-bool-conversion
+// RUN: %clang_cc1 -std=c++11 -fsyntax-only -verify=expected,cxx11_20,cxx11    -triple x86_64-linux -Wno-string-plus-int -Wno-pointer-arith -Wno-zero-length-array -Wno-c99-designator -fcxx-exceptions -pedantic %s -Wno-comment -Wno-tautological-pointer-compare -Wno-bool-conversion
 
 namespace StaticAssertFoldTest {
 
@@ -1938,16 +1938,17 @@ namespace Lifetime {
   }
 
   constexpr int &get(int &&n) { return n; }
+  // cxx2b-error@-1 {{non-const lvalue reference to type 'int' cannot bind to a temporary of type 'int'}}
   constexpr int &&get_rv(int &&n) { return static_cast<int&&>(n); }
   struct S {
     int &&r;
     int &s;
     int t;
-    constexpr S() : r(get_rv(0)), s(get(0)), t(r) {} // expected-note {{read of object outside its lifetime}}
-    constexpr S(int) : r(get_rv(0)), s(get(0)), t(s) {} // expected-note {{read of object outside its lifetime}}
+    constexpr S() : r(get_rv(0)), s(get(0)), t(r) {} // cxx11_20-note {{read of object outside its lifetime}}
+    constexpr S(int) : r(get_rv(0)), s(get(0)), t(s) {} // cxx11_20-note {{read of object outside its lifetime}}
   };
-  constexpr int k1 = S().t; // expected-error {{constant expression}} expected-note {{in call}}
-  constexpr int k2 = S(0).t; // expected-error {{constant expression}} expected-note {{in call}}
+  constexpr int k1 = S().t; // expected-error {{constant expression}} cxx11_20-note {{in call}}
+  constexpr int k2 = S(0).t; // expected-error {{constant expression}} cxx11_20-note {{in call}}
 
   struct Q {
     int n = 0;
@@ -2060,11 +2061,11 @@ namespace ZeroSizeTypes {
   constexpr int (*p1)[0] = 0, (*p2)[0] = 0;
   constexpr int k = p2 - p1;
   // expected-error@-1 {{constexpr variable 'k' must be initialized by a constant expression}}
-  // expected-note@-2 {{subtraction of pointers to type 'int [0]' of zero size}}
+  // expected-note@-2 {{subtraction of pointers to type 'int[0]' of zero size}}
 
   int arr[5][0];
   constexpr int f() { // expected-error {{never produces a constant expression}}
-    return &arr[3] - &arr[0]; // expected-note {{subtraction of pointers to type 'int [0]' of zero size}}
+    return &arr[3] - &arr[0]; // expected-note {{subtraction of pointers to type 'int[0]' of zero size}}
   }
 }
 

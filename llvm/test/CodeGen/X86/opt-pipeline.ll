@@ -6,6 +6,8 @@
 ; RUN:   | grep -v 'Verify generated machine code' | FileCheck %s
 ; RUN: llc -mtriple=x86_64-- -O3 -debug-pass=Structure < %s -o /dev/null 2>&1 \
 ; RUN:   | grep -v 'Verify generated machine code' | FileCheck %s
+; RUN: llc -mtriple=x86_64-- -O3 -debug-pass=Structure < %s -o /dev/null 2>&1 \
+; RUN:   | FileCheck %s --check-prefix=FPM
 
 ; REQUIRES: asserts
 
@@ -20,6 +22,7 @@
 ; CHECK-NEXT: Profile summary info
 ; CHECK-NEXT: Create Garbage Collector Module Metadata
 ; CHECK-NEXT: Machine Branch Probability Analysis
+; CHECK-NEXT: Default Regalloc Eviction Advisor
 ; CHECK-NEXT:   ModulePass Manager
 ; CHECK-NEXT:     Pre-ISel Intrinsic Lowering
 ; CHECK-NEXT:     FunctionPass Manager
@@ -62,8 +65,6 @@
 ; CHECK-NEXT:       Expand indirectbr instructions
 ; CHECK-NEXT:       Natural Loop Information
 ; CHECK-NEXT:       CodeGen Prepare
-; CHECK-NEXT:     Rewrite Symbols
-; CHECK-NEXT:     FunctionPass Manager
 ; CHECK-NEXT:       Dominator Tree Construction
 ; CHECK-NEXT:       Exception handling preparation
 ; CHECK-NEXT:       Safe Stack instrumentation pass
@@ -116,7 +117,7 @@
 ; CHECK-NEXT:       X86 speculative load hardening
 ; CHECK-NEXT:       MachineDominator Tree Construction
 ; CHECK-NEXT:       X86 EFLAGS copy lowering
-; CHECK-NEXT:       X86 WinAlloca Expander
+; CHECK-NEXT:       X86 DynAlloca Expander
 ; CHECK-NEXT:       MachineDominator Tree Construction
 ; CHECK-NEXT:       Machine Natural Loop Construction
 ; CHECK-NEXT:       Tile Register Pre-configure
@@ -143,6 +144,7 @@
 ; CHECK-NEXT:       Greedy Register Allocator
 ; CHECK-NEXT:       Tile Register Configure
 ; CHECK-NEXT:       Virtual Register Rewriter
+; CHECK-NEXT:       Register Allocation Pass Scoring
 ; CHECK-NEXT:       Stack Slot Coloring
 ; CHECK-NEXT:       Machine Copy Propagation Pass
 ; CHECK-NEXT:       Machine Loop Invariant Code Motion
@@ -152,6 +154,7 @@
 ; CHECK-NEXT:       MachineDominator Tree Construction
 ; CHECK-NEXT:       Machine Dominance Frontier Construction
 ; CHECK-NEXT:       X86 Load Value Injection (LVI) Load Hardening
+; CHECK-NEXT:       Remove Redundant DEBUG_VALUE analysis
 ; CHECK-NEXT:       Fixup Statepoint Caller Saved
 ; CHECK-NEXT:       PostRA Machine Sink
 ; CHECK-NEXT:       Machine Block Frequency Analysis
@@ -199,10 +202,17 @@
 ; CHECK-NEXT:       X86 Indirect Thunks
 ; CHECK-NEXT:       Check CFA info and insert CFI instructions if needed
 ; CHECK-NEXT:       X86 Load Value Injection (LVI) Ret-Hardening
+; CHECK-NEXT:       Pseudo Probe Inserter
 ; CHECK-NEXT:       Lazy Machine Block Frequency Analysis
 ; CHECK-NEXT:       Machine Optimization Remark Emitter
 ; CHECK-NEXT:       X86 Assembly Printer
 ; CHECK-NEXT:       Free MachineFunction
+
+; We should only have one function pass manager.
+; In the past, module passes have accidentally been added into the middle of
+; the codegen pipeline, implicitly creating new function pass managers.
+; FPM: FunctionPass Manager
+; FPM-NOT: FunctionPass Manager
 
 define void @f() {
   ret void

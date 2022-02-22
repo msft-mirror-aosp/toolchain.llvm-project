@@ -34,7 +34,6 @@
 namespace clang {
 
 class CXXBaseSpecifier;
-class DeclaratorDecl;
 
 namespace ento {
 
@@ -51,6 +50,8 @@ public:
 
   iterator begin() const { return L.begin(); }
   iterator end() const { return L.end(); }
+
+  QualType getType() const { return T; }
 
   static void Profile(llvm::FoldingSetNodeID& ID, QualType T,
                       llvm::ImmutableList<SVal> L);

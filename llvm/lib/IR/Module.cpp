@@ -114,6 +114,10 @@ GlobalValue *Module::getNamedValue(StringRef Name) const {
   return cast_or_null<GlobalValue>(getValueSymbolTable().lookup(Name));
 }
 
+unsigned Module::getNumNamedValues() const {
+  return getValueSymbolTable().size();
+}
+
 /// getMDKindID - Return a unique non-zero ID for the specified metadata kind.
 /// This ID is uniqued across modules in the current LLVMContext.
 unsigned Module::getMDKindID(StringRef Name) const {
@@ -506,7 +510,7 @@ std::string Module::getUniqueIntrinsicName(StringRef BaseName, Intrinsic::ID Id,
     }
 
     // A declaration with this name already exists. Remember it.
-    FunctionType *FT = dyn_cast<FunctionType>(F->getType()->getElementType());
+    FunctionType *FT = dyn_cast<FunctionType>(F->getValueType());
     auto UinItInserted = UniquedIntrinsicNames.insert({{Id, FT}, Count});
     if (FT == Proto) {
       // It was a declaration for our prototype. This entry was allocated in the
@@ -721,6 +725,17 @@ void Module::setStackProtectorGuardOffset(int Offset) {
   addModuleFlag(ModFlagBehavior::Error, "stack-protector-guard-offset", Offset);
 }
 
+unsigned Module::getOverrideStackAlignment() const {
+  Metadata *MD = getModuleFlag("override-stack-alignment");
+  if (auto *CI = mdconst::dyn_extract_or_null<ConstantInt>(MD))
+    return CI->getZExtValue();
+  return 0;
+}
+
+void Module::setOverrideStackAlignment(unsigned Align) {
+  addModuleFlag(ModFlagBehavior::Error, "override-stack-alignment", Align);
+}
+
 void Module::setSDKVersion(const VersionTuple &V) {
   SmallVector<unsigned, 3> Entries;
   Entries.push_back(V.getMajor());
@@ -735,8 +750,8 @@ void Module::setSDKVersion(const VersionTuple &V) {
                 ConstantDataArray::get(Context, Entries));
 }
 
-VersionTuple Module::getSDKVersion() const {
-  auto *CM = dyn_cast_or_null<ConstantAsMetadata>(getModuleFlag("SDK Version"));
+static VersionTuple getSDKVersionMD(Metadata *MD) {
+  auto *CM = dyn_cast_or_null<ConstantAsMetadata>(MD);
   if (!CM)
     return {};
   auto *Arr = dyn_cast_or_null<ConstantDataArray>(CM->getValue());
@@ -758,6 +773,10 @@ VersionTuple Module::getSDKVersion() const {
     }
   }
   return Result;
+}
+
+VersionTuple Module::getSDKVersion() const {
+  return getSDKVersionMD(getModuleFlag("SDK Version"));
 }
 
 GlobalVariable *llvm::collectUsedGlobalVariables(
@@ -793,4 +812,14 @@ void Module::setPartialSampleProfileRatio(const ModuleSummaryIndex &Index) {
                         ProfileSummary::PSK_Sample);
     }
   }
+}
+
+StringRef Module::getDarwinTargetVariantTriple() const {
+  if (const auto *MD = getModuleFlag("darwin.target_variant.triple"))
+    return cast<MDString>(MD)->getString();
+  return "";
+}
+
+VersionTuple Module::getDarwinTargetVariantSDKVersion() const {
+  return getSDKVersionMD(getModuleFlag("darwin.target_variant.SDK Version"));
 }

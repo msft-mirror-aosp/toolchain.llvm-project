@@ -10,11 +10,20 @@
 
 // template <class T, class charT = char, class traits = char_traits<charT>,
 //           class Distance = ptrdiff_t>
-// class ostream_iterator {
+// class ostream_iterator
+//  : public iterator<output_iterator_tag, void, void, void, void> // until C++17
+// {
 // public:
-//     typedef charT char_type;
-//     typedef traits traits_type;
-//     typedef basic_istream<charT,traits> istream_type;
+//     typedef output_iterator_tag          iterator_category;
+//     typedef void                         value_type;
+//     typedef void                         difference_type; // until C++20
+//     typedef ptrdiff_t                    difference_type; // since C++20
+//     typedef void                         pointer;
+//     typedef void                         reference;
+//
+//     typedef charT                        char_type;
+//     typedef traits                       traits_type;
+//     typedef basic_ostream<charT, traits> ostream_type;
 //     ...
 
 #include <cstddef>
@@ -45,6 +54,7 @@ int main(int, char**)
     static_assert((std::is_same<I1::ostream_type, std::ostream>::value), "");
     }
 
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
     typedef std::ostream_iterator<unsigned, wchar_t> I2;
 #if TEST_STD_VER <= 14
@@ -64,6 +74,7 @@ int main(int, char**)
     static_assert((std::is_same<I2::traits_type, std::char_traits<wchar_t> >::value), "");
     static_assert((std::is_same<I2::ostream_type, std::wostream>::value), "");
     }
+#endif // TEST_HAS_NO_WIDE_CHARACTERS
 
   return 0;
 }

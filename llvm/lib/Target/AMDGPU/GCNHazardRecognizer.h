@@ -25,7 +25,6 @@ class MachineFunction;
 class MachineInstr;
 class MachineOperand;
 class MachineRegisterInfo;
-class ScheduleDAG;
 class SIInstrInfo;
 class SIRegisterInfo;
 class GCNSubtarget;
@@ -48,6 +47,7 @@ private:
   const SIInstrInfo &TII;
   const SIRegisterInfo &TRI;
   TargetSchedModel TSchedModel;
+  bool RunLdsBranchVmemWARHazardFixup;
 
   /// RegUnits of uses in the current soft memory clause.
   BitVector ClauseUses;

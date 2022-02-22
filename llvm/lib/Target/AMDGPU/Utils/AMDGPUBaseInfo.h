@@ -64,6 +64,7 @@ struct GcnBufferFormatInfo {
 #define GET_MIMGEncoding_DECL
 #define GET_MIMGLZMapping_DECL
 #define GET_MIMGMIPMapping_DECL
+#define GET_MIMGBiASMapping_DECL
 #include "AMDGPUGenSearchableTables.inc"
 
 namespace IsaInfo {
@@ -292,7 +293,11 @@ struct MIMGBaseOpcodeInfo {
   bool LodOrClampOrMip;
   bool HasD16;
   bool MSAA;
+  bool BVH;
 };
+
+LLVM_READONLY
+const MIMGBaseOpcodeInfo *getMIMGBaseOpcode(unsigned Opc);
 
 LLVM_READONLY
 const MIMGBaseOpcodeInfo *getMIMGBaseOpcodeInfo(unsigned BaseOpcode);
@@ -326,6 +331,16 @@ struct MIMGMIPMappingInfo {
   MIMGBaseOpcode NONMIP;
 };
 
+struct MIMGBiasMappingInfo {
+  MIMGBaseOpcode Bias;
+  MIMGBaseOpcode NoBias;
+};
+
+struct MIMGOffsetMappingInfo {
+  MIMGBaseOpcode Offset;
+  MIMGBaseOpcode NoOffset;
+};
+
 struct MIMGG16MappingInfo {
   MIMGBaseOpcode G;
   MIMGBaseOpcode G16;
@@ -336,6 +351,12 @@ const MIMGLZMappingInfo *getMIMGLZMappingInfo(unsigned L);
 
 LLVM_READONLY
 const MIMGMIPMappingInfo *getMIMGMIPMappingInfo(unsigned MIP);
+
+LLVM_READONLY
+const MIMGBiasMappingInfo *getMIMGBiasMappingInfo(unsigned Bias);
+
+LLVM_READONLY
+const MIMGOffsetMappingInfo *getMIMGOffsetMappingInfo(unsigned Offset);
 
 LLVM_READONLY
 const MIMGG16MappingInfo *getMIMGG16MappingInfo(unsigned G);
@@ -689,6 +710,10 @@ uint64_t encodeMsg(uint64_t MsgId,
 
 unsigned getInitialPSInputAddr(const Function &F);
 
+bool getHasColorExport(const Function &F);
+
+bool getHasDepthExport(const Function &F);
+
 LLVM_READNONE
 bool isShader(CallingConv::ID CC);
 
@@ -737,6 +762,7 @@ bool isGFX9Plus(const MCSubtargetInfo &STI);
 bool isGFX10(const MCSubtargetInfo &STI);
 bool isGFX10Plus(const MCSubtargetInfo &STI);
 bool isGCN3Encoding(const MCSubtargetInfo &STI);
+bool isGFX10_AEncoding(const MCSubtargetInfo &STI);
 bool isGFX10_BEncoding(const MCSubtargetInfo &STI);
 bool hasGFX10_3Insts(const MCSubtargetInfo &STI);
 bool isGFX90A(const MCSubtargetInfo &STI);
@@ -762,7 +788,7 @@ bool isSISrcOperand(const MCInstrDesc &Desc, unsigned OpNo);
 /// Is this floating-point operand?
 bool isSISrcFPOperand(const MCInstrDesc &Desc, unsigned OpNo);
 
-/// Does this opearnd support only inlinable literals?
+/// Does this operand support only inlinable literals?
 bool isSISrcInlinableOperand(const MCInstrDesc &Desc, unsigned OpNo);
 
 /// Get the size in bits of a register from the register class \p RC.
@@ -780,6 +806,7 @@ inline unsigned getOperandSize(const MCOperandInfo &OpInfo) {
   switch (OpInfo.OperandType) {
   case AMDGPU::OPERAND_REG_IMM_INT32:
   case AMDGPU::OPERAND_REG_IMM_FP32:
+  case AMDGPU::OPERAND_REG_IMM_FP32_DEFERRED:
   case AMDGPU::OPERAND_REG_INLINE_C_INT32:
   case AMDGPU::OPERAND_REG_INLINE_C_FP32:
   case AMDGPU::OPERAND_REG_INLINE_AC_INT32:
@@ -788,6 +815,8 @@ inline unsigned getOperandSize(const MCOperandInfo &OpInfo) {
   case AMDGPU::OPERAND_REG_IMM_V2FP32:
   case AMDGPU::OPERAND_REG_INLINE_C_V2INT32:
   case AMDGPU::OPERAND_REG_INLINE_C_V2FP32:
+  case AMDGPU::OPERAND_KIMM32:
+  case AMDGPU::OPERAND_KIMM16: // mandatory literal is always size 4
     return 4;
 
   case AMDGPU::OPERAND_REG_IMM_INT64:
@@ -799,6 +828,7 @@ inline unsigned getOperandSize(const MCOperandInfo &OpInfo) {
 
   case AMDGPU::OPERAND_REG_IMM_INT16:
   case AMDGPU::OPERAND_REG_IMM_FP16:
+  case AMDGPU::OPERAND_REG_IMM_FP16_DEFERRED:
   case AMDGPU::OPERAND_REG_INLINE_C_INT16:
   case AMDGPU::OPERAND_REG_INLINE_C_FP16:
   case AMDGPU::OPERAND_REG_INLINE_C_V2INT16:

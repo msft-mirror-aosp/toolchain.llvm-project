@@ -13,6 +13,7 @@
 #include "llvm/Support/Errno.h"
 #include "llvm/Support/Error.h"
 #include <system_error>
+#include <utility>
 
 using namespace mlir;
 using namespace mlir::lsp;
@@ -87,7 +88,7 @@ bool MessageHandler::onNotify(llvm::StringRef method, llvm::json::Value value) {
   } else {
     auto it = notificationHandlers.find(method);
     if (it != notificationHandlers.end())
-      it->second(value);
+      it->second(std::move(value));
   }
   return true;
 }
@@ -100,7 +101,7 @@ bool MessageHandler::onCall(llvm::StringRef method, llvm::json::Value params,
 
   auto it = methodHandlers.find(method);
   if (it != methodHandlers.end()) {
-    it->second(params, std::move(reply));
+    it->second(std::move(params), std::move(reply));
   } else {
     reply(llvm::make_error<LSPError>("method not found: " + method.str(),
                                      ErrorCode::MethodNotFound));
@@ -204,6 +205,8 @@ llvm::Error JSONTransport::run(MessageHandler &handler) {
       if (llvm::Expected<llvm::json::Value> doc = llvm::json::parse(json)) {
         if (!handleMessage(std::move(*doc), handler))
           return llvm::Error::success();
+      } else {
+        Logger::error("JSON parse error: {0}", llvm::toString(doc.takeError()));
       }
     }
   }
@@ -296,7 +299,7 @@ LogicalResult JSONTransport::readStandardMessage(std::string &json) {
       return failure();
 
     // Content-Length is a mandatory header, and the only one we handle.
-    StringRef lineRef(line);
+    StringRef lineRef = line;
     if (lineRef.consume_front("Content-Length: ")) {
       llvm::getAsUnsignedInteger(lineRef.trim(), 0, contentLength);
     } else if (!lineRef.trim().empty()) {
@@ -336,7 +339,7 @@ LogicalResult JSONTransport::readDelimitedMessage(std::string &json) {
   json.clear();
   llvm::SmallString<128> line;
   while (succeeded(readLine(in, line))) {
-    StringRef lineRef = StringRef(line).trim();
+    StringRef lineRef = line.str().trim();
     if (lineRef.startswith("//")) {
       // Found a delimiter for the message.
       if (lineRef == "// -----")

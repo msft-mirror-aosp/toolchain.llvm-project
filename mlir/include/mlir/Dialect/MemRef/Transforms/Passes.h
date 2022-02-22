@@ -16,23 +16,69 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+
+class AffineDialect;
+class StandardOpsDialect;
+namespace tensor {
+class TensorDialect;
+} // namespace tensor
+namespace vector {
+class VectorDialect;
+} // namespace vector
+
 namespace memref {
 
 //===----------------------------------------------------------------------===//
 // Patterns
 //===----------------------------------------------------------------------===//
 
+/// Collects a set of patterns to rewrite ops within the memref dialect.
+void populateExpandOpsPatterns(RewritePatternSet &patterns);
+
 /// Appends patterns for folding memref.subview ops into consumer load/store ops
 /// into `patterns`.
 void populateFoldSubViewOpPatterns(RewritePatternSet &patterns);
+
+/// Appends patterns that resolve `memref.dim` operations with values that are
+/// defined by operations that implement the
+/// `ReifyRankedShapeTypeShapeOpInterface`, in terms of shapes of its input
+/// operands.
+void populateResolveRankedShapeTypeResultDimsPatterns(
+    RewritePatternSet &patterns);
+
+/// Appends patterns that resolve `memref.dim` operations with values that are
+/// defined by operations that implement the `InferShapedTypeOpInterface`, in
+/// terms of shapes of its input operands.
+void populateResolveShapedTypeResultDimsPatterns(RewritePatternSet &patterns);
 
 //===----------------------------------------------------------------------===//
 // Passes
 //===----------------------------------------------------------------------===//
 
+/// Creates an instance of the ExpandOps pass that legalizes memref dialect ops
+/// to be convertible to LLVM. For example, `memref.reshape` gets converted to
+/// `memref_reinterpret_cast`.
+std::unique_ptr<Pass> createExpandOpsPass();
+
 /// Creates an operation pass to fold memref.subview ops into consumer
 /// load/store ops into `patterns`.
 std::unique_ptr<Pass> createFoldSubViewOpsPass();
+
+/// Creates an interprocedural pass to normalize memrefs to have a trivial
+/// (identity) layout map.
+std::unique_ptr<OperationPass<ModuleOp>> createNormalizeMemRefsPass();
+
+/// Creates an operation pass to resolve `memref.dim` operations with values
+/// that are defined by operations that implement the
+/// `ReifyRankedShapeTypeShapeOpInterface`, in terms of shapes of its input
+/// operands.
+std::unique_ptr<Pass> createResolveRankedShapeTypeResultDimsPass();
+
+/// Creates an operation pass to resolve `memref.dim` operations with values
+/// that are defined by operations that implement the
+/// `InferShapedTypeOpInterface` or the `ReifyRankedShapeTypeShapeOpInterface`,
+/// in terms of shapes of its input operands.
+std::unique_ptr<Pass> createResolveShapedTypeResultDimsPass();
 
 //===----------------------------------------------------------------------===//
 // Registration

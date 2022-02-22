@@ -10,11 +10,20 @@
 
 // template <class T, class charT = char, class traits = char_traits<charT>,
 //           class Distance = ptrdiff_t>
-// class istream_iterator {
+// class istream_iterator
+//  : public iterator<input_iterator_tag, T, Distance, const T*, const T&> // until C++17
+// {
 // public:
-//     typedef charT char_type;
-//     typedef traits traits_type;
-//     typedef basic_istream<charT,traits> istream_type;
+//     typedef input_iterator_tag           iterator_category;
+//     typedef T                            value_type;
+//     typedef Distance                     difference_type;
+//     typedef const T*                     pointer;
+//     typedef const T&                     reference;
+//
+//     typedef basic_istream<charT, Traits> istream_type;
+//     typedef charT                        char_type;
+//     typedef traits                       traits_type;
+//     typedef basic_istream<charT, traits> istream_type;
 //     ...
 //
 // Before C++17, we have:
@@ -56,6 +65,7 @@ int main(int, char**)
     static_assert( std::is_trivially_destructible<I1>::value, "");
     }
 
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
     typedef std::istream_iterator<unsigned, wchar_t> I2; // unsigned is trivially destructible
 #if TEST_STD_VER <= 14
@@ -73,6 +83,7 @@ int main(int, char**)
     static_assert( std::is_trivially_copy_constructible<I2>::value, "");
     static_assert( std::is_trivially_destructible<I2>::value, "");
     }
+#endif // TEST_HAS_NO_WIDE_CHARACTERS
 
     typedef std::istream_iterator<std::string> I3; // string is NOT trivially destructible
     static_assert(!std::is_trivially_copy_constructible<I3>::value, "");

@@ -43,7 +43,7 @@ ASTResultSynthesizer::ASTResultSynthesizer(ASTConsumer *passthrough,
   m_passthrough_sema = dyn_cast<SemaConsumer>(passthrough);
 }
 
-ASTResultSynthesizer::~ASTResultSynthesizer() {}
+ASTResultSynthesizer::~ASTResultSynthesizer() = default;
 
 void ASTResultSynthesizer::Initialize(ASTContext &Context) {
   m_ast_context = &Context;
@@ -211,7 +211,7 @@ bool ASTResultSynthesizer::SynthesizeBodyResult(CompoundStmt *Body,
   Stmt **last_stmt_ptr = Body->body_end() - 1;
   Stmt *last_stmt = *last_stmt_ptr;
 
-  while (dyn_cast<NullStmt>(last_stmt)) {
+  while (isa<NullStmt>(last_stmt)) {
     if (last_stmt_ptr != Body->body_begin()) {
       last_stmt_ptr--;
       last_stmt = *last_stmt_ptr;

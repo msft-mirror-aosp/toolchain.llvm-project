@@ -56,13 +56,12 @@ public:
   TypeID getTypeID() const { return passID; }
 
   /// Returns the pass info for the specified pass class or null if unknown.
-  static const PassInfo *lookupPassInfo(TypeID passID);
-  template <typename PassT> static const PassInfo *lookupPassInfo() {
-    return lookupPassInfo(TypeID::get<PassT>());
-  }
+  static const PassInfo *lookupPassInfo(StringRef passArg);
 
-  /// Returns the pass info for this pass.
-  const PassInfo *lookupPassInfo() const { return lookupPassInfo(getTypeID()); }
+  /// Returns the pass info for this pass, or null if unknown.
+  const PassInfo *lookupPassInfo() const {
+    return lookupPassInfo(getArgument());
+  }
 
   /// Returns the derived pass name.
   virtual StringRef getName() const = 0;
@@ -74,13 +73,13 @@ public:
   /// register the Affine dialect but does not need to register Linalg.
   virtual void getDependentDialects(DialectRegistry &registry) const {}
 
-  /// Returns the command line argument used when registering this pass. Return
+  /// Return the command line argument used when registering this pass. Return
   /// an empty string if one does not exist.
-  virtual StringRef getArgument() const {
-    if (const PassInfo *passInfo = lookupPassInfo())
-      return passInfo->getPassArgument();
-    return "";
-  }
+  virtual StringRef getArgument() const { return ""; }
+
+  /// Return the command line description used when registering this pass.
+  /// Return an empty string if one does not exist.
+  virtual StringRef getDescription() const { return ""; }
 
   /// Returns the name of the operation that this pass operates on, or None if
   /// this is a generic OperationPass.
@@ -171,7 +170,7 @@ protected:
     return *passState;
   }
 
-  /// Return the MLIR context for the current function being transformed.
+  /// Return the MLIR context for the current operation being transformed.
   MLIRContext &getContext() { return *getOperation()->getContext(); }
 
   /// The polymorphic API that runs the pass over the currently held operation.
@@ -333,13 +332,14 @@ private:
 ///   - modify any state within the parent operation, this includes adding
 ///     additional operations.
 ///
-/// Derived function passes are expected to provide the following:
+/// Derived operation passes are expected to provide the following:
 ///   - A 'void runOnOperation()' method.
 ///   - A 'StringRef getName() const' method.
 ///   - A 'std::unique_ptr<Pass> clonePass() const' method.
 template <typename OpT = void> class OperationPass : public Pass {
 protected:
   OperationPass(TypeID passID) : Pass(passID, OpT::getOperationName()) {}
+  OperationPass(const OperationPass &) = default;
 
   /// Support isa/dyn_cast functionality.
   static bool classof(const Pass *pass) {
@@ -365,22 +365,29 @@ protected:
 ///   - modify any state within the parent operation, this includes adding
 ///     additional operations.
 ///
-/// Derived function passes are expected to provide the following:
+/// Derived operation passes are expected to provide the following:
 ///   - A 'void runOnOperation()' method.
 ///   - A 'StringRef getName() const' method.
 ///   - A 'std::unique_ptr<Pass> clonePass() const' method.
 template <> class OperationPass<void> : public Pass {
 protected:
   OperationPass(TypeID passID) : Pass(passID) {}
+  OperationPass(const OperationPass &) = default;
 };
 
+/// NOTICE: This class is deprecated in favor of `OperationPass<FuncOp>`
+/// and will be removed soon.
 /// A model for providing function pass specific utilities.
 ///
 /// Derived function passes are expected to provide the following:
 ///   - A 'void runOnFunction()' method.
 ///   - A 'StringRef getName() const' method.
 ///   - A 'std::unique_ptr<Pass> clonePass() const' method.
-class FunctionPass : public OperationPass<FuncOp> {
+class [[deprecated(
+    "Use OperationPass<FuncOp> instead: See "
+    "https://llvm.discourse.group/t/"
+    "functionpass-deprecated-in-favor-of-operationpass-funcop")]] FunctionPass
+    : public OperationPass<FuncOp> {
 public:
   using OperationPass<FuncOp>::OperationPass;
 
@@ -410,6 +417,7 @@ public:
 
 protected:
   PassWrapper() : BaseT(TypeID::get<PassT>()) {}
+  PassWrapper(const PassWrapper &) = default;
 
   /// Returns the derived pass name.
   StringRef getName() const override { return llvm::getTypeName<PassT>(); }
@@ -420,6 +428,6 @@ protected:
   }
 };
 
-} // end namespace mlir
+} // namespace mlir
 
 #endif // MLIR_PASS_PASS_H

@@ -8,7 +8,7 @@
   "uri":"test:///foo.mlir",
   "languageId":"mlir",
   "version":1,
-  "text":"func @foo() -> {}\n// -----\nfunc @foo() -> i1 {\n%value = constant true\nreturn %value : i1\n}"
+  "text":"func @foo() -> {}\n// -----\nfunc @foo() -> i1 {\n%value = arith.constant true\nreturn %value : i1\n}"
 }}}
 // -----
 {"jsonrpc":"2.0","id":1,"method":"textDocument/definition","params":{
@@ -25,7 +25,7 @@
 // CHECK-NEXT:          "line": 3
 // CHECK-NEXT:        },
 // CHECK-NEXT:        "start": {
-// CHECK-NEXT:          "character": 1,
+// CHECK-NEXT:          "character": 0,
 // CHECK-NEXT:          "line": 3
 // CHECK-NEXT:        }
 // CHECK-NEXT:      },

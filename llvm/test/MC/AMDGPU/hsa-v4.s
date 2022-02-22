@@ -1,6 +1,6 @@
 // RUN: llvm-mc -triple amdgcn-amd-amdhsa -mcpu=gfx904 --amdhsa-code-object-version=4 -mattr=+xnack < %s | FileCheck --check-prefix=ASM %s
 // RUN: llvm-mc -triple amdgcn-amd-amdhsa -mcpu=gfx904 --amdhsa-code-object-version=4 -mattr=+xnack -filetype=obj < %s > %t
-// RUN: llvm-readelf -sections -symbols -relocations %t | FileCheck --check-prefix=READOBJ %s
+// RUN: llvm-readelf -S -r -s %t | FileCheck --check-prefix=READOBJ %s
 // RUN: llvm-objdump -s -j .rodata %t | FileCheck --check-prefix=OBJDUMP %s
 
 // READOBJ: Section Headers
@@ -94,6 +94,7 @@ disabled_user_sgpr:
   .amdhsa_group_segment_fixed_size 1
   .amdhsa_private_segment_fixed_size 1
   .amdhsa_kernarg_size 8
+  .amdhsa_user_sgpr_count 15
   .amdhsa_user_sgpr_private_segment_buffer 1
   .amdhsa_user_sgpr_dispatch_ptr 1
   .amdhsa_user_sgpr_queue_ptr 1
@@ -132,6 +133,7 @@ disabled_user_sgpr:
 // ASM-NEXT: .amdhsa_group_segment_fixed_size 1
 // ASM-NEXT: .amdhsa_private_segment_fixed_size 1
 // ASM-NEXT: .amdhsa_kernarg_size 8
+// ASM-NEXT: .amdhsa_user_sgpr_count 15
 // ASM-NEXT: .amdhsa_user_sgpr_private_segment_buffer 1
 // ASM-NEXT: .amdhsa_user_sgpr_dispatch_ptr 1
 // ASM-NEXT: .amdhsa_user_sgpr_queue_ptr 1
@@ -276,7 +278,7 @@ v_mov_b32_e32 v16, s3
 .end_amdgpu_metadata
 
 // ASM:      	.amdgpu_metadata
-// ASM:      amdhsa.kernels:  
+// ASM:      amdhsa.kernels:
 // ASM:        - .group_segment_fixed_size: 16
 // ASM:          .kernarg_segment_align: 64
 // ASM:          .kernarg_segment_size: 8
@@ -297,7 +299,7 @@ v_mov_b32_e32 v16, s3
 // ASM:          .symbol:         'amd_kernel_code_t_minimal@kd'
 // ASM:          .vgpr_count:     40
 // ASM:          .wavefront_size: 128
-// ASM:      amdhsa.version:  
+// ASM:      amdhsa.version:
 // ASM-NEXT:   - 3
 // ASM-NEXT:   - 0
 // ASM:      	.end_amdgpu_metadata

@@ -11,19 +11,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_DIALECT_STANDARD_TRANSFORMS_PASSES_H_
-#define MLIR_DIALECT_STANDARD_TRANSFORMS_PASSES_H_
+#ifndef MLIR_DIALECT_STANDARDOPS_TRANSFORMS_PASSES_H
+#define MLIR_DIALECT_STANDARDOPS_TRANSFORMS_PASSES_H
 
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/Bufferize.h"
 
 namespace mlir {
+namespace bufferization {
+class BufferizeTypeConverter;
+class GlobalCreator;
+} // namespace bufferization
 
 class RewritePatternSet;
-using OwningRewritePatternList = RewritePatternSet;
 
-void populateStdBufferizePatterns(BufferizeTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns);
+void populateStdBufferizePatterns(
+    bufferization::BufferizeTypeConverter &typeConverter,
+    RewritePatternSet &patterns);
 
 /// Creates an instance of std bufferization pass.
 std::unique_ptr<Pass> createStdBufferizePass();
@@ -31,18 +34,15 @@ std::unique_ptr<Pass> createStdBufferizePass();
 /// Creates an instance of func bufferization pass.
 std::unique_ptr<Pass> createFuncBufferizePass();
 
+/// Add patterns to bufferize tensor constants into global memrefs to the given
+/// pattern list.
+void populateTensorConstantBufferizePatterns(
+    bufferization::GlobalCreator &globalCreator,
+    bufferization::BufferizeTypeConverter &typeConverter,
+    RewritePatternSet &patterns);
+
 /// Creates an instance of tensor constant bufferization pass.
-std::unique_ptr<Pass> createTensorConstantBufferizePass();
-
-/// Creates an instance of the StdExpand pass that legalizes Std
-/// dialect ops to be convertible to LLVM. For example,
-/// `std.ceildivi_signed` gets transformed to a number of std operations,
-/// which can be lowered to LLVM; `memref.reshape` gets converted to
-/// `memref_reinterpret_cast`.
-std::unique_ptr<Pass> createStdExpandOpsPass();
-
-/// Collects a set of patterns to rewrite ops within the Std dialect.
-void populateStdExpandOpsPatterns(RewritePatternSet &patterns);
+std::unique_ptr<Pass> createTensorConstantBufferizePass(unsigned alignment = 0);
 
 //===----------------------------------------------------------------------===//
 // Registration
@@ -52,6 +52,6 @@ void populateStdExpandOpsPatterns(RewritePatternSet &patterns);
 #define GEN_PASS_REGISTRATION
 #include "mlir/Dialect/StandardOps/Transforms/Passes.h.inc"
 
-} // end namespace mlir
+} // namespace mlir
 
-#endif // MLIR_DIALECT_STANDARD_TRANSFORMS_PASSES_H_
+#endif // MLIR_DIALECT_STANDARDOPS_TRANSFORMS_PASSES_H

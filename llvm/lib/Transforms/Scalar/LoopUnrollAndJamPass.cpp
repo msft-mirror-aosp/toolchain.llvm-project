@@ -42,13 +42,14 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils.h"
+#include "llvm/Transforms/Utils/LCSSA.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 #include <cassert>
 #include <cstdint>
-#include <vector>
 
 namespace llvm {
 class Instruction;
@@ -285,8 +286,8 @@ tryToUnrollAndJamLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
                       AssumptionCache &AC, DependenceInfo &DI,
                       OptimizationRemarkEmitter &ORE, int OptLevel) {
   TargetTransformInfo::UnrollingPreferences UP =
-      gatherUnrollingPreferences(L, SE, TTI, nullptr, nullptr, OptLevel, None,
-                                 None, None, None, None, None);
+      gatherUnrollingPreferences(L, SE, TTI, nullptr, nullptr, ORE, OptLevel,
+                                 None, None, None, None, None, None);
   TargetTransformInfo::PeelingPreferences PP =
       gatherPeelingPreferences(L, SE, TTI, None, None);
 
@@ -496,6 +497,7 @@ public:
     AU.addRequired<AssumptionCacheTracker>();
     AU.addRequired<DependenceAnalysisWrapperPass>();
     AU.addRequired<OptimizationRemarkEmitterWrapperPass>();
+    getLoopAnalysisUsage(AU);
   }
 };
 

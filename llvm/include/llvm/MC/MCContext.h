@@ -52,6 +52,7 @@ namespace llvm {
   class MCSection;
   class MCSectionCOFF;
   class MCSectionELF;
+  class MCSectionGOFF;
   class MCSectionMachO;
   class MCSectionWasm;
   class MCSectionXCOFF;
@@ -74,10 +75,14 @@ namespace llvm {
     using DiagHandlerTy =
         std::function<void(const SMDiagnostic &, bool, const SourceMgr &,
                            std::vector<const MDNode *> &)>;
-    enum Environment { IsMachO, IsELF, IsCOFF, IsWasm, IsXCOFF };
+    enum Environment { IsMachO, IsELF, IsGOFF, IsCOFF, IsWasm, IsXCOFF };
 
   private:
     Environment Env;
+
+    /// The name of the Segment where Swift5 Reflection Section data will be
+    /// outputted
+    StringRef Swift5ReflectionSegmentName;
 
     /// The triple for this object.
     Triple TT;
@@ -114,6 +119,7 @@ namespace llvm {
     SpecificBumpPtrAllocator<MCSectionCOFF> COFFAllocator;
     SpecificBumpPtrAllocator<MCSectionELF> ELFAllocator;
     SpecificBumpPtrAllocator<MCSectionMachO> MachOAllocator;
+    SpecificBumpPtrAllocator<MCSectionGOFF> GOFFAllocator;
     SpecificBumpPtrAllocator<MCSectionWasm> WasmAllocator;
     SpecificBumpPtrAllocator<MCSectionXCOFF> XCOFFAllocator;
     SpecificBumpPtrAllocator<MCInst> MCInstAllocator;
@@ -323,6 +329,7 @@ namespace llvm {
     StringMap<MCSectionMachO *> MachOUniquingMap;
     std::map<ELFSectionKey, MCSectionELF *> ELFUniquingMap;
     std::map<COFFSectionKey, MCSectionCOFF *> COFFUniquingMap;
+    std::map<std::string, MCSectionGOFF *> GOFFUniquingMap;
     std::map<WasmSectionKey, MCSectionWasm *> WasmUniquingMap;
     std::map<XCOFFSectionKey, MCSectionXCOFF *> XCOFFUniquingMap;
     StringMap<bool> RelSecNames;
@@ -396,13 +403,17 @@ namespace llvm {
                        const MCRegisterInfo *MRI, const MCSubtargetInfo *MSTI,
                        const SourceMgr *Mgr = nullptr,
                        MCTargetOptions const *TargetOpts = nullptr,
-                       bool DoAutoReset = true);
+                       bool DoAutoReset = true,
+                       StringRef Swift5ReflSegmentName = {});
     MCContext(const MCContext &) = delete;
     MCContext &operator=(const MCContext &) = delete;
     ~MCContext();
 
     Environment getObjectFileType() const { return Env; }
 
+    const StringRef &getSwift5ReflectionSegmentName() const {
+      return Swift5ReflectionSegmentName;
+    }
     const Triple &getTargetTriple() const { return TT; }
     const SourceMgr *getSourceManager() const { return SrcMgr; }
 
@@ -594,6 +605,8 @@ namespace llvm {
     Optional<unsigned> getELFUniqueIDForEntsize(StringRef SectionName,
                                                 unsigned Flags,
                                                 unsigned EntrySize);
+
+    MCSectionGOFF *getGOFFSection(StringRef Section, SectionKind Kind);
 
     MCSectionCOFF *getCOFFSection(StringRef Section, unsigned Characteristics,
                                   SectionKind Kind, StringRef COMDATSymName,
@@ -809,10 +822,6 @@ namespace llvm {
     void diagnose(const SMDiagnostic &SMD);
     void reportError(SMLoc L, const Twine &Msg);
     void reportWarning(SMLoc L, const Twine &Msg);
-    // Unrecoverable error has occurred. Display the best diagnostic we can
-    // and bail via exit(1). For now, most MC backend errors are unrecoverable.
-    // FIXME: We should really do something about that.
-    LLVM_ATTRIBUTE_NORETURN void reportFatalError(SMLoc L, const Twine &Msg);
 
     const MCAsmMacro *lookupMacro(StringRef Name) {
       StringMap<MCAsmMacro>::iterator I = MacroMap.find(Name);

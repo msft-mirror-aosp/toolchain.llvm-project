@@ -18,23 +18,27 @@ namespace {
 /// locations.
 struct TestOpaqueLoc
     : public PassWrapper<TestOpaqueLoc, OperationPass<ModuleOp>> {
+  StringRef getArgument() const final { return "test-opaque-loc"; }
+  StringRef getDescription() const final {
+    return "Changes all leaf locations to opaque locations";
+  }
 
   /// A simple structure which is used for testing as an underlying location in
   /// OpaqueLoc.
   struct MyLocation {
-    MyLocation() : id(42) {}
+    MyLocation() = default;
     MyLocation(int id) : id(id) {}
     int getId() { return id; }
 
-    int id;
+    int id{42};
   };
 
   void runOnOperation() override {
     std::vector<std::unique_ptr<MyLocation>> myLocs;
-    int last_it = 0;
+    int lastIt = 0;
 
-    getOperation().walk([&](Operation *op) {
-      myLocs.push_back(std::make_unique<MyLocation>(last_it++));
+    getOperation().getBody()->walk([&](Operation *op) {
+      myLocs.push_back(std::make_unique<MyLocation>(lastIt++));
 
       Location loc = op->getLoc();
 
@@ -50,14 +54,13 @@ struct TestOpaqueLoc
 
       /// Add the same operation but with fallback location to test the
       /// corresponding get method and serialization.
-      Operation *op_cloned_1 = builder.clone(*op);
-      op_cloned_1->setLoc(
-          OpaqueLoc::get<MyLocation *>(myLocs.back().get(), loc));
+      Operation *opCloned1 = builder.clone(*op);
+      opCloned1->setLoc(OpaqueLoc::get<MyLocation *>(myLocs.back().get(), loc));
 
       /// Add the same operation but with void* instead of MyLocation* to test
       /// getUnderlyingLocationOrNull method.
-      Operation *op_cloned_2 = builder.clone(*op);
-      op_cloned_2->setLoc(OpaqueLoc::get<void *>(nullptr, loc));
+      Operation *opCloned2 = builder.clone(*op);
+      opCloned2->setLoc(OpaqueLoc::get<void *>(nullptr, loc));
     });
 
     ScopedDiagnosticHandler diagHandler(&getContext(), [](Diagnostic &diag) {
@@ -78,13 +81,10 @@ struct TestOpaqueLoc
   }
 };
 
-} // end anonymous namespace
+} // namespace
 
 namespace mlir {
 namespace test {
-void registerTestOpaqueLoc() {
-  PassRegistration<TestOpaqueLoc> pass(
-      "test-opaque-loc", "Changes all leaf locations to opaque locations");
-}
+void registerTestOpaqueLoc() { PassRegistration<TestOpaqueLoc>(); }
 } // namespace test
 } // namespace mlir
