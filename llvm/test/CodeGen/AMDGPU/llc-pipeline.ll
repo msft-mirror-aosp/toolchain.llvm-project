@@ -1,7 +1,5 @@
 ; When EXPENSIVE_CHECKS are enabled, the machine verifier appears between each
 ; pass. Ignore it with 'grep -v'.
-; fixme: the following line is added to cleanup bots, will be removed in weeks.
-; RUN: rm -f %S/llc-pipeline.s
 ; RUN: llc -O0 -mtriple=amdgcn--amdhsa -disable-verify -debug-pass=Structure < %s 2>&1 \
 ; RUN:   | grep -v 'Verify generated machine code' | FileCheck -match-full-lines -strict-whitespace -check-prefix=GCN-O0 %s
 ; RUN: llc -O1 -mtriple=amdgcn--amdhsa -disable-verify -debug-pass=Structure < %s 2>&1 \
@@ -162,6 +160,7 @@
 ; GCN-O1-NEXT:Create Garbage Collector Module Metadata
 ; GCN-O1-NEXT:Machine Branch Probability Analysis
 ; GCN-O1-NEXT:Register Usage Information Storage
+; GCN-O1-NEXT:Default Regalloc Eviction Advisor
 ; GCN-O1-NEXT:  ModulePass Manager
 ; GCN-O1-NEXT:    Pre-ISel Intrinsic Lowering
 ; GCN-O1-NEXT:    AMDGPU Printf lowering
@@ -413,6 +412,7 @@
 ; GCN-O1-OPTS-NEXT:Create Garbage Collector Module Metadata
 ; GCN-O1-OPTS-NEXT:Machine Branch Probability Analysis
 ; GCN-O1-OPTS-NEXT:Register Usage Information Storage
+; GCN-O1-OPTS-NEXT:Default Regalloc Eviction Advisor
 ; GCN-O1-OPTS-NEXT:  ModulePass Manager
 ; GCN-O1-OPTS-NEXT:    Pre-ISel Intrinsic Lowering
 ; GCN-O1-OPTS-NEXT:    AMDGPU Printf lowering
@@ -697,6 +697,7 @@
 ; GCN-O2-NEXT:Create Garbage Collector Module Metadata
 ; GCN-O2-NEXT:Machine Branch Probability Analysis
 ; GCN-O2-NEXT:Register Usage Information Storage
+; GCN-O2-NEXT:Default Regalloc Eviction Advisor
 ; GCN-O2-NEXT:  ModulePass Manager
 ; GCN-O2-NEXT:    Pre-ISel Intrinsic Lowering
 ; GCN-O2-NEXT:    AMDGPU Printf lowering
@@ -983,6 +984,7 @@
 ; GCN-O3-NEXT:Create Garbage Collector Module Metadata
 ; GCN-O3-NEXT:Machine Branch Probability Analysis
 ; GCN-O3-NEXT:Register Usage Information Storage
+; GCN-O3-NEXT:Default Regalloc Eviction Advisor
 ; GCN-O3-NEXT:  ModulePass Manager
 ; GCN-O3-NEXT:    Pre-ISel Intrinsic Lowering
 ; GCN-O3-NEXT:    AMDGPU Printf lowering

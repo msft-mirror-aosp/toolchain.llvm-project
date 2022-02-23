@@ -70,6 +70,16 @@ struct InstructionPointer {
   void update(uint64_t Addr);
 };
 
+// The special frame addresses.
+enum SpecialFrameAddr {
+  // Dummy root of frame trie.
+  DummyRoot = 0,
+  // Represent all the addresses outside of current binary.
+  // This's also used to indicate the call stack should be truncated since this
+  // isn't a real call context the compiler will see.
+  ExternalAddr = 1,
+};
+
 using RangesTy = std::vector<std::pair<uint64_t, uint64_t>>;
 
 struct BinaryFunction {
@@ -175,8 +185,12 @@ private:
 using OffsetRange = std::pair<uint64_t, uint64_t>;
 
 class ProfiledBinary {
-  // Absolute path of the binary.
+  // Absolute path of the executable binary.
   std::string Path;
+  // Path of the debug info binary.
+  std::string DebugBinaryPath;
+  // Path of symbolizer path which should be pointed to binary with debug info.
+  StringRef SymbolizerPath;
   // The target triple.
   Triple TheTriple;
   // The runtime base address that the first executable segment is loaded at.
@@ -244,6 +258,8 @@ class ProfiledBinary {
 
   bool UsePseudoProbes = false;
 
+  bool UseFSDiscriminator = false;
+
   // Whether we need to symbolize all instructions to get function context size.
   bool TrackFuncContextSize = false;
 
@@ -259,6 +275,10 @@ class ProfiledBinary {
   void setPreferredTextSegmentAddresses(const ELFFile<ELFT> &Obj, StringRef FileName);
 
   void decodePseudoProbe(const ELFObjectFileBase *Obj);
+
+  void
+  checkUseFSDiscriminator(const ELFObjectFileBase *Obj,
+                          std::map<SectionRef, SectionSymbolsTy> &AllSymbols);
 
   // Set up disassembler and related components.
   void setUpDisassembler(const ELFObjectFileBase *Obj);
@@ -295,10 +315,12 @@ class ProfiledBinary {
   void load();
 
 public:
-  ProfiledBinary(const StringRef Path)
-      : Path(Path), ProEpilogTracker(this),
+  ProfiledBinary(const StringRef ExeBinPath, const StringRef DebugBinPath)
+      : Path(ExeBinPath), DebugBinaryPath(DebugBinPath), ProEpilogTracker(this),
         TrackFuncContextSize(EnableCSPreInliner &&
                              UseContextCostForPreInliner) {
+    // Point to executable binary if debug info binary is not specified.
+    SymbolizerPath = DebugBinPath.empty() ? ExeBinPath : DebugBinPath;
     setupSymbolizer();
     load();
   }
@@ -324,6 +346,13 @@ public:
   }
   const std::vector<uint64_t> &getTextSegmentOffsets() const {
     return TextSegmentOffsets;
+  }
+
+  uint64_t getInstSize(uint64_t Offset) const {
+    auto I = Offset2InstSizeMap.find(Offset);
+    if (I == Offset2InstSizeMap.end())
+      return 0;
+    return I->second;
   }
 
   bool offsetIsCode(uint64_t Offset) const {
@@ -358,6 +387,7 @@ public:
   size_t getCodeOffsetsSize() const { return CodeAddrOffsets.size(); }
 
   bool usePseudoProbes() const { return UsePseudoProbes; }
+  bool useFSDiscriminator() const { return UseFSDiscriminator; }
   // Get the index in CodeAddrOffsets for the address
   // As we might get an address which is not the code
   // here it would round to the next valid code address by
@@ -372,6 +402,8 @@ public:
   }
 
   uint64_t getCallAddrFromFrameAddr(uint64_t FrameAddr) const {
+    if (FrameAddr == ExternalAddr)
+      return ExternalAddr;
     auto I = getIndexForAddr(FrameAddr);
     FrameAddr = I ? getAddressforIndex(I - 1) : 0;
     if (FrameAddr && addressIsCall(FrameAddr))
@@ -469,7 +501,13 @@ public:
     SmallVector<MCPseduoProbeFrameLocation, 16> ProbeInlineContext;
     ProbeDecoder.getInlineContextForProbe(Probe, ProbeInlineContext,
                                           IncludeLeaf);
-    for (auto &Callsite : ProbeInlineContext) {
+    for (uint32_t I = 0; I < ProbeInlineContext.size(); I++) {
+      auto &Callsite = ProbeInlineContext[I];
+      // Clear the current context for an unknown probe.
+      if (Callsite.second == 0 && I != ProbeInlineContext.size() - 1) {
+        InlineContextStack.clear();
+        continue;
+      }
       InlineContextStack.emplace_back(Callsite.first,
                                       LineLocation(Callsite.second, 0));
     }

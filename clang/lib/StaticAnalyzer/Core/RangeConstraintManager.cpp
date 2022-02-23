@@ -110,6 +110,14 @@ public:
 
 RangeSet::ContainerType RangeSet::Factory::EmptySet{};
 
+RangeSet RangeSet::Factory::add(RangeSet LHS, RangeSet RHS) {
+  ContainerType Result;
+  Result.reserve(LHS.size() + RHS.size());
+  std::merge(LHS.begin(), LHS.end(), RHS.begin(), RHS.end(),
+             std::back_inserter(Result));
+  return makePersistent(std::move(Result));
+}
+
 RangeSet RangeSet::Factory::add(RangeSet Original, Range Element) {
   ContainerType Result;
   Result.reserve(Original.size() + 1);
@@ -124,6 +132,186 @@ RangeSet RangeSet::Factory::add(RangeSet Original, Range Element) {
 
 RangeSet RangeSet::Factory::add(RangeSet Original, const llvm::APSInt &Point) {
   return add(Original, Range(Point));
+}
+
+RangeSet RangeSet::Factory::unite(RangeSet LHS, RangeSet RHS) {
+  ContainerType Result = unite(*LHS.Impl, *RHS.Impl);
+  return makePersistent(std::move(Result));
+}
+
+RangeSet RangeSet::Factory::unite(RangeSet Original, Range R) {
+  ContainerType Result;
+  Result.push_back(R);
+  Result = unite(*Original.Impl, Result);
+  return makePersistent(std::move(Result));
+}
+
+RangeSet RangeSet::Factory::unite(RangeSet Original, llvm::APSInt Point) {
+  return unite(Original, Range(ValueFactory.getValue(Point)));
+}
+
+RangeSet RangeSet::Factory::unite(RangeSet Original, llvm::APSInt From,
+                                  llvm::APSInt To) {
+  return unite(Original,
+               Range(ValueFactory.getValue(From), ValueFactory.getValue(To)));
+}
+
+template <typename T>
+void swapIterators(T &First, T &FirstEnd, T &Second, T &SecondEnd) {
+  std::swap(First, Second);
+  std::swap(FirstEnd, SecondEnd);
+}
+
+RangeSet::ContainerType RangeSet::Factory::unite(const ContainerType &LHS,
+                                                 const ContainerType &RHS) {
+  if (LHS.empty())
+    return RHS;
+  if (RHS.empty())
+    return LHS;
+
+  using llvm::APSInt;
+  using iterator = ContainerType::const_iterator;
+
+  iterator First = LHS.begin();
+  iterator FirstEnd = LHS.end();
+  iterator Second = RHS.begin();
+  iterator SecondEnd = RHS.end();
+  APSIntType Ty = APSIntType(First->From());
+  const APSInt Min = Ty.getMinValue();
+
+  // Handle a corner case first when both range sets start from MIN.
+  // This helps to avoid complicated conditions below. Specifically, this
+  // particular check for `MIN` is not needed in the loop below every time
+  // when we do `Second->From() - One` operation.
+  if (Min == First->From() && Min == Second->From()) {
+    if (First->To() > Second->To()) {
+      //    [ First    ]--->
+      //    [ Second ]----->
+      // MIN^
+      // The Second range is entirely inside the First one.
+
+      // Check if Second is the last in its RangeSet.
+      if (++Second == SecondEnd)
+        //    [ First     ]--[ First + 1 ]--->
+        //    [ Second ]--------------------->
+        // MIN^
+        // The Union is equal to First's RangeSet.
+        return LHS;
+    } else {
+      // case 1: [ First ]----->
+      // case 2: [ First   ]--->
+      //         [ Second  ]--->
+      //      MIN^
+      // The First range is entirely inside or equal to the Second one.
+
+      // Check if First is the last in its RangeSet.
+      if (++First == FirstEnd)
+        //    [ First ]----------------------->
+        //    [ Second  ]--[ Second + 1 ]---->
+        // MIN^
+        // The Union is equal to Second's RangeSet.
+        return RHS;
+    }
+  }
+
+  const APSInt One = Ty.getValue(1);
+  ContainerType Result;
+
+  // This is called when there are no ranges left in one of the ranges.
+  // Append the rest of the ranges from another range set to the Result
+  // and return with that.
+  const auto AppendTheRest = [&Result](iterator I, iterator E) {
+    Result.append(I, E);
+    return Result;
+  };
+
+  while (true) {
+    // We want to keep the following invariant at all times:
+    // ---[ First ------>
+    // -----[ Second --->
+    if (First->From() > Second->From())
+      swapIterators(First, FirstEnd, Second, SecondEnd);
+
+    // The Union definitely starts with First->From().
+    // ----------[ First ------>
+    // ------------[ Second --->
+    // ----------[ Union ------>
+    // UnionStart^
+    const llvm::APSInt &UnionStart = First->From();
+
+    // Loop where the invariant holds.
+    while (true) {
+      // Skip all enclosed ranges.
+      // ---[                  First                     ]--->
+      // -----[ Second ]--[ Second + 1 ]--[ Second + N ]----->
+      while (First->To() >= Second->To()) {
+        // Check if Second is the last in its RangeSet.
+        if (++Second == SecondEnd) {
+          // Append the Union.
+          // ---[ Union      ]--->
+          // -----[ Second ]----->
+          // --------[ First ]--->
+          //         UnionEnd^
+          Result.emplace_back(UnionStart, First->To());
+          // ---[ Union ]----------------->
+          // --------------[ First + 1]--->
+          // Append all remaining ranges from the First's RangeSet.
+          return AppendTheRest(++First, FirstEnd);
+        }
+      }
+
+      // Check if First and Second are disjoint. It means that we find
+      // the end of the Union. Exit the loop and append the Union.
+      // ---[ First ]=------------->
+      // ------------=[ Second ]--->
+      // ----MinusOne^
+      if (First->To() < Second->From() - One)
+        break;
+
+      // First is entirely inside the Union. Go next.
+      // ---[ Union ----------->
+      // ---- [ First ]-------->
+      // -------[ Second ]----->
+      // Check if First is the last in its RangeSet.
+      if (++First == FirstEnd) {
+        // Append the Union.
+        // ---[ Union       ]--->
+        // -----[ First ]------->
+        // --------[ Second ]--->
+        //          UnionEnd^
+        Result.emplace_back(UnionStart, Second->To());
+        // ---[ Union ]------------------>
+        // --------------[ Second + 1]--->
+        // Append all remaining ranges from the Second's RangeSet.
+        return AppendTheRest(++Second, SecondEnd);
+      }
+
+      // We know that we are at one of the two cases:
+      // case 1: --[ First ]--------->
+      // case 2: ----[ First ]------->
+      // --------[ Second ]---------->
+      // In both cases First starts after Second->From().
+      // Make sure that the loop invariant holds.
+      swapIterators(First, FirstEnd, Second, SecondEnd);
+    }
+
+    // Here First and Second are disjoint.
+    // Append the Union.
+    // ---[ Union    ]--------------->
+    // -----------------[ Second ]--->
+    // ------[ First ]--------------->
+    //       UnionEnd^
+    Result.emplace_back(UnionStart, First->To());
+
+    // Check if First is the last in its RangeSet.
+    if (++First == FirstEnd)
+      // ---[ Union ]--------------->
+      // --------------[ Second ]--->
+      // Append all remaining ranges from the Second's RangeSet.
+      return AppendTheRest(Second, SecondEnd);
+  }
+
+  llvm_unreachable("Normally, we should not reach here");
 }
 
 RangeSet RangeSet::Factory::getRangeSet(Range From) {
@@ -153,13 +341,6 @@ RangeSet RangeSet::Factory::makePersistent(ContainerType &&From) {
 RangeSet::ContainerType *RangeSet::Factory::construct(ContainerType &&From) {
   void *Buffer = Arena.Allocate();
   return new (Buffer) ContainerType(std::move(From));
-}
-
-RangeSet RangeSet::Factory::add(RangeSet LHS, RangeSet RHS) {
-  ContainerType Result;
-  std::merge(LHS.begin(), LHS.end(), RHS.begin(), RHS.end(),
-             std::back_inserter(Result));
-  return makePersistent(std::move(Result));
 }
 
 const llvm::APSInt &RangeSet::getMinValue() const {
@@ -325,11 +506,6 @@ RangeSet RangeSet::Factory::intersect(const RangeSet::ContainerType &LHS,
   const_iterator First = LHS.begin(), Second = RHS.begin(),
                  FirstEnd = LHS.end(), SecondEnd = RHS.end();
 
-  const auto SwapIterators = [&First, &FirstEnd, &Second, &SecondEnd]() {
-    std::swap(First, Second);
-    std::swap(FirstEnd, SecondEnd);
-  };
-
   // If we ran out of ranges in one set, but not in the other,
   // it means that those elements are definitely not in the
   // intersection.
@@ -339,7 +515,7 @@ RangeSet RangeSet::Factory::intersect(const RangeSet::ContainerType &LHS,
     //    ----[ First ---------------------->
     //    --------[ Second ----------------->
     if (Second->From() < First->From())
-      SwapIterators();
+      swapIterators(First, FirstEnd, Second, SecondEnd);
 
     // Loop where the invariant holds:
     do {
@@ -373,7 +549,7 @@ RangeSet RangeSet::Factory::intersect(const RangeSet::ContainerType &LHS,
       if (Second->To() > First->To()) {
         // Here we make a decision to keep First as the "longer"
         // range.
-        SwapIterators();
+        swapIterators(First, FirstEnd, Second, SecondEnd);
       }
 
       // At this point, we have the following situation:
@@ -600,6 +776,10 @@ public:
                                                        EquivalenceClass Second);
   LLVM_NODISCARD static inline Optional<bool>
   areEqual(ProgramStateRef State, SymbolRef First, SymbolRef Second);
+
+  /// Remove one member from the class.
+  LLVM_NODISCARD ProgramStateRef removeMember(ProgramStateRef State,
+                                              const SymbolRef Old);
 
   /// Iterate over all symbols and try to simplify them.
   LLVM_NODISCARD static inline ProgramStateRef simplify(SValBuilder &SVB,
@@ -2132,6 +2312,34 @@ inline Optional<bool> EquivalenceClass::areEqual(ProgramStateRef State,
   return llvm::None;
 }
 
+LLVM_NODISCARD ProgramStateRef
+EquivalenceClass::removeMember(ProgramStateRef State, const SymbolRef Old) {
+
+  SymbolSet ClsMembers = getClassMembers(State);
+  assert(ClsMembers.contains(Old));
+
+  // We don't remove `Old`'s Sym->Class relation for two reasons:
+  // 1) This way constraints for the old symbol can still be found via it's
+  // equivalence class that it used to be the member of.
+  // 2) Performance and resource reasons. We can spare one removal and thus one
+  // additional tree in the forest of `ClassMap`.
+
+  // Remove `Old`'s Class->Sym relation.
+  SymbolSet::Factory &F = getMembersFactory(State);
+  ClassMembersTy::Factory &EMFactory = State->get_context<ClassMembers>();
+  ClsMembers = F.remove(ClsMembers, Old);
+  // Ensure another precondition of the removeMember function (we can check
+  // this only with isEmpty, thus we have to do the remove first).
+  assert(!ClsMembers.isEmpty() &&
+         "Class should have had at least two members before member removal");
+  // Overwrite the existing members assigned to this class.
+  ClassMembersTy ClassMembersMap = State->get<ClassMembers>();
+  ClassMembersMap = EMFactory.add(ClassMembersMap, *this, ClsMembers);
+  State = State->set<ClassMembers>(ClassMembersMap);
+
+  return State;
+}
+
 // Re-evaluate an SVal with top-level `State->assume` logic.
 LLVM_NODISCARD ProgramStateRef reAssume(ProgramStateRef State,
                                         const RangeSet *Constraint,
@@ -2196,6 +2404,8 @@ EquivalenceClass::simplify(SValBuilder &SVB, RangeSet::Factory &F,
         continue;
 
       assert(find(State, MemberSym) == find(State, SimplifiedMemberSym));
+      // Remove the old and more complex symbol.
+      State = find(State, MemberSym).removeMember(State, MemberSym);
 
       // Query the class constraint again b/c that may have changed during the
       // merge above.
@@ -2207,25 +2417,19 @@ EquivalenceClass::simplify(SValBuilder &SVB, RangeSet::Factory &F,
       // About performance and complexity: Let us assume that in a State we
       // have N non-trivial equivalence classes and that all constraints and
       // disequality info is related to non-trivial classes. In the worst case,
-      // we can simplify only one symbol of one class in each iteration.
+      // we can simplify only one symbol of one class in each iteration. The
+      // number of symbols in one class cannot grow b/c we replace the old
+      // symbol with the simplified one. Also, the number of the equivalence
+      // classes can decrease only, b/c the algorithm does a merge operation
+      // optionally. We need N iterations in this case to reach the fixpoint.
+      // Thus, the steps needed to be done in the worst case is proportional to
+      // N*N.
       //
-      // The number of the equivalence classes can decrease only, because the
-      // algorithm does a merge operation optionally.
-      // ASSUMPTION G: Let us assume that the
-      // number of symbols in one class cannot grow because we replace the old
-      // symbol with the simplified one.
-      // If assumption G holds then we need N iterations in this case to reach
-      // the fixpoint. Thus, the steps needed to be done in the worst case is
-      // proportional to N*N.
       // This worst case scenario can be extended to that case when we have
       // trivial classes in the constraints and in the disequality map. This
       // case can be reduced to the case with a State where there are only
       // non-trivial classes. This is because a merge operation on two trivial
       // classes results in one non-trivial class.
-      //
-      // Empirical measurements show that if we relax assumption G (i.e. if we
-      // do not replace the complex symbol just add the simplified one) then
-      // the runtime and memory consumption does not grow noticeably.
       State = reAssume(State, ClassConstraint, SimplifiedMemberVal);
       if (!State)
         return nullptr;

@@ -23,17 +23,9 @@ entry:
 define i32 @utest_f64i32(double %x) {
 ; CHECK-LABEL: utest_f64i32:
 ; CHECK:         .functype utest_f64i32 (f64) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f64_u
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_u
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f64_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptoui double %x to i64
@@ -46,23 +38,9 @@ entry:
 define i32 @ustest_f64i32(double %x) {
 ; CHECK-LABEL: ustest_f64i32:
 ; CHECK:         .functype ustest_f64i32 (f64) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f64_s
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    i64.gt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f64_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptosi double %x to i64
@@ -94,17 +72,9 @@ entry:
 define i32 @utest_f32i32(float %x) {
 ; CHECK-LABEL: utest_f32i32:
 ; CHECK:         .functype utest_f32i32 (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f32_u
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_u
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptoui float %x to i64
@@ -117,23 +87,9 @@ entry:
 define i32 @ustest_f32i32(float %x) {
 ; CHECK-LABEL: ustest_f32i32:
 ; CHECK:         .functype ustest_f32i32 (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f32_s
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    i64.gt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptosi float %x to i64
@@ -167,19 +123,11 @@ entry:
 define i32 @utesth_f16i32(half %x) {
 ; CHECK-LABEL: utesth_f16i32:
 ; CHECK:         .functype utesth_f16i32 (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
 ; CHECK-NEXT:    call __truncsfhf2
 ; CHECK-NEXT:    call __extendhfsf2
-; CHECK-NEXT:    i64.trunc_sat_f32_u
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_u
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptoui half %x to i64
@@ -192,25 +140,11 @@ entry:
 define i32 @ustest_f16i32(half %x) {
 ; CHECK-LABEL: ustest_f16i32:
 ; CHECK:         .functype ustest_f16i32 (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
 ; CHECK-NEXT:    call __truncsfhf2
 ; CHECK-NEXT:    call __extendhfsf2
-; CHECK-NEXT:    i64.trunc_sat_f32_s
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    i64.gt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptosi half %x to i64
@@ -852,17 +786,9 @@ entry:
 define i32 @utest_f64i32_mm(double %x) {
 ; CHECK-LABEL: utest_f64i32_mm:
 ; CHECK:         .functype utest_f64i32_mm (f64) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f64_u
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_u
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f64_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptoui double %x to i64
@@ -874,23 +800,9 @@ entry:
 define i32 @ustest_f64i32_mm(double %x) {
 ; CHECK-LABEL: ustest_f64i32_mm:
 ; CHECK:         .functype ustest_f64i32_mm (f64) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f64_s
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    i64.gt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f64_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptosi double %x to i64
@@ -918,17 +830,9 @@ entry:
 define i32 @utest_f32i32_mm(float %x) {
 ; CHECK-LABEL: utest_f32i32_mm:
 ; CHECK:         .functype utest_f32i32_mm (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f32_u
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_u
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptoui float %x to i64
@@ -940,23 +844,9 @@ entry:
 define i32 @ustest_f32i32_mm(float %x) {
 ; CHECK-LABEL: ustest_f32i32_mm:
 ; CHECK:         .functype ustest_f32i32_mm (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
-; CHECK-NEXT:    i64.trunc_sat_f32_s
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    i64.gt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptosi float %x to i64
@@ -986,19 +876,11 @@ entry:
 define i32 @utesth_f16i32_mm(half %x) {
 ; CHECK-LABEL: utesth_f16i32_mm:
 ; CHECK:         .functype utesth_f16i32_mm (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
 ; CHECK-NEXT:    call __truncsfhf2
 ; CHECK-NEXT:    call __extendhfsf2
-; CHECK-NEXT:    i64.trunc_sat_f32_u
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_u
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptoui half %x to i64
@@ -1010,25 +892,11 @@ entry:
 define i32 @ustest_f16i32_mm(half %x) {
 ; CHECK-LABEL: ustest_f16i32_mm:
 ; CHECK:         .functype ustest_f16i32_mm (f32) -> (i32)
-; CHECK-NEXT:    .local i64
 ; CHECK-NEXT:  # %bb.0: # %entry
 ; CHECK-NEXT:    local.get 0
 ; CHECK-NEXT:    call __truncsfhf2
 ; CHECK-NEXT:    call __extendhfsf2
-; CHECK-NEXT:    i64.trunc_sat_f32_s
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 4294967295
-; CHECK-NEXT:    i64.lt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    local.tee 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    local.get 1
-; CHECK-NEXT:    i64.const 0
-; CHECK-NEXT:    i64.gt_s
-; CHECK-NEXT:    i64.select
-; CHECK-NEXT:    i32.wrap_i64
+; CHECK-NEXT:    i32.trunc_sat_f32_u
 ; CHECK-NEXT:    # fallthrough-return
 entry:
   %conv = fptosi half %x to i64

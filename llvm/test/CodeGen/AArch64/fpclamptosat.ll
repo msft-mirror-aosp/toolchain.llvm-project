@@ -22,10 +22,7 @@ entry:
 define i32 @utest_f64i32(double %x) {
 ; CHECK-LABEL: utest_f64i32:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzu x8, d0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csinv w0, w8, wzr, lo
+; CHECK-NEXT:    fcvtzu w0, d0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptoui double %x to i64
@@ -38,12 +35,7 @@ entry:
 define i32 @ustest_f64i32(double %x) {
 ; CHECK-LABEL: ustest_f64i32:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzs x8, d0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csel x8, x8, x9, lt
-; CHECK-NEXT:    cmp x8, #0
-; CHECK-NEXT:    csel w0, w8, wzr, gt
+; CHECK-NEXT:    fcvtzu w0, d0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptosi double %x to i64
@@ -73,10 +65,7 @@ entry:
 define i32 @utest_f32i32(float %x) {
 ; CHECK-LABEL: utest_f32i32:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzu x8, s0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csinv w0, w8, wzr, lo
+; CHECK-NEXT:    fcvtzu w0, s0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptoui float %x to i64
@@ -89,12 +78,7 @@ entry:
 define i32 @ustest_f32i32(float %x) {
 ; CHECK-LABEL: ustest_f32i32:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzs x8, s0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csel x8, x8, x9, lt
-; CHECK-NEXT:    cmp x8, #0
-; CHECK-NEXT:    csel w0, w8, wzr, gt
+; CHECK-NEXT:    fcvtzu w0, s0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptosi float %x to i64
@@ -131,18 +115,12 @@ define i32 @utesth_f16i32(half %x) {
 ; CHECK-CVT-LABEL: utesth_f16i32:
 ; CHECK-CVT:       // %bb.0: // %entry
 ; CHECK-CVT-NEXT:    fcvt s0, h0
-; CHECK-CVT-NEXT:    mov w9, #-1
-; CHECK-CVT-NEXT:    fcvtzu x8, s0
-; CHECK-CVT-NEXT:    cmp x8, x9
-; CHECK-CVT-NEXT:    csinv w0, w8, wzr, lo
+; CHECK-CVT-NEXT:    fcvtzu w0, s0
 ; CHECK-CVT-NEXT:    ret
 ;
 ; CHECK-FP16-LABEL: utesth_f16i32:
 ; CHECK-FP16:       // %bb.0: // %entry
-; CHECK-FP16-NEXT:    fcvtzu x8, h0
-; CHECK-FP16-NEXT:    mov w9, #-1
-; CHECK-FP16-NEXT:    cmp x8, x9
-; CHECK-FP16-NEXT:    csinv w0, w8, wzr, lo
+; CHECK-FP16-NEXT:    fcvtzu w0, h0
 ; CHECK-FP16-NEXT:    ret
 entry:
   %conv = fptoui half %x to i64
@@ -156,22 +134,12 @@ define i32 @ustest_f16i32(half %x) {
 ; CHECK-CVT-LABEL: ustest_f16i32:
 ; CHECK-CVT:       // %bb.0: // %entry
 ; CHECK-CVT-NEXT:    fcvt s0, h0
-; CHECK-CVT-NEXT:    mov w9, #-1
-; CHECK-CVT-NEXT:    fcvtzs x8, s0
-; CHECK-CVT-NEXT:    cmp x8, x9
-; CHECK-CVT-NEXT:    csel x8, x8, x9, lt
-; CHECK-CVT-NEXT:    cmp x8, #0
-; CHECK-CVT-NEXT:    csel w0, w8, wzr, gt
+; CHECK-CVT-NEXT:    fcvtzu w0, s0
 ; CHECK-CVT-NEXT:    ret
 ;
 ; CHECK-FP16-LABEL: ustest_f16i32:
 ; CHECK-FP16:       // %bb.0: // %entry
-; CHECK-FP16-NEXT:    fcvtzs x8, h0
-; CHECK-FP16-NEXT:    mov w9, #-1
-; CHECK-FP16-NEXT:    cmp x8, x9
-; CHECK-FP16-NEXT:    csel x8, x8, x9, lt
-; CHECK-FP16-NEXT:    cmp x8, #0
-; CHECK-FP16-NEXT:    csel w0, w8, wzr, gt
+; CHECK-FP16-NEXT:    fcvtzu w0, h0
 ; CHECK-FP16-NEXT:    ret
 entry:
   %conv = fptosi half %x to i64
@@ -601,11 +569,7 @@ entry:
 define i32 @utest_f64i32_mm(double %x) {
 ; CHECK-LABEL: utest_f64i32_mm:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzu x8, d0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csel x0, x8, x9, lo
-; CHECK-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-NEXT:    fcvtzu w0, d0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptoui double %x to i64
@@ -617,13 +581,7 @@ entry:
 define i32 @ustest_f64i32_mm(double %x) {
 ; CHECK-LABEL: ustest_f64i32_mm:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzs x8, d0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csel x8, x8, x9, lt
-; CHECK-NEXT:    cmp x8, #0
-; CHECK-NEXT:    csel x0, x8, xzr, gt
-; CHECK-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-NEXT:    fcvtzu w0, d0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptosi double %x to i64
@@ -649,11 +607,7 @@ entry:
 define i32 @utest_f32i32_mm(float %x) {
 ; CHECK-LABEL: utest_f32i32_mm:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzu x8, s0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csel x0, x8, x9, lo
-; CHECK-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-NEXT:    fcvtzu w0, s0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptoui float %x to i64
@@ -665,13 +619,7 @@ entry:
 define i32 @ustest_f32i32_mm(float %x) {
 ; CHECK-LABEL: ustest_f32i32_mm:
 ; CHECK:       // %bb.0: // %entry
-; CHECK-NEXT:    fcvtzs x8, s0
-; CHECK-NEXT:    mov w9, #-1
-; CHECK-NEXT:    cmp x8, x9
-; CHECK-NEXT:    csel x8, x8, x9, lt
-; CHECK-NEXT:    cmp x8, #0
-; CHECK-NEXT:    csel x0, x8, xzr, gt
-; CHECK-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-NEXT:    fcvtzu w0, s0
 ; CHECK-NEXT:    ret
 entry:
   %conv = fptosi float %x to i64
@@ -704,20 +652,12 @@ define i32 @utesth_f16i32_mm(half %x) {
 ; CHECK-CVT-LABEL: utesth_f16i32_mm:
 ; CHECK-CVT:       // %bb.0: // %entry
 ; CHECK-CVT-NEXT:    fcvt s0, h0
-; CHECK-CVT-NEXT:    mov w9, #-1
-; CHECK-CVT-NEXT:    fcvtzu x8, s0
-; CHECK-CVT-NEXT:    cmp x8, x9
-; CHECK-CVT-NEXT:    csel x0, x8, x9, lo
-; CHECK-CVT-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-CVT-NEXT:    fcvtzu w0, s0
 ; CHECK-CVT-NEXT:    ret
 ;
 ; CHECK-FP16-LABEL: utesth_f16i32_mm:
 ; CHECK-FP16:       // %bb.0: // %entry
-; CHECK-FP16-NEXT:    fcvtzu x8, h0
-; CHECK-FP16-NEXT:    mov w9, #-1
-; CHECK-FP16-NEXT:    cmp x8, x9
-; CHECK-FP16-NEXT:    csel x0, x8, x9, lo
-; CHECK-FP16-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-FP16-NEXT:    fcvtzu w0, h0
 ; CHECK-FP16-NEXT:    ret
 entry:
   %conv = fptoui half %x to i64
@@ -730,24 +670,12 @@ define i32 @ustest_f16i32_mm(half %x) {
 ; CHECK-CVT-LABEL: ustest_f16i32_mm:
 ; CHECK-CVT:       // %bb.0: // %entry
 ; CHECK-CVT-NEXT:    fcvt s0, h0
-; CHECK-CVT-NEXT:    mov w9, #-1
-; CHECK-CVT-NEXT:    fcvtzs x8, s0
-; CHECK-CVT-NEXT:    cmp x8, x9
-; CHECK-CVT-NEXT:    csel x8, x8, x9, lt
-; CHECK-CVT-NEXT:    cmp x8, #0
-; CHECK-CVT-NEXT:    csel x0, x8, xzr, gt
-; CHECK-CVT-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-CVT-NEXT:    fcvtzu w0, s0
 ; CHECK-CVT-NEXT:    ret
 ;
 ; CHECK-FP16-LABEL: ustest_f16i32_mm:
 ; CHECK-FP16:       // %bb.0: // %entry
-; CHECK-FP16-NEXT:    fcvtzs x8, h0
-; CHECK-FP16-NEXT:    mov w9, #-1
-; CHECK-FP16-NEXT:    cmp x8, x9
-; CHECK-FP16-NEXT:    csel x8, x8, x9, lt
-; CHECK-FP16-NEXT:    cmp x8, #0
-; CHECK-FP16-NEXT:    csel x0, x8, xzr, gt
-; CHECK-FP16-NEXT:    // kill: def $w0 killed $w0 killed $x0
+; CHECK-FP16-NEXT:    fcvtzu w0, h0
 ; CHECK-FP16-NEXT:    ret
 entry:
   %conv = fptosi half %x to i64

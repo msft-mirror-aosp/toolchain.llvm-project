@@ -4,11 +4,7 @@ add_flang_library(FortranLower
   CharacterExpr.cpp
   CharacterRuntime.cpp
   Coarray.cpp
-  ComplexExpr.cpp
   ConvertType.cpp
-  ConvertExpr.cpp
-  DoLoopHelper.cpp
-  FIRBuilder.cpp
   IntrinsicCall.cpp
   IO.cpp
   Mangler.cpp
@@ -18,12 +14,14 @@ add_flang_library(FortranLower
 
   DEPENDS
   FIRDialect
+  FIRBuilder
   FIRSupport
   FIRTransforms
   ${dialect_libs}
 
   LINK_LIBS
   FIRDialect
+  FIRBuilder
   FIRSupport
   FIRTransforms
   ${dialect_libs}

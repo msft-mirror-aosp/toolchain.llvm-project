@@ -18,7 +18,6 @@
 #include "AArch64RegisterInfo.h"
 #include "AArch64Subtarget.h"
 #include "AArch64TargetMachine.h"
-#include "AArch64GlobalISelUtils.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64MCTargetDesc.h"
 #include "llvm/ADT/Optional.h"
@@ -472,8 +471,8 @@ private:
 AArch64InstructionSelector::AArch64InstructionSelector(
     const AArch64TargetMachine &TM, const AArch64Subtarget &STI,
     const AArch64RegisterBankInfo &RBI)
-    : InstructionSelector(), TM(TM), STI(STI), TII(*STI.getInstrInfo()),
-      TRI(*STI.getRegisterInfo()), RBI(RBI),
+    : TM(TM), STI(STI), TII(*STI.getInstrInfo()), TRI(*STI.getRegisterInfo()),
+      RBI(RBI),
 #define GET_GLOBALISEL_PREDICATES_INIT
 #include "AArch64GenGlobalISel.inc"
 #undef GET_GLOBALISEL_PREDICATES_INIT
@@ -2934,8 +2933,8 @@ bool AArch64InstructionSelector::select(MachineInstr &I) {
       if (!SrcTy.isVector() && SrcTy.getSizeInBits() == 32 &&
           ShiftTy.getSizeInBits() == 64) {
         assert(!ShiftTy.isVector() && "unexpected vector shift ty");
-        auto *AmtMI = MRI.getVRegDef(ShiftReg);
-        assert(AmtMI && "could not find a vreg definition for shift amount");
+        assert(MRI.getVRegDef(ShiftReg) &&
+               "could not find a vreg definition for shift amount");
         // Insert a subregister copy to implement a 64->32 trunc
         auto Trunc = MIB.buildInstr(TargetOpcode::COPY, {SrcTy}, {})
                          .addReg(ShiftReg, 0, AArch64::sub_32);
@@ -3937,19 +3936,19 @@ static bool getLaneCopyOpcode(unsigned &CopyOpc, unsigned &ExtractSubReg,
   // vector's elements.
   switch (EltSize) {
   case 8:
-    CopyOpc = AArch64::CPYi8;
+    CopyOpc = AArch64::DUPi8;
     ExtractSubReg = AArch64::bsub;
     break;
   case 16:
-    CopyOpc = AArch64::CPYi16;
+    CopyOpc = AArch64::DUPi16;
     ExtractSubReg = AArch64::hsub;
     break;
   case 32:
-    CopyOpc = AArch64::CPYi32;
+    CopyOpc = AArch64::DUPi32;
     ExtractSubReg = AArch64::ssub;
     break;
   case 64:
-    CopyOpc = AArch64::CPYi64;
+    CopyOpc = AArch64::DUPi64;
     ExtractSubReg = AArch64::dsub;
     break;
   default:
@@ -5469,8 +5468,8 @@ bool AArch64InstructionSelector::selectIntrinsic(MachineInstr &I,
         // Insert the copy from LR/X30 into the entry block, before it can be
         // clobbered by anything.
         MFI.setReturnAddressIsTaken(true);
-        MFReturnAddr = getFunctionLiveInPhysReg(MF, TII, AArch64::LR,
-                                                AArch64::GPR64RegClass);
+        MFReturnAddr = getFunctionLiveInPhysReg(
+            MF, TII, AArch64::LR, AArch64::GPR64RegClass, I.getDebugLoc());
       }
 
       if (STI.hasPAuth()) {

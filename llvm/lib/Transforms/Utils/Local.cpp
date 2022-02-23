@@ -402,6 +402,18 @@ bool llvm::isInstructionTriviallyDead(Instruction *I,
   return wouldInstructionBeTriviallyDead(I, TLI);
 }
 
+bool llvm::wouldInstructionBeTriviallyDeadOnUnusedPaths(
+    Instruction *I, const TargetLibraryInfo *TLI) {
+  // Instructions that are "markers" and have implied meaning on code around
+  // them (without explicit uses), are not dead on unused paths.
+  if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I))
+    if (II->getIntrinsicID() == Intrinsic::stacksave ||
+        II->getIntrinsicID() == Intrinsic::launder_invariant_group ||
+        II->isLifetimeStartOrEnd())
+      return false;
+  return wouldInstructionBeTriviallyDead(I, TLI);
+}
+
 bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
                                            const TargetLibraryInfo *TLI) {
   if (I->isTerminator())
@@ -480,7 +492,7 @@ bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
     }
   }
 
-  if (isAllocLikeFn(I, TLI))
+  if (isAllocationFn(I, TLI) && isAllocRemovable(cast<CallBase>(I), TLI))
     return true;
 
   if (CallInst *CI = isFreeCall(I, TLI))
@@ -529,8 +541,8 @@ bool llvm::RecursivelyDeleteTriviallyDeadInstructionsPermissive(
     std::function<void(Value *)> AboutToDeleteCallback) {
   unsigned S = 0, E = DeadInsts.size(), Alive = 0;
   for (; S != E; ++S) {
-    auto *I = cast<Instruction>(DeadInsts[S]);
-    if (!isInstructionTriviallyDead(I)) {
+    auto *I = dyn_cast<Instruction>(DeadInsts[S]);
+    if (!I || !isInstructionTriviallyDead(I)) {
       DeadInsts[S] = nullptr;
       ++Alive;
     }
@@ -2177,8 +2189,8 @@ CallInst *llvm::createCallMatchingInvoke(InvokeInst *II) {
   return NewCall;
 }
 
-/// changeToCall - Convert the specified invoke into a normal call.
-void llvm::changeToCall(InvokeInst *II, DomTreeUpdater *DTU) {
+// changeToCall - Convert the specified invoke into a normal call.
+CallInst *llvm::changeToCall(InvokeInst *II, DomTreeUpdater *DTU) {
   CallInst *NewCall = createCallMatchingInvoke(II);
   NewCall->takeName(II);
   NewCall->insertBefore(II);
@@ -2195,6 +2207,7 @@ void llvm::changeToCall(InvokeInst *II, DomTreeUpdater *DTU) {
   II->eraseFromParent();
   if (DTU)
     DTU->applyUpdates({{DominatorTree::Delete, BB, UnwindDestBB}});
+  return NewCall;
 }
 
 BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
@@ -3135,11 +3148,6 @@ bool llvm::recognizeBSwapOrBitReverseIdiom(
   if (!ITy->isIntOrIntVectorTy() || ITy->getScalarSizeInBits() > 128)
     return false;  // Can't do integer/elements > 128 bits.
 
-  Type *DemandedTy = ITy;
-  if (I->hasOneUse())
-    if (auto *Trunc = dyn_cast<TruncInst>(I->user_back()))
-      DemandedTy = Trunc->getType();
-
   // Try to find all the pieces corresponding to the bswap.
   bool FoundRoot = false;
   std::map<Value *, Optional<BitPart>> BPS;
@@ -3153,6 +3161,7 @@ bool llvm::recognizeBSwapOrBitReverseIdiom(
          "Illegal bit provenance index");
 
   // If the upper bits are zero, then attempt to perform as a truncated op.
+  Type *DemandedTy = ITy;
   if (BitProvenance.back() == BitPart::Unset) {
     while (!BitProvenance.empty() && BitProvenance.back() == BitPart::Unset)
       BitProvenance = BitProvenance.drop_back();
