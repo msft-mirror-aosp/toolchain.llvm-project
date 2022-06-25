@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/Utils/QuantUtils.h"
 #include "mlir/Dialect/Tosa/Utils/ShapeUtils.h"
@@ -69,21 +68,6 @@ struct TosaInlinerInterface : public DialectInlinerInterface {
 /// Returns the while loop body.
 Region &tosa::WhileOp::getLoopBody() { return body(); }
 
-bool tosa::WhileOp::isDefinedOutsideOfLoop(Value value) {
-  return !body().isAncestor(value.getParentRegion());
-}
-
-LogicalResult WhileOp::moveOutOfLoop(ArrayRef<mlir::Operation *> ops) {
-  if (ops.empty())
-    return success();
-
-  Operation *tosaWhileOp = this->getOperation();
-  for (auto *op : ops)
-    op->moveBefore(tosaWhileOp);
-
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // Tosa dialect initialization.
 //===----------------------------------------------------------------------===//
@@ -131,7 +115,7 @@ struct ConcatOptimization : public OpRewritePattern<tosa::ConcatOp> {
 
 void ConcatOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                            MLIRContext *context) {
-  results.insert<ConcatOptimization>(context);
+  results.add<ConcatOptimization>(context);
 }
 
 struct ReshapeReshapeOptimization : public OpRewritePattern<tosa::ReshapeOp> {
@@ -189,8 +173,19 @@ struct ReshapeConstOptimization : public OpRewritePattern<tosa::ReshapeOp> {
 
 void ReshapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
-  results.insert<ReshapeReshapeOptimization>(context);
-  results.insert<ReshapeConstOptimization>(context);
+  results.add<ReshapeReshapeOptimization>(context);
+  results.add<ReshapeConstOptimization>(context);
+}
+
+LogicalResult SelectOp::canonicalize(SelectOp op, PatternRewriter &rewriter) {
+  auto notOp = op.pred().getDefiningOp<tosa::LogicalNotOp>();
+  if (!notOp)
+    return failure();
+  rewriter.updateRootInPlace(op, [&]() {
+    op.getOperation()->setOperands(
+        {notOp.input1(), op.on_false(), op.on_true()});
+  });
+  return success();
 }
 
 struct ConstantTransposeOptimization
@@ -286,8 +281,8 @@ struct NoOpOptimization : public OpRewritePattern<tosa::TransposeOp> {
 
 void TransposeOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
-  results.insert<ConstantTransposeOptimization>(context);
-  results.insert<NoOpOptimization>(context);
+  results.add<ConstantTransposeOptimization>(context);
+  results.add<NoOpOptimization>(context);
 }
 
 struct AddZeroOptimization : public OpRewritePattern<tosa::AddOp> {
@@ -324,7 +319,7 @@ struct AddZeroOptimization : public OpRewritePattern<tosa::AddOp> {
 
 void AddOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                         MLIRContext *context) {
-  results.insert<AddZeroOptimization>(context);
+  results.add<AddZeroOptimization>(context);
 }
 
 struct MulOneOptimization : public OpRewritePattern<tosa::MulOp> {
@@ -373,7 +368,7 @@ struct MulOneOptimization : public OpRewritePattern<tosa::MulOp> {
 
 void MulOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                         MLIRContext *context) {
-  results.insert<MulOneOptimization>(context);
+  results.add<MulOneOptimization>(context);
 }
 
 struct MaterializePadValue : public OpRewritePattern<tosa::PadOp> {
@@ -420,7 +415,7 @@ struct MaterializePadValue : public OpRewritePattern<tosa::PadOp> {
 
 void PadOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                         MLIRContext *context) {
-  results.insert<MaterializePadValue>(context);
+  results.add<MaterializePadValue>(context);
 }
 
 struct MaxPool2dIsNoOp : public OpRewritePattern<tosa::MaxPool2dOp> {
@@ -455,7 +450,7 @@ struct MaxPool2dIsNoOp : public OpRewritePattern<tosa::MaxPool2dOp> {
 
 void MaxPool2dOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
-  results.insert<MaxPool2dIsNoOp>(context);
+  results.add<MaxPool2dIsNoOp>(context);
 }
 
 struct ClampIsNoOp : public OpRewritePattern<tosa::ClampOp> {
@@ -538,17 +533,16 @@ struct ClampClampOptimization : public OpRewritePattern<tosa::ClampOp> {
       return failure();
 
     if (tosa::ClampOp clampOp = dyn_cast<tosa::ClampOp>(definingOp)) {
-      auto min_fp = std::max(op.min_fp(), clampOp.min_fp()).convertToFloat();
-      auto max_fp = std::min(op.max_fp(), clampOp.max_fp()).convertToFloat();
+      auto minFp = std::max(op.min_fp(), clampOp.min_fp()).convertToFloat();
+      auto maxFp = std::min(op.max_fp(), clampOp.max_fp()).convertToFloat();
 
-      auto min_int = std::max(op.min_int(), clampOp.min_int());
-      auto max_int = std::min(op.max_int(), clampOp.max_int());
+      auto minInt = std::max(op.min_int(), clampOp.min_int());
+      auto maxInt = std::min(op.max_int(), clampOp.max_int());
 
       rewriter.replaceOpWithNewOp<tosa::ClampOp>(
-          op, op.getType(), clampOp.input(),
-          rewriter.getI64IntegerAttr(min_int),
-          rewriter.getI64IntegerAttr(max_int), rewriter.getF32FloatAttr(min_fp),
-          rewriter.getF32FloatAttr(max_fp));
+          op, op.getType(), clampOp.input(), rewriter.getI64IntegerAttr(minInt),
+          rewriter.getI64IntegerAttr(maxInt), rewriter.getF32FloatAttr(minFp),
+          rewriter.getF32FloatAttr(maxFp));
       return success();
     }
 
@@ -558,8 +552,8 @@ struct ClampClampOptimization : public OpRewritePattern<tosa::ClampOp> {
 
 void ClampOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
-  results.insert<ClampIsNoOp>(context);
-  results.insert<ClampClampOptimization>(context);
+  results.add<ClampIsNoOp>(context);
+  results.add<ClampClampOptimization>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -577,7 +571,7 @@ OpFoldResult ConstOp::fold(ArrayRef<Attribute> operands) {
   return valueAttr();
 }
 
-#define ReduceFolder(OP)                                                       \
+#define REDUCE_FOLDER(OP)                                                      \
   OpFoldResult OP::fold(ArrayRef<Attribute> operands) {                        \
     ShapedType inputTy = input().getType().cast<ShapedType>();                 \
     if (!inputTy.hasRank())                                                    \
@@ -587,12 +581,15 @@ OpFoldResult ConstOp::fold(ArrayRef<Attribute> operands) {
     return {};                                                                 \
   }
 
-ReduceFolder(ReduceAllOp) ReduceFolder(ReduceAnyOp) ReduceFolder(ReduceMaxOp)
-    ReduceFolder(ReduceMinOp) ReduceFolder(ReduceProdOp)
-        ReduceFolder(ReduceSumOp)
-#undef ReduceFolder
+REDUCE_FOLDER(ReduceAllOp)
+REDUCE_FOLDER(ReduceAnyOp)
+REDUCE_FOLDER(ReduceMaxOp)
+REDUCE_FOLDER(ReduceMinOp)
+REDUCE_FOLDER(ReduceProdOp)
+REDUCE_FOLDER(ReduceSumOp)
+#undef REDUCE_FOLDER
 
-            OpFoldResult ReshapeOp::fold(ArrayRef<Attribute> operands) {
+OpFoldResult ReshapeOp::fold(ArrayRef<Attribute> operands) {
   auto inputTy = input1().getType().dyn_cast<RankedTensorType>();
   auto outputTy = getType().dyn_cast<RankedTensorType>();
 
@@ -623,6 +620,20 @@ OpFoldResult SliceOp::fold(ArrayRef<Attribute> operands) {
     return input();
 
   return {};
+}
+
+OpFoldResult tosa::SelectOp::fold(ArrayRef<Attribute> operands) {
+  if (on_true() == on_false())
+    return on_true();
+
+  auto predicate = operands[0].dyn_cast_or_null<DenseIntElementsAttr>();
+  if (!predicate)
+    return {};
+
+  if (!predicate.isSplat())
+    return {};
+  return predicate.getSplatValue<APInt>().getBoolValue() ? on_true()
+                                                         : on_false();
 }
 
 OpFoldResult TileOp::fold(ArrayRef<Attribute> operands) {
@@ -702,9 +713,9 @@ static LogicalResult verifyConvOp(T op) {
   return success();
 }
 
-static LogicalResult verifyAveragePoolOp(tosa::AvgPool2dOp op) {
-  auto inputETy = op.input().getType().cast<ShapedType>().getElementType();
-  auto resultETy = op.getType().cast<ShapedType>().getElementType();
+LogicalResult tosa::AvgPool2dOp::verify() {
+  auto inputETy = input().getType().cast<ShapedType>().getElementType();
+  auto resultETy = getType().cast<ShapedType>().getElementType();
 
   if (auto quantType = inputETy.dyn_cast<mlir::quant::UniformQuantizedType>())
     inputETy = quantType.getStorageType();
@@ -719,7 +730,7 @@ static LogicalResult verifyAveragePoolOp(tosa::AvgPool2dOp op) {
   if (inputETy.isInteger(16) && resultETy.isInteger(16))
     return success();
 
-  return op.emitOpError("input/output element types are incompatible.");
+  return emitOpError("input/output element types are incompatible.");
 }
 
 //===----------------------------------------------------------------------===//
@@ -1010,6 +1021,8 @@ LogicalResult tosa::FullyConnectedOp::inferReturnTypeComponents(
   inferredReturnShapes.push_back(ShapedTypeComponents(outShape));
   return success();
 }
+
+LogicalResult FullyConnectedOp::verify() { return verifyConvOp(*this); }
 
 LogicalResult tosa::MatMulOp::inferReturnTypeComponents(
     MLIRContext *context, ::llvm::Optional<Location> location,
@@ -1633,6 +1646,8 @@ LogicalResult Conv2DOp::inferReturnTypeComponents(
   return success();
 }
 
+LogicalResult Conv2DOp::verify() { return verifyConvOp(*this); }
+
 LogicalResult Conv3DOp::inferReturnTypeComponents(
     MLIRContext *context, ::llvm::Optional<Location> location,
     ValueShapeRange operands, DictionaryAttr attributes, RegionRange regions,
@@ -1708,6 +1723,8 @@ LogicalResult Conv3DOp::inferReturnTypeComponents(
   inferredReturnShapes.push_back(ShapedTypeComponents(outputShape));
   return success();
 }
+
+LogicalResult Conv3DOp::verify() { return verifyConvOp(*this); }
 
 LogicalResult AvgPool2dOp::inferReturnTypeComponents(
     MLIRContext *context, ::llvm::Optional<Location> location,
@@ -1800,6 +1817,8 @@ LogicalResult DepthwiseConv2DOp::inferReturnTypeComponents(
   inferredReturnShapes.push_back(ShapedTypeComponents(outputShape));
   return success();
 }
+
+LogicalResult DepthwiseConv2DOp::verify() { return verifyConvOp(*this); }
 
 LogicalResult TransposeConv2DOp::inferReturnTypeComponents(
     MLIRContext *context, ::llvm::Optional<Location> location,
@@ -1945,7 +1964,7 @@ LogicalResult WhileOp::inferReturnTypeComponents(
               resultKnowledge[index],
               ValueKnowledge::getKnowledgeFromType(it.value().getType()))) {
         resultKnowledge[index] = meet;
-      };
+      }
     }
   }
 

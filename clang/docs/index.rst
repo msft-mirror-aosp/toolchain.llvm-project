@@ -45,6 +45,7 @@ Using Clang as a Compiler
    OpenCLSupport
    OpenMPSupport
    SYCLSupport
+   HLSLSupport
    ThinLTO
    APINotes
    CommandGuide/index
@@ -82,6 +83,7 @@ Using Clang Tools
    ClangFormat
    ClangFormatStyleOptions
    ClangFormattedStatus
+   ClangLinkerWrapper
    ClangNvlinkWrapper
    ClangOffloadBundler
    ClangOffloadWrapper
@@ -94,6 +96,7 @@ Design Documents
 
    InternalsManual
    DriverInternals
+   OffloadingDesign
    PCHInternals
    ItaniumMangleAbiTags
    HardwareAssistedAddressSanitizerDesign.rst

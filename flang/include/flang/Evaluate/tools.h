@@ -417,6 +417,27 @@ const Symbol *UnwrapWholeSymbolOrComponentDataRef(const A &x) {
   return nullptr;
 }
 
+// If an expression is a whole symbol or a whole component designator,
+// potentially followed by an image selector, extract and return that symbol,
+// else null.
+template <typename A>
+const Symbol *UnwrapWholeSymbolOrComponentOrCoarrayRef(const A &x) {
+  if (auto dataRef{ExtractDataRef(x)}) {
+    if (const SymbolRef * p{std::get_if<SymbolRef>(&dataRef->u)}) {
+      return &p->get();
+    } else if (const Component * c{std::get_if<Component>(&dataRef->u)}) {
+      if (c->base().Rank() == 0) {
+        return &c->GetLastSymbol();
+      }
+    } else if (const CoarrayRef * c{std::get_if<CoarrayRef>(&dataRef->u)}) {
+      if (c->subscript().empty()) {
+        return &c->GetLastSymbol();
+      }
+    }
+  }
+  return nullptr;
+}
+
 // GetFirstSymbol(A%B%C[I]%D) -> A
 template <typename A> const Symbol *GetFirstSymbol(const A &x) {
   if (auto dataRef{ExtractDataRef(x, true)}) {
@@ -889,6 +910,12 @@ template <typename A> bool IsAllocatableOrPointer(const A &x) {
       semantics::Attrs{semantics::Attr::POINTER, semantics::Attr::ALLOCATABLE});
 }
 
+// Like IsAllocatableOrPointer, but accepts pointer function results as being
+// pointers.
+bool IsAllocatableOrPointerObject(const Expr<SomeType> &, FoldingContext &);
+
+bool IsAllocatableDesignator(const Expr<SomeType> &);
+
 // Procedure and pointer detection predicates
 bool IsProcedure(const Expr<SomeType> &);
 bool IsFunction(const Expr<SomeType> &);
@@ -896,6 +923,10 @@ bool IsProcedurePointerTarget(const Expr<SomeType> &);
 bool IsBareNullPointer(const Expr<SomeType> *); // NULL() w/o MOLD=
 bool IsNullPointer(const Expr<SomeType> &);
 bool IsObjectPointer(const Expr<SomeType> &, FoldingContext &);
+
+// Can Expr be passed as absent to an optional dummy argument.
+// See 15.5.2.12 point 1 for more details.
+bool MayBePassedAsAbsentOptional(const Expr<SomeType> &, FoldingContext &);
 
 // Extracts the chain of symbols from a designator, which has perhaps been
 // wrapped in an Expr<>, removing all of the (co)subscripts.  The
@@ -1097,6 +1128,11 @@ bool AreTypeParamCompatible(
 
 const Symbol &GetUsedModule(const UseDetails &);
 const Symbol *FindFunctionResult(const Symbol &);
+
+// Type compatibility predicate: are x and y effectively the same type?
+// Uses DynamicType::IsTkCompatible(), which handles the case of distinct
+// but identical derived types.
+bool AreTkCompatibleTypes(const DeclTypeSpec *x, const DeclTypeSpec *y);
 
 } // namespace Fortran::semantics
 

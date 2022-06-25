@@ -13,8 +13,8 @@
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/SCF.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -147,8 +147,8 @@ FailureOr<FuncOp> mlir::outlineSingleBlockRegion(RewriterBase &rewriter,
         outlinedFuncBlockArgs.take_front(numOriginalBlockArguments));
     // Explicitly set up a new ReturnOp terminator.
     rewriter.setInsertionPointToEnd(outlinedFuncBody);
-    rewriter.create<ReturnOp>(loc, originalTerminator->getResultTypes(),
-                              originalTerminator->getOperands());
+    rewriter.create<func::ReturnOp>(loc, originalTerminator->getResultTypes(),
+                                    originalTerminator->getOperands());
   }
 
   // Reconstruct the block that was deleted and add a
@@ -164,7 +164,8 @@ FailureOr<FuncOp> mlir::outlineSingleBlockRegion(RewriterBase &rewriter,
     SmallVector<Value> callValues;
     llvm::append_range(callValues, newBlock->getArguments());
     llvm::append_range(callValues, outlinedValues);
-    Operation *call = rewriter.create<CallOp>(loc, outlinedFunc, callValues);
+    Operation *call =
+        rewriter.create<func::CallOp>(loc, outlinedFunc, callValues);
 
     // `originalTerminator` was moved to `outlinedFuncBody` and is still valid.
     // Clone `originalTerminator` to take the callOp results then erase it from
@@ -808,8 +809,8 @@ static Loops stripmineSink(scf::ForOp forOp, Value factor,
     Value stepped = b.create<arith::AddIOp>(t.getLoc(), iv, forOp.getStep());
     Value less = b.create<arith::CmpIOp>(t.getLoc(), arith::CmpIPredicate::slt,
                                          forOp.getUpperBound(), stepped);
-    Value ub =
-        b.create<SelectOp>(t.getLoc(), less, forOp.getUpperBound(), stepped);
+    Value ub = b.create<arith::SelectOp>(t.getLoc(), less,
+                                         forOp.getUpperBound(), stepped);
 
     // Splice [begin, begin + nOps - 1) into `newForOp` and replace uses.
     auto newForOp = b.create<scf::ForOp>(t.getLoc(), iv, ub, originalStep);

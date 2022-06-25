@@ -84,6 +84,7 @@ def ThrdTType : NamedType<"thrd_t">;
 def ThrdTTypePtr : PtrType<ThrdTType>;
 
 def IntPtr : PtrType<IntType>;
+def RestrictedIntPtr : RestrictedPtrType<IntType>;
 def FloatPtr : PtrType<FloatType>;
 def DoublePtr : PtrType<DoubleType>;
 
@@ -93,6 +94,8 @@ def TimeTType : NamedType<"time_t">;
 
 def BSearchCompareT : NamedType<"__bsearchcompare_t">;
 def QSortCompareT : NamedType<"__qsortcompare_t">;
+
+def AtexitHandlerT : NamedType<"__atexithandler_t">;
 
 //added because __assert_fail needs it.
 def UnsignedType : NamedType<"unsigned">;

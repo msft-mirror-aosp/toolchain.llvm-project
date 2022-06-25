@@ -29,6 +29,7 @@
 #include "lldb/Symbol/SymbolVendor.h"
 #include "lldb/Symbol/Variable.h"
 #include "lldb/Symbol/VariableList.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
@@ -79,6 +80,8 @@ static lldb::LanguageType TranslateLanguage(PDB_Lang lang) {
     return lldb::LanguageType::eLanguageTypeC;
   case PDB_Lang::Swift:
     return lldb::LanguageType::eLanguageTypeSwift;
+  case PDB_Lang::Rust:
+    return lldb::LanguageType::eLanguageTypeRust;
   default:
     return lldb::LanguageType::eLanguageTypeUnknown;
   }
@@ -170,6 +173,8 @@ static llvm::StringRef GetSimpleTypeName(SimpleTypeKind kind) {
     return "char16_t";
   case SimpleTypeKind::Character32:
     return "char32_t";
+  case SimpleTypeKind::Character8:
+    return "char8_t";
   case SimpleTypeKind::Complex80:
   case SimpleTypeKind::Complex64:
   case SimpleTypeKind::Complex32:
@@ -302,8 +307,8 @@ void SymbolFileNativePDB::InitializeObject() {
   auto ts_or_err = m_objfile_sp->GetModule()->GetTypeSystemForLanguage(
       lldb::eLanguageTypeC_plus_plus);
   if (auto err = ts_or_err.takeError()) {
-    LLDB_LOG_ERROR(lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_SYMBOLS),
-                   std::move(err), "Failed to initialize");
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Symbols), std::move(err),
+                   "Failed to initialize");
   } else {
     ts_or_err->SetSymbolFile(this);
     auto *clang = llvm::cast_or_null<TypeSystemClang>(&ts_or_err.get());
@@ -367,7 +372,7 @@ Block &SymbolFileNativePDB::CreateBlock(PdbCompilandSymId block_id) {
     std::shared_ptr<InlineSite> inline_site = m_inline_sites[opaque_block_uid];
     Block &parent_block = GetOrCreateBlock(inline_site->parent_id);
     parent_block.AddChild(child_block);
-
+    m_ast->GetOrCreateInlinedFunctionDecl(block_id);
     // Copy ranges from InlineSite to Block.
     for (size_t i = 0; i < inline_site->ranges.GetSize(); ++i) {
       auto *entry = inline_site->ranges.GetEntryAtIndex(i);
@@ -1118,8 +1123,13 @@ bool SymbolFileNativePDB::ParseLineTable(CompileUnit &comp_unit) {
 
         uint32_t lno = cur_info.getStartLine();
 
-        line_set.emplace(addr, lno, 0, file_index, is_statement, false,
-                         is_prologue, is_epilogue, false);
+        LineTable::Entry new_entry(addr, lno, 0, file_index, is_statement, false,
+                                 is_prologue, is_epilogue, false);
+        // Terminal entry has lower precedence than new entry.
+        auto iter = line_set.find(new_entry);
+        if (iter != line_set.end() && iter->is_terminal_entry)
+          line_set.erase(iter);
+        line_set.insert(new_entry);
 
         if (line_entry.GetRangeBase() != LLDB_INVALID_ADDRESS) {
           line_entry.SetRangeEnd(addr);
@@ -1655,6 +1665,7 @@ VariableSP SymbolFileNativePDB::CreateLocalVariable(PdbCompilandSymId scope_id,
   SymbolFileTypeSP sftype =
       std::make_shared<SymbolFileType>(*this, type_sp->GetID());
 
+  is_param |= var_info.is_param;
   ValueType var_scope =
       is_param ? eValueTypeVariableArgument : eValueTypeVariableLocal;
   bool external = false;
@@ -1663,7 +1674,7 @@ VariableSP SymbolFileNativePDB::CreateLocalVariable(PdbCompilandSymId scope_id,
   bool static_member = false;
   VariableSP var_sp = std::make_shared<Variable>(
       toOpaqueUid(var_id), name.c_str(), name.c_str(), sftype, var_scope,
-      comp_unit_sp.get(), *var_info.ranges, &decl, *var_info.location, external,
+      &block, *var_info.ranges, &decl, *var_info.location, external,
       artificial, location_is_constant_data, static_member);
 
   if (!is_param)
@@ -1731,8 +1742,7 @@ size_t SymbolFileNativePDB::ParseVariablesForBlock(PdbCompilandSymId block_id) {
   case S_BLOCK32:
     break;
   case S_INLINESITE:
-    // TODO: Handle inline site case.
-    return 0;
+    break;
   default:
     lldbassert(false && "Symbol is not a block!");
     return 0;
@@ -1759,8 +1769,10 @@ size_t SymbolFileNativePDB::ParseVariablesForBlock(PdbCompilandSymId block_id) {
     PdbCompilandSymId child_sym_id(block_id.modi, record_offset);
     ++iter;
 
-    // If this is a block, recurse into its children and then skip it.
-    if (variable_cvs.kind() == S_BLOCK32) {
+    // If this is a block or inline site, recurse into its children and then
+    // skip it.
+    if (variable_cvs.kind() == S_BLOCK32 ||
+        variable_cvs.kind() == S_INLINESITE) {
       uint32_t block_end = getScopeEndOffset(variable_cvs);
       count += ParseVariablesForBlock(child_sym_id);
       iter = syms.at(block_end);

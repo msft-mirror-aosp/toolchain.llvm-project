@@ -9,6 +9,7 @@
 #include "Annotations.h"
 #include "IncludeCleaner.h"
 #include "SourceCode.h"
+#include "TestFS.h"
 #include "TestTU.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Testing/Support/SupportHelpers.h"
@@ -84,6 +85,19 @@ TEST(IncludeCleaner, ReferencedLocations) {
       {
           "typedef bool ^Y; template <typename T> struct ^X {};",
           "X<Y> x;",
+      },
+      {
+          // https://github.com/clangd/clangd/issues/1036
+          R"cpp(
+            struct ^Base { void ^base(); };
+            template <int> struct ^Derived : Base {};
+          )cpp",
+          R"cpp(
+            class Holder {
+              void foo() { Member.base(); }
+              Derived<0> Member;
+            };
+          )cpp",
       },
       {
           "struct Foo; struct ^Foo{}; typedef Foo ^Bar;",
@@ -206,7 +220,8 @@ TEST(IncludeCleaner, ReferencedLocations) {
       {
           "enum class ^Color : char {};",
           "Color *c;",
-      }};
+      },
+  };
   for (const TestCase &T : Cases) {
     TestTU TU;
     TU.Code = T.MainCode;
@@ -250,29 +265,30 @@ TEST(IncludeCleaner, Stdlib) {
   for (const auto &Test : Tests) {
     TU.Code = Test.Code.str();
     ParsedAST AST = TU.build();
-    std::vector<stdlib::Symbol> WantSyms;
+    std::vector<tooling::stdlib::Symbol> WantSyms;
     for (const auto &SymName : Test.Symbols) {
       auto QName = splitQualifiedName(SymName);
-      auto Sym = stdlib::Symbol::named(QName.first, QName.second);
+      auto Sym = tooling::stdlib::Symbol::named(QName.first, QName.second);
       EXPECT_TRUE(Sym) << SymName;
       WantSyms.push_back(*Sym);
     }
-    std::vector<stdlib::Header> WantHeaders;
+    std::vector<tooling::stdlib::Header> WantHeaders;
     for (const auto &HeaderName : Test.Headers) {
-      auto Header = stdlib::Header::named(HeaderName);
+      auto Header = tooling::stdlib::Header::named(HeaderName);
       EXPECT_TRUE(Header) << HeaderName;
       WantHeaders.push_back(*Header);
     }
 
     ReferencedLocations Locs = findReferencedLocations(AST);
     EXPECT_THAT(Locs.Stdlib, ElementsAreArray(WantSyms));
-    ReferencedFiles Files = findReferencedFiles(Locs, AST.getIncludeStructure(),
-                                                AST.getSourceManager());
+    ReferencedFiles Files =
+        findReferencedFiles(Locs, AST.getIncludeStructure(),
+                            AST.getCanonicalIncludes(), AST.getSourceManager());
     EXPECT_THAT(Files.Stdlib, ElementsAreArray(WantHeaders));
   }
 }
 
-MATCHER_P(WrittenInclusion, Written, "") {
+MATCHER_P(writtenInclusion, Written, "") {
   if (arg.Written != Written)
     *result_listener << arg.Written;
   return arg.Written == Written;
@@ -302,7 +318,7 @@ TEST(IncludeCleaner, StdlibUnused) {
   auto AST = TU.build();
 
   auto Unused = computeUnusedIncludes(AST);
-  EXPECT_THAT(Unused, ElementsAre(Pointee(WrittenInclusion("<queue>"))));
+  EXPECT_THAT(Unused, ElementsAre(Pointee(writtenInclusion("<queue>"))));
 }
 
 TEST(IncludeCleaner, GetUnusedHeaders) {
@@ -378,8 +394,8 @@ TEST(IncludeCleaner, VirtualBuffers) {
   auto &SM = AST.getSourceManager();
   auto &Includes = AST.getIncludeStructure();
 
-  auto ReferencedFiles =
-      findReferencedFiles(findReferencedLocations(AST), Includes, SM);
+  auto ReferencedFiles = findReferencedFiles(
+      findReferencedLocations(AST), Includes, AST.getCanonicalIncludes(), SM);
   llvm::StringSet<> ReferencedFileNames;
   for (FileID FID : ReferencedFiles.User)
     ReferencedFileNames.insert(
@@ -398,7 +414,9 @@ TEST(IncludeCleaner, VirtualBuffers) {
   EXPECT_THAT(ReferencedHeaderNames, ElementsAre(testPath("macros.h")));
 
   // Sanity check.
-  EXPECT_THAT(getUnused(AST, ReferencedHeaders), IsEmpty());
+  EXPECT_THAT(
+      getUnused(AST, ReferencedHeaders, ReferencedFiles.SpelledUmbrellas),
+      IsEmpty());
 }
 
 TEST(IncludeCleaner, DistinctUnguardedInclusions) {
@@ -427,9 +445,9 @@ TEST(IncludeCleaner, DistinctUnguardedInclusions) {
 
   ParsedAST AST = TU.build();
 
-  auto ReferencedFiles =
-      findReferencedFiles(findReferencedLocations(AST),
-                          AST.getIncludeStructure(), AST.getSourceManager());
+  auto ReferencedFiles = findReferencedFiles(
+      findReferencedLocations(AST), AST.getIncludeStructure(),
+      AST.getCanonicalIncludes(), AST.getSourceManager());
   llvm::StringSet<> ReferencedFileNames;
   auto &SM = AST.getSourceManager();
   for (FileID FID : ReferencedFiles.User)
@@ -461,9 +479,9 @@ TEST(IncludeCleaner, NonSelfContainedHeaders) {
 
   ParsedAST AST = TU.build();
 
-  auto ReferencedFiles =
-      findReferencedFiles(findReferencedLocations(AST),
-                          AST.getIncludeStructure(), AST.getSourceManager());
+  auto ReferencedFiles = findReferencedFiles(
+      findReferencedLocations(AST), AST.getIncludeStructure(),
+      AST.getCanonicalIncludes(), AST.getSourceManager());
   llvm::StringSet<> ReferencedFileNames;
   auto &SM = AST.getSourceManager();
   for (FileID FID : ReferencedFiles.User)
@@ -479,15 +497,31 @@ TEST(IncludeCleaner, IWYUPragmas) {
   TestTU TU;
   TU.Code = R"cpp(
     #include "behind_keep.h" // IWYU pragma: keep
+    #include "public.h"
+
+    void bar() { foo(); }
     )cpp";
   TU.AdditionalFiles["behind_keep.h"] = guard("");
+  TU.AdditionalFiles["public.h"] = guard("#include \"private.h\"");
+  TU.AdditionalFiles["private.h"] = guard(R"cpp(
+    // IWYU pragma: private, include "public.h"
+    void foo() {}
+  )cpp");
   ParsedAST AST = TU.build();
 
-  auto ReferencedFiles =
-      findReferencedFiles(findReferencedLocations(AST),
-                          AST.getIncludeStructure(), AST.getSourceManager());
-  EXPECT_TRUE(ReferencedFiles.User.empty());
+  auto ReferencedFiles = findReferencedFiles(
+      findReferencedLocations(AST), AST.getIncludeStructure(),
+      AST.getCanonicalIncludes(), AST.getSourceManager());
+  EXPECT_EQ(ReferencedFiles.SpelledUmbrellas.size(), 1u);
+  EXPECT_EQ(ReferencedFiles.SpelledUmbrellas.begin()->getKey(), "\"public.h\"");
+  EXPECT_EQ(ReferencedFiles.User.size(), 2u);
+  EXPECT_TRUE(
+      ReferencedFiles.User.contains(AST.getSourceManager().getMainFileID()));
+  EXPECT_TRUE(
+      ReferencedFiles.User.contains(AST.getSourceManager().getMainFileID()));
   EXPECT_THAT(AST.getDiagnostics(), llvm::ValueIs(IsEmpty()));
+  auto Unused = computeUnusedIncludes(AST);
+  EXPECT_THAT(Unused, IsEmpty());
 }
 
 } // namespace

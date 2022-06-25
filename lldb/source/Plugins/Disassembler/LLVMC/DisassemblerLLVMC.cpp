@@ -36,6 +36,7 @@
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegularExpression.h"
 #include "lldb/Utility/Stream.h"
@@ -89,8 +90,7 @@ public:
                    AddressClass addr_class)
       : Instruction(address, addr_class),
         m_disasm_wp(std::static_pointer_cast<DisassemblerLLVMC>(
-            disasm.shared_from_this())),
-        m_using_file_addr(false) {}
+            disasm.shared_from_this())) {}
 
   ~InstructionLLVMC() override = default;
 
@@ -795,8 +795,7 @@ public:
       }
     }
 
-    if (Log *log =
-            lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS)) {
+    if (Log *log = GetLog(LLDBLog::Process)) {
       StreamString ss;
 
       ss.Printf("[%s] expands to %zu operands:\n", operands_string,
@@ -822,7 +821,7 @@ protected:
   std::weak_ptr<DisassemblerLLVMC> m_disasm_wp;
 
   bool m_is_valid = false;
-  bool m_using_file_addr;
+  bool m_using_file_addr = false;
   bool m_has_visited_instruction = false;
 
   // Be conservative. If we didn't understand the instruction, say it:
@@ -1181,10 +1180,30 @@ DisassemblerLLVMC::DisassemblerLLVMC(const ArchSpec &arch,
   // If any AArch64 variant, enable latest ISA with any optional
   // extensions like MTE.
   if (triple.isAArch64()) {
-    features_str += "+v9.3a,+mte";
+    features_str += "+v9.3a,+mte,+sm4,+sha2,+sha3,+aes,+fp16fml,+sve2-aes,+"
+                    "sve2-sm4,+sve2-sha3,+sve2-bitperm,+f32mm,+f64mm,+tme,+"
+                    "ls64,+sme,+sme-f64,+sme-i64,+spe,+rand,+brbe";
 
     if (triple.getVendor() == llvm::Triple::Apple)
       cpu = "apple-latest";
+  }
+
+  if (triple.isRISCV()) {
+    uint32_t arch_flags = arch.GetFlags();
+    if (arch_flags & ArchSpec::eRISCV_rvc)
+      features_str += "+c,";
+    if (arch_flags & ArchSpec::eRISCV_rve)
+      features_str += "+e,";
+    if ((arch_flags & ArchSpec::eRISCV_float_abi_single) ==
+        ArchSpec::eRISCV_float_abi_single)
+      features_str += "+f,";
+    if ((arch_flags & ArchSpec::eRISCV_float_abi_double) ==
+        ArchSpec::eRISCV_float_abi_double)
+      features_str += "+f,+d,";
+    if ((arch_flags & ArchSpec::eRISCV_float_abi_quad) ==
+        ArchSpec::eRISCV_float_abi_quad)
+      features_str += "+f,+d,+q,";
+    // FIXME: how do we detect features such as `+a`, `+m`?
   }
 
   // We use m_disasm_up.get() to tell whether we are valid or not, so if this

@@ -333,7 +333,13 @@ INSTANTIATE_TEST_SUITE_P(
                          ARM::AEK_RAS | ARM::AEK_FP16 | ARM::AEK_DOTPROD |
                              ARM::AEK_SEC | ARM::AEK_MP | ARM::AEK_VIRT |
                              ARM::AEK_HWDIVARM | ARM::AEK_HWDIVTHUMB |
-                             ARM::AEK_DSP | ARM::AEK_CRC | ARM::AEK_RAS,
+                             ARM::AEK_DSP | ARM::AEK_CRC,
+                         "8.2-A"),
+        ARMCPUTestParams("cortex-x1c", "armv8.2-a", "crypto-neon-fp-armv8",
+                         ARM::AEK_RAS | ARM::AEK_FP16 | ARM::AEK_DOTPROD |
+                             ARM::AEK_SEC | ARM::AEK_MP | ARM::AEK_VIRT |
+                             ARM::AEK_HWDIVARM | ARM::AEK_HWDIVTHUMB |
+                             ARM::AEK_DSP | ARM::AEK_CRC,
                          "8.2-A"),
         ARMCPUTestParams("neoverse-n1", "armv8.2-a", "crypto-neon-fp-armv8",
                          ARM::AEK_CRC | ARM::AEK_SEC | ARM::AEK_MP |
@@ -394,7 +400,7 @@ INSTANTIATE_TEST_SUITE_P(
                          ARM::AEK_HWDIVARM | ARM::AEK_HWDIVTHUMB | ARM::AEK_DSP,
                          "7-S")));
 
-static constexpr unsigned NumARMCPUArchs = 87;
+static constexpr unsigned NumARMCPUArchs = 88;
 
 TEST(TargetParserTest, testARMCPUArchList) {
   SmallVector<StringRef, NumARMCPUArchs> List;
@@ -990,7 +996,7 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_SIMD | AArch64::AEK_RAS |
                              AArch64::AEK_LSE | AArch64::AEK_FP16 |
                              AArch64::AEK_DOTPROD | AArch64::AEK_RCPC |
-                             AArch64::AEK_SSBS,
+                             AArch64::AEK_SSBS | AArch64::AEK_PROFILE,
                          "8.2-A"),
         ARMCPUTestParams("cortex-a78c", "armv8.2-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_RAS | AArch64::AEK_CRC |
@@ -998,7 +1004,9 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_SIMD | AArch64::AEK_RAS |
                              AArch64::AEK_LSE | AArch64::AEK_RDM |
                              AArch64::AEK_FP16 | AArch64::AEK_DOTPROD |
-                             AArch64::AEK_RCPC | AArch64::AEK_SSBS,
+                             AArch64::AEK_RCPC | AArch64::AEK_SSBS |
+                             AArch64::AEK_PROFILE | AArch64::AEK_FLAGM |
+                             AArch64::AEK_PAUTH | AArch64::AEK_FP16FML,
                          "8.2-A"),
         ARMCPUTestParams("cortex-a710", "armv9-a", "neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_FP |
@@ -1017,7 +1025,9 @@ INSTANTIATE_TEST_SUITE_P(
                 AArch64::AEK_RCPC | AArch64::AEK_CRC | AArch64::AEK_FP |
                 AArch64::AEK_SIMD | AArch64::AEK_RAS | AArch64::AEK_LSE |
                 AArch64::AEK_RDM | AArch64::AEK_RCPC | AArch64::AEK_DOTPROD |
-                AArch64::AEK_CRYPTO | AArch64::AEK_FP16 | AArch64::AEK_BF16,
+                AArch64::AEK_CRYPTO | AArch64::AEK_FP16 | AArch64::AEK_BF16 |
+                AArch64::AEK_PROFILE | AArch64::AEK_RAND |
+                AArch64::AEK_FP16FML | AArch64::AEK_I8MM,
             "8.4-A"),
         ARMCPUTestParams("cortex-r82", "armv8-r", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_RDM |
@@ -1033,7 +1043,16 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_SIMD | AArch64::AEK_RAS |
                              AArch64::AEK_LSE | AArch64::AEK_FP16 |
                              AArch64::AEK_DOTPROD | AArch64::AEK_RCPC |
-                             AArch64::AEK_SSBS,
+                             AArch64::AEK_SSBS | AArch64::AEK_PROFILE,
+                         "8.2-A"),
+        ARMCPUTestParams("cortex-x1c", "armv8.2-a", "crypto-neon-fp-armv8",
+                         AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
+                             AArch64::AEK_FP | AArch64::AEK_RDM |
+                             AArch64::AEK_SIMD | AArch64::AEK_RAS |
+                             AArch64::AEK_LSE | AArch64::AEK_FP16 |
+                             AArch64::AEK_DOTPROD | AArch64::AEK_RCPC |
+                             AArch64::AEK_SSBS | AArch64::AEK_PAUTH |
+                             AArch64::AEK_PROFILE,
                          "8.2-A"),
         ARMCPUTestParams("cortex-x2", "armv9-a", "neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_FP |
@@ -1086,7 +1105,7 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_LSE | AArch64::AEK_RAS |
                              AArch64::AEK_RDM | AArch64::AEK_RCPC |
                              AArch64::AEK_DOTPROD | AArch64::AEK_FP16 |
-                             AArch64::AEK_FP16FML,
+                             AArch64::AEK_FP16FML | AArch64::AEK_SHA3,
                          "8.4-A"),
         ARMCPUTestParams("apple-a14", "armv8.5-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
@@ -1094,7 +1113,7 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_LSE | AArch64::AEK_RAS |
                              AArch64::AEK_RDM | AArch64::AEK_RCPC |
                              AArch64::AEK_DOTPROD | AArch64::AEK_FP16 |
-                             AArch64::AEK_FP16FML,
+                             AArch64::AEK_FP16FML | AArch64::AEK_SHA3,
                          "8.5-A"),
         ARMCPUTestParams("apple-m1", "armv8.5-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
@@ -1102,7 +1121,7 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_LSE | AArch64::AEK_RAS |
                              AArch64::AEK_RDM | AArch64::AEK_RCPC |
                              AArch64::AEK_DOTPROD | AArch64::AEK_FP16 |
-                             AArch64::AEK_FP16FML,
+                             AArch64::AEK_FP16FML | AArch64::AEK_SHA3,
                          "8.5-A"),
         ARMCPUTestParams("apple-s4", "armv8.3-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
@@ -1178,7 +1197,9 @@ INSTANTIATE_TEST_SUITE_P(
                 AArch64::AEK_RCPC | AArch64::AEK_CRC | AArch64::AEK_FP |
                 AArch64::AEK_SIMD | AArch64::AEK_RAS | AArch64::AEK_LSE |
                 AArch64::AEK_RDM | AArch64::AEK_RCPC | AArch64::AEK_DOTPROD |
-                AArch64::AEK_CRYPTO | AArch64::AEK_FP16 | AArch64::AEK_BF16,
+                AArch64::AEK_CRYPTO | AArch64::AEK_FP16 | AArch64::AEK_BF16 |
+                AArch64::AEK_PROFILE | AArch64::AEK_RAND |
+                AArch64::AEK_FP16FML | AArch64::AEK_I8MM,
             "8.4-A"),
         ARMCPUTestParams("thunderx2t99", "armv8.1-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_NONE | AArch64::AEK_CRC |
@@ -1187,31 +1208,27 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_SIMD,
                          "8.1-A"),
         ARMCPUTestParams("thunderx3t110", "armv8.3-a", "crypto-neon-fp-armv8",
-                         AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
-                             AArch64::AEK_LSE | AArch64::AEK_RDM |
-                             AArch64::AEK_FP | AArch64::AEK_SIMD |
-                             AArch64::AEK_PROFILE | AArch64::AEK_RAS |
-                             AArch64::AEK_RAND | AArch64::AEK_RCPC,
+                         AArch64::AEK_NONE | AArch64::AEK_CRC |
+                             AArch64::AEK_CRYPTO | AArch64::AEK_LSE |
+                             AArch64::AEK_RDM | AArch64::AEK_FP |
+                             AArch64::AEK_SIMD | AArch64::AEK_RAS |
+                             AArch64::AEK_RCPC,
                          "8.3-A"),
         ARMCPUTestParams("thunderx", "armv8-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
-                             AArch64::AEK_SIMD | AArch64::AEK_FP |
-                             AArch64::AEK_PROFILE,
+                             AArch64::AEK_SIMD | AArch64::AEK_FP,
                          "8-A"),
         ARMCPUTestParams("thunderxt81", "armv8-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
-                             AArch64::AEK_SIMD | AArch64::AEK_FP |
-                             AArch64::AEK_PROFILE,
+                             AArch64::AEK_SIMD | AArch64::AEK_FP,
                          "8-A"),
         ARMCPUTestParams("thunderxt83", "armv8-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
-                             AArch64::AEK_SIMD | AArch64::AEK_FP |
-                             AArch64::AEK_PROFILE,
+                             AArch64::AEK_SIMD | AArch64::AEK_FP,
                          "8-A"),
         ARMCPUTestParams("thunderxt88", "armv8-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
-                             AArch64::AEK_SIMD | AArch64::AEK_FP |
-                             AArch64::AEK_PROFILE,
+                             AArch64::AEK_SIMD | AArch64::AEK_FP,
                          "8-A"),
         ARMCPUTestParams("tsv110", "armv8.2-a", "crypto-neon-fp-armv8",
                          AArch64::AEK_CRC | AArch64::AEK_CRYPTO |
@@ -1235,7 +1252,7 @@ INSTANTIATE_TEST_SUITE_P(
                              AArch64::AEK_LSE | AArch64::AEK_RDM,
                          "8.2-A")));
 
-static constexpr unsigned NumAArch64CPUArchs = 52;
+static constexpr unsigned NumAArch64CPUArchs = 53;
 
 TEST(TargetParserTest, testAArch64CPUArchList) {
   SmallVector<StringRef, NumAArch64CPUArchs> List;

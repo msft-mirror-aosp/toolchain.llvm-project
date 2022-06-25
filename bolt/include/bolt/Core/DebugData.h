@@ -490,11 +490,13 @@ public:
     PatchBaseClass,
     PatchValue32,
     PatchValue64to32,
+    PatchValue32GenericSize,
     PatchValue64,
     PatchValueVariable,
     ReferencePatchValue,
     DWARFUnitOffsetBaseLabel,
-    DestinationReferenceLabel
+    DestinationReferenceLabel,
+    NewDebugEntry
   };
 
   struct Patch {
@@ -533,6 +535,22 @@ public:
       return Writer->getKind() == DebugPatchKind::PatchValue32;
     }
     uint32_t Value;
+  };
+
+  /// Patch for 4 byte entry, where original entry size is not 4 bytes or 8
+  /// bytes.
+  struct DebugPatch32GenericSize : public Patch {
+    DebugPatch32GenericSize(uint32_t O, uint32_t V, uint32_t OVS)
+        : Patch(O, DebugPatchKind::PatchValue32GenericSize) {
+      Value = V;
+      OldValueSize = OVS;
+    }
+
+    static bool classof(const Patch *Writer) {
+      return Writer->getKind() == DebugPatchKind::PatchValue32GenericSize;
+    }
+    uint32_t Value;
+    uint32_t OldValueSize;
   };
 
   struct DebugPatch64 : public Patch {
@@ -605,6 +623,22 @@ public:
     }
   };
 
+  struct NewDebugEntry : public Patch {
+    NewDebugEntry() = delete;
+    NewDebugEntry(uint32_t O, std::string &&V)
+        : Patch(O, DebugPatchKind::NewDebugEntry) {
+      CurrentOrder = NewDebugEntry::OrderCounter++;
+      Value = std::move(V);
+    }
+
+    static bool classof(const Patch *Writer) {
+      return Writer->getKind() == DebugPatchKind::NewDebugEntry;
+    }
+    static uint32_t OrderCounter;
+    uint32_t CurrentOrder;
+    std::string Value;
+  };
+
   virtual PatcherKind getKind() const override {
     return PatcherKind::DebugInfoBinaryPatcher;
   }
@@ -646,6 +680,12 @@ public:
   void addReferenceToPatch(uint64_t Offset, uint32_t DestinationOffset,
                            uint32_t OldValueSize, dwarf::Form Form);
 
+  /// Inserts a new uint32_t \p Value at the end of \p DIE .
+  void insertNewEntry(const DWARFDie &DIE, uint32_t);
+
+  /// Inserts a new encoded \p Value at the end of \p DIE .
+  void insertNewEntry(const DWARFDie &DIE, std::string &&Value);
+
   /// Clears unordered set for DestinationLabels.
   void clearDestinationLabels() { DestinationLabels.clear(); }
 
@@ -670,6 +710,9 @@ private:
       case DebugPatchKind::PatchValue64to32:
         delete reinterpret_cast<DebugPatch64to32 *>(P);
         break;
+      case DebugPatchKind::PatchValue32GenericSize:
+        delete reinterpret_cast<DebugPatch32GenericSize *>(P);
+        break;
       case DebugPatchKind::PatchValue64:
         delete reinterpret_cast<DebugPatch64 *>(P);
         break;
@@ -684,6 +727,9 @@ private:
         break;
       case DebugPatchKind::DestinationReferenceLabel:
         delete reinterpret_cast<DestinationReferenceLabel *>(P);
+        break;
+      case DebugPatchKind::NewDebugEntry:
+        delete reinterpret_cast<NewDebugEntry *>(P);
         break;
       }
     }
@@ -715,8 +761,11 @@ class DebugAbbrevWriter {
     std::unique_ptr<DebugBufferVector> Buffer;
     std::unique_ptr<raw_svector_ostream> Stream;
   };
-  /// Map original unit abbrev offset to abbreviations data.
-  std::map<uint64_t, AbbrevData> UnitsAbbrevData;
+  /// Map original unit to abbreviations data.
+  std::unordered_map<const DWARFUnit *, AbbrevData *> UnitsAbbrevData;
+
+  /// Map from Hash Signature to AbbrevData.
+  llvm::StringMap<std::unique_ptr<AbbrevData>> AbbrevDataCache;
 
   /// Attributes substitution (patch) information.
   struct PatchInfo {
@@ -725,9 +774,18 @@ class DebugAbbrevWriter {
     uint8_t NewAttrForm;
   };
 
+  struct AbbrevEntry {
+    dwarf::Attribute Attr;
+    dwarf::Form Form;
+  };
+
   using PatchesTy = std::unordered_map<const DWARFAbbreviationDeclaration *,
                                        SmallVector<PatchInfo, 2>>;
   std::unordered_map<const DWARFUnit *, PatchesTy> Patches;
+
+  using AbbrevEntryTy = std::unordered_map<const DWARFAbbreviationDeclaration *,
+                                           SmallVector<AbbrevEntry, 2>>;
+  std::unordered_map<const DWARFUnit *, AbbrevEntryTy> NewAbbrevEntries;
 
   /// DWARF context containing abbreviations.
   DWARFContext &Context;
@@ -774,6 +832,27 @@ public:
         PatchInfo{AttrTag, NewAttrTag, NewAttrForm});
   }
 
+  /// Adds attribute \p AttrTag and \p NewAttrForm in abbreviation declaration
+  /// \p Abbrev belonging to CU \p Unit .
+  void addAttribute(const DWARFUnit &Unit,
+                    const DWARFAbbreviationDeclaration *Abbrev,
+                    dwarf::Attribute AttrTag, dwarf::Form AttrForm) {
+    assert(&Unit.getContext() == &Context &&
+           "cannot update attribute from a different DWARF context");
+    std::lock_guard<std::mutex> Lock(WriterMutex);
+    bool AlreadyAdded = false;
+    for (AbbrevEntry &E : NewAbbrevEntries[&Unit][Abbrev])
+      if (E.Attr == AttrTag) {
+        AlreadyAdded = true;
+        break;
+      }
+
+    if (AlreadyAdded)
+      return;
+    NewAbbrevEntries[&Unit][Abbrev].emplace_back(
+        AbbrevEntry{AttrTag, AttrForm});
+  }
+
   /// Return a buffer with concatenated abbrev sections for all CUs and TUs
   /// in the associated DWARF context. Section offsets could be queried using
   /// getAbbreviationsOffsetForUnit() interface. For DWP, we are using DWOId
@@ -783,10 +862,8 @@ public:
   /// Return an offset in the finalized abbrev section corresponding to CU/TU.
   uint64_t getAbbreviationsOffsetForUnit(const DWARFUnit &Unit) {
     assert(!DWOId && "offsets are tracked for non-DWO units only");
-    assert(UnitsAbbrevData.find(Unit.getAbbreviationsOffset()) !=
-               UnitsAbbrevData.end() &&
-           "no abbrev data found for unit");
-    return UnitsAbbrevData[Unit.getAbbreviationsOffset()].Offset;
+    assert(UnitsAbbrevData.count(&Unit) && "no abbrev data found for unit");
+    return UnitsAbbrevData[&Unit]->Offset;
   }
 };
 
@@ -880,6 +957,17 @@ public:
     RawData = DebugLineContents;
   }
 };
+
+struct AttrInfo {
+  DWARFFormValue V;
+  uint64_t Offset;
+  uint32_t Size; // Size of the attribute.
+};
+
+Optional<AttrInfo>
+findAttributeInfo(const DWARFDie DIE,
+                  const DWARFAbbreviationDeclaration *AbbrevDecl,
+                  uint32_t Index);
 
 } // namespace bolt
 } // namespace llvm
