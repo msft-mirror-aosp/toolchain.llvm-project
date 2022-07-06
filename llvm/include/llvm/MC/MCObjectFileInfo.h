@@ -13,12 +13,12 @@
 #ifndef LLVM_MC_MCOBJECTFILEINFO_H
 #define LLVM_MC_MCOBJECTFILEINFO_H
 
-#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/BinaryFormat/Swift.h"
-#include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/VersionTuple.h"
+
+#include <array>
 
 namespace llvm {
 class MCContext;
@@ -230,7 +230,7 @@ protected:
   MCSection *ReadOnly16Section = nullptr;
 
   // Swift5 Reflection Data Sections
-  std::array<MCSection *, swift::Swift5ReflectionSectionKind::last>
+  std::array<MCSection *, binaryformat::Swift5ReflectionSectionKind::last>
       Swift5ReflectionSections = {};
 
 public:
@@ -430,8 +430,9 @@ public:
 
   // Swift5 Reflection Data Sections
   MCSection *getSwift5ReflectionSection(
-      llvm::swift::Swift5ReflectionSectionKind ReflSectionKind) {
-    return ReflSectionKind != llvm::swift::Swift5ReflectionSectionKind::unknown
+      llvm::binaryformat::Swift5ReflectionSectionKind ReflSectionKind) {
+    return ReflSectionKind !=
+                   llvm::binaryformat::Swift5ReflectionSectionKind::unknown
                ? Swift5ReflectionSections[ReflSectionKind]
                : nullptr;
   }

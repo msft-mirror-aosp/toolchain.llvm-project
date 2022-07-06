@@ -851,6 +851,7 @@ bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
 }
 
 llvm::Constant *ConstStructBuilder::Finalize(QualType Type) {
+  Type = Type.getNonReferenceType();
   RecordDecl *RD = Type->castAs<RecordType>()->getDecl();
   llvm::Type *ValTy = CGM.getTypes().ConvertType(Type);
   return Builder.build(ValTy, RD->hasFlexibleArrayMember());
@@ -1907,6 +1908,9 @@ ConstantLValueEmitter::tryEmitBase(const APValue::LValueBase &base) {
 
     if (auto *GD = dyn_cast<MSGuidDecl>(D))
       return CGM.GetAddrOfMSGuidDecl(GD);
+
+    if (auto *GCD = dyn_cast<UnnamedGlobalConstantDecl>(D))
+      return CGM.GetAddrOfUnnamedGlobalConstantDecl(GCD);
 
     if (auto *TPO = dyn_cast<TemplateParamObjectDecl>(D))
       return CGM.GetAddrOfTemplateParamObject(TPO);

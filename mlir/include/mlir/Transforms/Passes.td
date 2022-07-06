@@ -83,10 +83,9 @@ def Inliner : Pass<"inline"> {
   let options = [
     Option<"defaultPipelineStr", "default-pipeline", "std::string",
            /*default=*/"", "The default optimizer pipeline used for callables">,
-    ListOption<"opPipelineStrs", "op-pipelines", "std::string",
+    ListOption<"opPipelineList", "op-pipelines", "OpPassManager",
                "Callable operation specific optimizer pipelines (in the form "
-               "of `dialect.op(pipeline)`)",
-               "llvm::cl::MiscFlags::CommaSeparated">,
+               "of `dialect.op(pipeline)`)">,
     Option<"maxInliningIterations", "max-iterations", "unsigned",
            /*default=*/"4",
            "Maximum number of iterations when inlining within an SCC">,
@@ -212,6 +211,23 @@ def SymbolDCE : Pass<"symbol-dce"> {
     information on `Symbols`.
   }];
   let constructor = "mlir::createSymbolDCEPass()";
+
+  let statistics = [
+    Statistic<"numDCE", "num-dce'd", "Number of symbols DCE'd">,
+  ];
+}
+
+def SymbolPrivatize : Pass<"symbol-privatize"> {
+  let summary = "Mark symbols private";
+  let description = [{
+    This pass marks all top-level symbols of the operation run as `private`
+    except if listed in `exclude` pass option.
+  }];
+  let options = [
+    ListOption<"exclude", "exclude", "std::string",
+       "Comma separated list of symbols that should not be marked private">
+  ];
+  let constructor = "mlir::createSymbolPrivatizePass()";
 }
 
 def ViewOpGraph : Pass<"view-op-graph"> {

@@ -391,11 +391,18 @@ void LinkageComputer::mergeTemplateLV(
   bool considerVisibility =
     shouldConsiderTemplateVisibility(fn, specInfo);
 
-  // Merge information from the template parameters.
   FunctionTemplateDecl *temp = specInfo->getTemplate();
-  LinkageInfo tempLV =
-    getLVForTemplateParameterList(temp->getTemplateParameters(), computation);
-  LV.mergeMaybeWithVisibility(tempLV, considerVisibility);
+
+  // Merge information from the template declaration.
+  LinkageInfo tempLV = getLVForDecl(temp, computation);
+  // The linkage of the specialization should be consistent with the
+  // template declaration.
+  LV.setLinkage(tempLV.getLinkage());
+
+  // Merge information from the template parameters.
+  LinkageInfo paramsLV =
+      getLVForTemplateParameterList(temp->getTemplateParameters(), computation);
+  LV.mergeMaybeWithVisibility(paramsLV, considerVisibility);
 
   // Merge information from the template arguments.
   const TemplateArgumentList &templateArgs = *specInfo->TemplateArguments;
@@ -589,11 +596,12 @@ static bool isExportedFromModuleInterfaceUnit(const NamedDecl *D) {
 }
 
 static LinkageInfo getInternalLinkageFor(const NamedDecl *D) {
-  // Internal linkage declarations within a module interface unit are modeled
-  // as "module-internal linkage", which means that they have internal linkage
-  // formally but can be indirectly accessed from outside the module via inline
-  // functions and templates defined within the module.
-  if (isInModulePurview(D))
+  // (for the modules ts) Internal linkage declarations within a module
+  // interface unit are modeled as "module-internal linkage", which means that
+  // they have internal linkage formally but can be indirectly accessed from
+  // outside the module via inline functions and templates defined within the
+  // module.
+  if (isInModulePurview(D) && D->getASTContext().getLangOpts().ModulesTS)
     return LinkageInfo(ModuleInternalLinkage, DefaultVisibility, false);
 
   return LinkageInfo::internal();
@@ -1540,6 +1548,11 @@ LinkageInfo LinkageComputer::getDeclLinkageAndVisibility(const NamedDecl *D) {
 }
 
 Module *Decl::getOwningModuleForLinkage(bool IgnoreLinkage) const {
+  if (isa<NamespaceDecl>(this))
+    // Namespaces never have module linkage.  It is the entities within them
+    // that [may] do.
+    return nullptr;
+
   Module *M = getOwningModule();
   if (!M)
     return nullptr;
@@ -1550,24 +1563,28 @@ Module *Decl::getOwningModuleForLinkage(bool IgnoreLinkage) const {
     return nullptr;
 
   case Module::ModuleInterfaceUnit:
+  case Module::ModulePartitionInterface:
+  case Module::ModulePartitionImplementation:
     return M;
 
+  case Module::ModuleHeaderUnit:
   case Module::GlobalModuleFragment: {
     // External linkage declarations in the global module have no owning module
     // for linkage purposes. But internal linkage declarations in the global
     // module fragment of a particular module are owned by that module for
     // linkage purposes.
+    // FIXME: p1815 removes the need for this distinction -- there are no
+    // internal linkage declarations that need to be referred to from outside
+    // this TU.
     if (IgnoreLinkage)
       return nullptr;
     bool InternalLinkage;
     if (auto *ND = dyn_cast<NamedDecl>(this))
       InternalLinkage = !ND->hasExternalFormalLinkage();
-    else {
-      auto *NSD = dyn_cast<NamespaceDecl>(this);
-      InternalLinkage = (NSD && NSD->isAnonymousNamespace()) ||
-                        isInAnonymousNamespace();
-    }
-    return InternalLinkage ? M->Parent : nullptr;
+    else
+      InternalLinkage = isInAnonymousNamespace();
+    return InternalLinkage ? M->Kind == Module::ModuleHeaderUnit ? M : M->Parent
+                           : nullptr;
   }
 
   case Module::PrivateModuleFragment:
@@ -2018,7 +2035,7 @@ const char *VarDecl::getStorageClassSpecifierString(StorageClass SC) {
 
 VarDecl::VarDecl(Kind DK, ASTContext &C, DeclContext *DC,
                  SourceLocation StartLoc, SourceLocation IdLoc,
-                 IdentifierInfo *Id, QualType T, TypeSourceInfo *TInfo,
+                 const IdentifierInfo *Id, QualType T, TypeSourceInfo *TInfo,
                  StorageClass SC)
     : DeclaratorDecl(DK, DC, IdLoc, Id, T, TInfo, StartLoc),
       redeclarable_base(C) {
@@ -2033,10 +2050,9 @@ VarDecl::VarDecl(Kind DK, ASTContext &C, DeclContext *DC,
   // Everything else is implicitly initialized to false.
 }
 
-VarDecl *VarDecl::Create(ASTContext &C, DeclContext *DC,
-                         SourceLocation StartL, SourceLocation IdL,
-                         IdentifierInfo *Id, QualType T, TypeSourceInfo *TInfo,
-                         StorageClass S) {
+VarDecl *VarDecl::Create(ASTContext &C, DeclContext *DC, SourceLocation StartL,
+                         SourceLocation IdL, const IdentifierInfo *Id,
+                         QualType T, TypeSourceInfo *TInfo, StorageClass S) {
   return new (C, DC) VarDecl(Var, C, DC, StartL, IdL, Id, T, TInfo, S);
 }
 
@@ -4301,6 +4317,7 @@ TagDecl::TagDecl(Kind DK, TagKind TK, const ASTContext &C, DeclContext *DC,
   setEmbeddedInDeclarator(false);
   setFreeStanding(false);
   setCompleteDefinitionRequired(false);
+  TagDeclBits.IsThisDeclarationADemotedDefinition = false;
 }
 
 SourceLocation TagDecl::getOuterLocStart() const {

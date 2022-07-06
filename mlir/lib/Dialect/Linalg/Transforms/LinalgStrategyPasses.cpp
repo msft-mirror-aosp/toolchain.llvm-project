@@ -25,7 +25,7 @@
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/SCF/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/Vector/VectorTransforms.h"
+#include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/Pass/PassManager.h"
@@ -338,14 +338,9 @@ struct LinalgStrategyEnablePass
       return signalPassFailure();
 
     if (options.licm) {
-      if (funcOp
-              ->walk([&](LoopLikeOpInterface loopLike) {
-                if (failed(moveLoopInvariantCode(loopLike)))
-                  return WalkResult::interrupt();
-                return WalkResult::advance();
-              })
-              .wasInterrupted())
-        return signalPassFailure();
+      funcOp->walk([&](LoopLikeOpInterface loopLike) {
+        moveLoopInvariantCode(loopLike);
+      });
     }
 
     // Gathers all innermost loops through a post order pruned walk.
@@ -362,7 +357,7 @@ struct LinalgStrategyEnablePass
       hoistRedundantVectorTransfersOnTensor(funcOp);
 
     // Run CSE to cleanup after canonicalization.
-    OpPassManager dynamicPM("builtin.func");
+    OpPassManager dynamicPM("func.func");
     dynamicPM.addPass(createCSEPass());
     if (failed(runPipeline(dynamicPM, funcOp)))
       return signalPassFailure();

@@ -23,6 +23,7 @@
 #define DEBUG_TYPE "mlir-scf-affine-utils"
 
 using namespace mlir;
+using namespace presburger;
 
 static void unpackOptionalValues(ArrayRef<Optional<Value>> source,
                                  SmallVector<Value> &target) {
@@ -38,7 +39,7 @@ static void unpackOptionalValues(ArrayRef<Optional<Value>> source,
 /// Note: This function adds a new symbol column to the `constraints` for each
 /// dimension/symbol that exists in the affine map but not in `constraints`.
 static LogicalResult alignAndAddBound(FlatAffineValueConstraints &constraints,
-                                      FlatAffineConstraints::BoundType type,
+                                      IntegerPolyhedron::BoundType type,
                                       unsigned pos, AffineMap map,
                                       ValueRange operands) {
   SmallVector<Value> dims, syms, newSyms;
@@ -113,8 +114,7 @@ canonicalizeMinMaxOp(RewriterBase &rewriter, Operation *op, AffineMap map,
 
   // Add an inequality for each result expr_i of map:
   // isMin: op <= expr_i, !isMin: op >= expr_i
-  auto boundType =
-      isMin ? FlatAffineConstraints::UB : FlatAffineConstraints::LB;
+  auto boundType = isMin ? IntegerPolyhedron::UB : IntegerPolyhedron::LB;
   // Upper bounds are exclusive, so add 1. (`affine.min` ops are inclusive.)
   AffineMap mapLbUb = isMin ? addConstToResults(map, 1) : map;
   if (failed(
@@ -136,7 +136,7 @@ canonicalizeMinMaxOp(RewriterBase &rewriter, Operation *op, AffineMap map,
   // Add an equality: Set dimOpBound to computed bound.
   // Add back dimension for op. (Was removed by `getSliceBounds`.)
   AffineMap alignedBoundMap = boundMap.shiftDims(/*shift=*/1, /*offset=*/dimOp);
-  if (failed(constraints.addBound(FlatAffineConstraints::EQ, dimOpBound,
+  if (failed(constraints.addBound(IntegerPolyhedron::EQ, dimOpBound,
                                   alignedBoundMap)))
     return failure();
 
@@ -162,7 +162,7 @@ canonicalizeMinMaxOp(RewriterBase &rewriter, Operation *op, AffineMap map,
     // Note: These equalities could have been added earlier and used to express
     // minOp <= expr_i. However, then we run the risk that `getSliceBounds`
     // computes minOpUb in terms of r_i dims, which is not desired.
-    if (failed(alignAndAddBound(newConstr, FlatAffineConstraints::EQ, i,
+    if (failed(alignAndAddBound(newConstr, IntegerPolyhedron::EQ, i,
                                 map.getSubMap({i - resultDimStart}), operands)))
       return failure();
 
@@ -183,6 +183,16 @@ canonicalizeMinMaxOp(RewriterBase &rewriter, Operation *op, AffineMap map,
   AffineMap newMap = alignedBoundMap;
   SmallVector<Value> newOperands;
   unpackOptionalValues(constraints.getMaybeDimAndSymbolValues(), newOperands);
+  // If dims/symbols have known constant values, use those in order to simplify
+  // the affine map further.
+  for (int64_t i = 0, e = constraints.getNumIds(); i < e; ++i) {
+    // Skip unused operands and operands that are already constants.
+    if (!newOperands[i] || getConstantIntValue(newOperands[i]))
+      continue;
+    if (auto bound = constraints.getConstantBound(IntegerPolyhedron::EQ, i))
+      newOperands[i] =
+          rewriter.create<arith::ConstantIndexOp>(op->getLoc(), *bound);
+  }
   mlir::canonicalizeMapAndOperands(&newMap, &newOperands);
   rewriter.setInsertionPoint(op);
   rewriter.replaceOpWithNewOp<AffineApplyOp>(op, newMap, newOperands);
@@ -193,7 +203,7 @@ static LogicalResult
 addLoopRangeConstraints(FlatAffineValueConstraints &constraints, Value iv,
                         Value lb, Value ub, Value step,
                         RewriterBase &rewriter) {
-  // FlatAffineConstraints does not support semi-affine expressions.
+  // IntegerPolyhedron does not support semi-affine expressions.
   // Therefore, only constant step values are supported.
   auto stepInt = getConstantIntValue(step);
   if (!stepInt)
@@ -207,28 +217,38 @@ addLoopRangeConstraints(FlatAffineValueConstraints &constraints, Value iv,
   Optional<int64_t> lbInt = getConstantIntValue(lb);
   Optional<int64_t> ubInt = getConstantIntValue(ub);
   if (lbInt)
-    constraints.addBound(FlatAffineConstraints::EQ, dimLb, *lbInt);
+    constraints.addBound(IntegerPolyhedron::EQ, dimLb, *lbInt);
   if (ubInt)
-    constraints.addBound(FlatAffineConstraints::EQ, dimUb, *ubInt);
+    constraints.addBound(IntegerPolyhedron::EQ, dimUb, *ubInt);
 
-  // iv >= lb (equiv.: iv - lb >= 0)
+  // Lower bound: iv >= lb (equiv.: iv - lb >= 0)
   SmallVector<int64_t> ineqLb(constraints.getNumCols(), 0);
   ineqLb[dimIv] = 1;
   ineqLb[dimLb] = -1;
   constraints.addInequality(ineqLb);
 
-  // iv < lb + step * ((ub - lb - 1) floorDiv step) + 1
-  AffineExpr exprLb = lbInt ? rewriter.getAffineConstantExpr(*lbInt)
-                            : rewriter.getAffineDimExpr(dimLb);
-  AffineExpr exprUb = ubInt ? rewriter.getAffineConstantExpr(*ubInt)
-                            : rewriter.getAffineDimExpr(dimUb);
-  AffineExpr ivUb =
-      exprLb + 1 + (*stepInt * ((exprUb - exprLb - 1).floorDiv(*stepInt)));
+  // Upper bound
+  AffineExpr ivUb;
+  if (lbInt && ubInt && (*lbInt + *stepInt >= *ubInt)) {
+    // The loop has at most one iteration.
+    // iv < lb + 1
+    // TODO: Try to derive this constraint by simplifying the expression in
+    // the else-branch.
+    ivUb = rewriter.getAffineDimExpr(dimLb) + 1;
+  } else {
+    // The loop may have more than one iteration.
+    // iv < lb + step * ((ub - lb - 1) floorDiv step) + 1
+    AffineExpr exprLb = lbInt ? rewriter.getAffineConstantExpr(*lbInt)
+                              : rewriter.getAffineDimExpr(dimLb);
+    AffineExpr exprUb = ubInt ? rewriter.getAffineConstantExpr(*ubInt)
+                              : rewriter.getAffineDimExpr(dimUb);
+    ivUb = exprLb + 1 + (*stepInt * ((exprUb - exprLb - 1).floorDiv(*stepInt)));
+  }
   auto map = AffineMap::get(
       /*dimCount=*/constraints.getNumDimIds(),
       /*symbolCount=*/constraints.getNumSymbolIds(), /*result=*/ivUb);
 
-  return constraints.addBound(FlatAffineConstraints::UB, dimIv, map);
+  return constraints.addBound(IntegerPolyhedron::UB, dimIv, map);
 }
 
 /// Canonicalize min/max operations in the context of for loops with a known
@@ -238,7 +258,7 @@ addLoopRangeConstraints(FlatAffineValueConstraints &constraints, Value iv,
 /// * iv >= lb
 /// * iv < lb + step * ((ub - lb - 1) floorDiv step) + 1
 ///
-/// Note: Due to limitations of FlatAffineConstraints, only constant step sizes
+/// Note: Due to limitations of IntegerPolyhedron, only constant step sizes
 /// are currently supported.
 LogicalResult scf::canonicalizeMinMaxOpInLoop(RewriterBase &rewriter,
                                               Operation *op, AffineMap map,
@@ -301,9 +321,9 @@ LogicalResult scf::rewritePeeledMinMaxOp(RewriterBase &rewriter, Operation *op,
   FlatAffineValueConstraints constraints;
   constraints.appendDimId({iv, ub, step});
   if (auto constUb = getConstantIntValue(ub))
-    constraints.addBound(FlatAffineConstraints::EQ, 1, *constUb);
+    constraints.addBound(IntegerPolyhedron::EQ, 1, *constUb);
   if (auto constStep = getConstantIntValue(step))
-    constraints.addBound(FlatAffineConstraints::EQ, 2, *constStep);
+    constraints.addBound(IntegerPolyhedron::EQ, 2, *constStep);
 
   // Add loop peeling invariant. This is the main piece of knowledge that
   // enables AffineMinOp simplification.

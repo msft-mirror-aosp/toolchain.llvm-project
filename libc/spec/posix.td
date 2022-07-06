@@ -20,6 +20,11 @@ def POSIX : StandardSpec<"POSIX"> {
   NamedType ModeTType = NamedType<"mode_t">;
   NamedType OffTType = NamedType<"off_t">;
   NamedType SSizeTType = NamedType<"ssize_t">;
+  NamedType PThreadMutexAttrTType = NamedType<"pthread_mutexattr_t">;
+  PtrType PThreadMutexAttrTPtr = PtrType<PThreadMutexAttrTType>;
+  RestrictedPtrType RestrictedPThreadMutexAttrTPtr = RestrictedPtrType<PThreadMutexAttrTType>;
+  ConstType ConstPThreadMutexAttrTPtr = ConstType<PThreadMutexAttrTPtr>;
+  ConstType ConstRestrictedPThreadMutexAttrTPtr = ConstType<RestrictedPThreadMutexAttrTPtr>;
 
   HeaderSpec Errno = HeaderSpec<
       "errno.h",
@@ -222,6 +227,7 @@ def POSIX : StandardSpec<"POSIX"> {
     "unistd.h",
     [], // Macros
     [
+      OffTType,
       SSizeTType,
       SizeTType,
     ],
@@ -238,9 +244,29 @@ def POSIX : StandardSpec<"POSIX"> {
           [ArgSpec<IntType>]
         >,
         FunctionSpec<
+          "lseek",
+          RetValSpec<OffTType>,
+          [ArgSpec<IntType>, ArgSpec<OffTType>, ArgSpec<IntType>]
+        >,
+        FunctionSpec<
           "read",
           RetValSpec<SSizeTType>,
           [ArgSpec<IntType>, ArgSpec<VoidPtr>, ArgSpec<SizeTType>]
+        >,
+        FunctionSpec<
+          "rmdir",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstCharPtr>]
+        >,
+        FunctionSpec<
+          "unlink",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstCharPtr>]
+        >,
+        FunctionSpec<
+          "unlinkat",
+          RetValSpec<IntType>,
+          [ArgSpec<IntType>, ArgSpec<ConstCharPtr>, ArgSpec<IntType>]
         >,
         FunctionSpec<
           "write",
@@ -250,6 +276,20 @@ def POSIX : StandardSpec<"POSIX"> {
     ]
   >;
   
+  HeaderSpec StdLib = HeaderSpec<
+    "stdlib.h",
+    [], // Macros
+    [], // Types
+    [], // Enumerations
+    [
+        FunctionSpec<
+          "getenv",
+          RetValSpec<CharPtr>,
+          [ArgSpec<ConstCharPtr>]
+        >,
+    ]
+  >;
+
   HeaderSpec String = HeaderSpec<
     "string.h",
     [
@@ -317,12 +357,103 @@ def POSIX : StandardSpec<"POSIX"> {
     ]
   >;
 
+  HeaderSpec SysStat = HeaderSpec<
+    "sys/stat.h",
+    [], // Macros
+    [ModeTType], // Types
+    [], // Enumerations
+    [
+        FunctionSpec<
+            "mkdir",
+            RetValSpec<IntType>,
+            [ArgSpec<ConstCharPtr>, ArgSpec<ModeTType>]
+        >,
+        FunctionSpec<
+            "mkdirat",
+            RetValSpec<IntType>,
+            [ArgSpec<IntType>, ArgSpec<ConstCharPtr>, ArgSpec<ModeTType>]
+        >,
+    ]
+  >;
+
+  HeaderSpec PThread = HeaderSpec<
+    "pthread.h",
+    [], // Macros
+    [PThreadMutexAttrTType], // Types
+    [], // Enumerations
+    [
+      FunctionSpec<
+          "pthread_mutexattr_init",
+          RetValSpec<IntType>,
+          [ArgSpec<PThreadMutexAttrTPtr>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_destroy",
+          RetValSpec<IntType>,
+          [ArgSpec<PThreadMutexAttrTPtr>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_gettype",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstRestrictedPThreadMutexAttrTPtr>, ArgSpec<RestrictedIntPtr>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_settype",
+          RetValSpec<IntType>,
+          [ArgSpec<RestrictedPThreadMutexAttrTPtr>, ArgSpec<IntType>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_getrobust",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstRestrictedPThreadMutexAttrTPtr>, ArgSpec<RestrictedIntPtr>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_setrobust",
+          RetValSpec<IntType>,
+          [ArgSpec<RestrictedPThreadMutexAttrTPtr>, ArgSpec<IntType>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_getpshared",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstRestrictedPThreadMutexAttrTPtr>, ArgSpec<RestrictedIntPtr>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_setpshared",
+          RetValSpec<IntType>,
+          [ArgSpec<RestrictedPThreadMutexAttrTPtr>, ArgSpec<IntType>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_getprotocol",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstRestrictedPThreadMutexAttrTPtr>, ArgSpec<RestrictedIntPtr>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_setprotocol",
+          RetValSpec<IntType>,
+          [ArgSpec<RestrictedPThreadMutexAttrTPtr>, ArgSpec<IntType>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_getprioceiling",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstRestrictedPThreadMutexAttrTPtr>, ArgSpec<RestrictedIntPtr>]
+      >,
+      FunctionSpec<
+          "pthread_mutexattr_setprioceiling",
+          RetValSpec<IntType>,
+          [ArgSpec<RestrictedPThreadMutexAttrTPtr>, ArgSpec<IntType>]
+      >,
+    ]
+  >;
+
   let Headers = [
     CType,
     Errno,
     FCntl,
-    SysMMan,
+    PThread,
     Signal,
+    StdLib,
+    SysMMan,
+    SysStat,
     UniStd,
     String
   ];

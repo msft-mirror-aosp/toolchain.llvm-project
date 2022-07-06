@@ -10,7 +10,6 @@
 #define LLVM_DWARFLINKER_DWARFSTREAMER_H
 
 #include "llvm/BinaryFormat/Swift.h"
-#include "llvm/CodeGen/AccelTable.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/DWARFLinker/DWARFLinker.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -18,9 +17,11 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
+template <typename DataT> class AccelTable;
 
 enum class OutputFileType {
   Object,
@@ -88,7 +89,7 @@ public:
 
   /// Emit the swift reflection section stored in \p Buffer.
   void emitSwiftReflectionSection(
-      llvm::swift::Swift5ReflectionSectionKind ReflSectionKind,
+      llvm::binaryformat::Swift5ReflectionSectionKind ReflSectionKind,
       StringRef Buffer, uint32_t Alignment, uint32_t Size);
 
   /// Emit debug_ranges for \p FuncRange by translating the
