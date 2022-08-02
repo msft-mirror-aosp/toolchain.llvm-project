@@ -25,6 +25,10 @@ if(LLVM_ENABLE_ZLIB)
   set(imported_libs ZLIB::ZLIB)
 endif()
 
+if(LLVM_ENABLE_ZSTD)
+  list(APPEND imported_libs zstd::libzstd_shared)
+endif()
+
 if( MSVC OR MINGW )
   # libuuid required for FOLDERID_Profile usage in lib/Support/Windows/Path.inc.
   # advapi32 required for CryptAcquireContextW in lib/Support/Windows/Path.inc.
@@ -90,7 +94,7 @@ if(LLVM_INTEGRATED_CRT_ALLOC)
     add_definitions(-DENABLE_OVERRIDE -DENABLE_PRELOAD)
     set(ALLOCATOR_FILES "${LLVM_INTEGRATED_CRT_ALLOC}/rpmalloc/rpmalloc.c")
   elseif(LLVM_INTEGRATED_CRT_ALLOC MATCHES "snmalloc$")
-    set(ALLOCATOR_FILES "${LLVM_INTEGRATED_CRT_ALLOC}/src/override/malloc.cc" "${LLVM_INTEGRATED_CRT_ALLOC}/src/override/new.cc")
+    set(ALLOCATOR_FILES "${LLVM_INTEGRATED_CRT_ALLOC}/src/snmalloc/override/new.cc")
     set(system_libs ${system_libs} "mincore.lib" "-INCLUDE:malloc")
   elseif(LLVM_INTEGRATED_CRT_ALLOC MATCHES "mimalloc$")
     set(MIMALLOC_LIB "${LLVM_INTEGRATED_CRT_ALLOC}/out/msvc-x64/Release/mimalloc-static.lib")
@@ -104,6 +108,7 @@ endif()
 add_subdirectory(BLAKE3)
 
 add_llvm_component_library(LLVMSupport
+  AddressRanges.cpp
   AArch64TargetParser.cpp
   ABIBreak.cpp
   ARMTargetParser.cpp
@@ -220,6 +225,8 @@ add_llvm_component_library(LLVMSupport
   TypeSize.cpp
   Unicode.cpp
   UnicodeCaseFold.cpp
+  UnicodeNameToCodepoint.cpp
+  UnicodeNameToCodepointGenerated.cpp
   VersionTuple.cpp
   VirtualFileSystem.cpp
   WithColor.cpp
@@ -284,6 +291,18 @@ if(LLVM_ENABLE_ZLIB)
   endif()
   get_library_name(${zlib_library} zlib_library)
   set(llvm_system_libs ${llvm_system_libs} "${zlib_library}")
+endif()
+
+if(LLVM_ENABLE_ZSTD)
+  # CMAKE_BUILD_TYPE is only meaningful to single-configuration generators.
+  if(CMAKE_BUILD_TYPE)
+    string(TOUPPER ${CMAKE_BUILD_TYPE} build_type)
+    get_property(zstd_library TARGET zstd::libzstd_shared PROPERTY LOCATION_${build_type})
+  endif()
+  if(NOT zstd_library)
+    get_property(zstd_library TARGET zstd::libzstd_shared PROPERTY LOCATION)
+  endif()
+  set(llvm_system_libs ${llvm_system_libs} "${zstd_library}")
 endif()
 
 if(LLVM_ENABLE_TERMINFO)

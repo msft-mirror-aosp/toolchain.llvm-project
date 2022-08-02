@@ -310,9 +310,19 @@ static uint32_t riscvVariantFromElfFlags(const elf::ELFHeader &header) {
   }
 }
 
+static uint32_t ppc64VariantFromElfFlags(const elf::ELFHeader &header) {
+  uint32_t endian = header.e_ident[EI_DATA];
+  if (endian == ELFDATA2LSB)
+    return ArchSpec::eCore_ppc64le_generic;
+  else
+    return ArchSpec::eCore_ppc64_generic;
+}
+
 static uint32_t subTypeFromElfHeader(const elf::ELFHeader &header) {
   if (header.e_machine == llvm::ELF::EM_MIPS)
     return mipsVariantFromElfFlags(header);
+  else if (header.e_machine == llvm::ELF::EM_PPC64)
+    return ppc64VariantFromElfFlags(header);
   else if (header.e_machine == llvm::ELF::EM_RISCV)
     return riscvVariantFromElfFlags(header);
 
@@ -1597,7 +1607,7 @@ lldb::user_id_t ObjectFileELF::GetSectionIndexByName(const char *name) {
 }
 
 static SectionType GetSectionTypeFromName(llvm::StringRef Name) {
-  if (Name.consume_front(".debug_") || Name.consume_front(".zdebug_")) {
+  if (Name.consume_front(".debug_")) {
     return llvm::StringSwitch<SectionType>(Name)
         .Case("abbrev", eSectionTypeDWARFDebugAbbrev)
         .Case("abbrev.dwo", eSectionTypeDWARFDebugAbbrevDwo)
@@ -3355,8 +3365,7 @@ size_t ObjectFileELF::ReadSectionData(Section *section,
     return section->GetObjectFile()->ReadSectionData(section, section_data);
 
   size_t result = ObjectFile::ReadSectionData(section, section_data);
-  if (result == 0 || !llvm::object::Decompressor::isCompressedELFSection(
-                         section->Get(), section->GetName().GetStringRef()))
+  if (result == 0 || !(section->Get() & llvm::ELF::SHF_COMPRESSED))
     return result;
 
   auto Decompressor = llvm::object::Decompressor::create(
@@ -3376,8 +3385,7 @@ size_t ObjectFileELF::ReadSectionData(Section *section,
   auto buffer_sp =
       std::make_shared<DataBufferHeap>(Decompressor->getDecompressedSize(), 0);
   if (auto error = Decompressor->decompress(
-          {reinterpret_cast<char *>(buffer_sp->GetBytes()),
-           size_t(buffer_sp->GetByteSize())})) {
+          {buffer_sp->GetBytes(), size_t(buffer_sp->GetByteSize())})) {
     GetModule()->ReportWarning(
         "Decompression of section '%s' failed: %s",
         section->GetName().GetCString(),

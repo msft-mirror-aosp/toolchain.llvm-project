@@ -1591,6 +1591,20 @@ public:
   /// kind?
   QualType::DestructionKind needsDestruction(const ASTContext &Ctx) const;
 
+  /// Whether this variable has a flexible array member initialized with one
+  /// or more elements. This can only be called for declarations where
+  /// hasInit() is true.
+  ///
+  /// (The standard doesn't allow initializing flexible array members; this is
+  /// a gcc/msvc extension.)
+  bool hasFlexibleArrayInit(const ASTContext &Ctx) const;
+
+  /// If hasFlexibleArrayInit is true, compute the number of additional bytes
+  /// necessary to store those elements. Otherwise, returns zero.
+  ///
+  /// This can only be called for declarations where hasInit() is true.
+  CharUnits getFlexibleArrayInitChars(const ASTContext &Ctx) const;
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K >= firstVar && K <= lastVar; }
@@ -1618,6 +1632,9 @@ public:
 
     /// Parameter for captured context
     CapturedContext,
+
+    /// Parameter for Thread private variable
+    ThreadPrivateVar,
 
     /// Other implicit parameter
     Other,
@@ -1873,7 +1890,10 @@ public:
     TK_FunctionTemplateSpecialization,
     // A function template specialization that hasn't yet been resolved to a
     // particular specialized function template.
-    TK_DependentFunctionTemplateSpecialization
+    TK_DependentFunctionTemplateSpecialization,
+    // A non-template function which is in a dependent scope.
+    TK_DependentNonTemplate
+
   };
 
   /// Stashed information about a defaulted function definition whose body has
@@ -1922,20 +1942,21 @@ private:
   /// The template or declaration that this declaration
   /// describes or was instantiated from, respectively.
   ///
-  /// For non-templates, this value will be NULL. For function
-  /// declarations that describe a function template, this will be a
-  /// pointer to a FunctionTemplateDecl. For member functions
-  /// of class template specializations, this will be a MemberSpecializationInfo
+  /// For non-templates this value will be NULL, unless this declaration was
+  /// declared directly inside of a function template, in which case it will
+  /// have a pointer to a FunctionDecl, stored in the NamedDecl. For function
+  /// declarations that describe a function template, this will be a pointer to
+  /// a FunctionTemplateDecl, stored in the NamedDecl. For member functions of
+  /// class template specializations, this will be a MemberSpecializationInfo
   /// pointer containing information about the specialization.
   /// For function template specializations, this will be a
   /// FunctionTemplateSpecializationInfo, which contains information about
   /// the template being specialized and the template arguments involved in
   /// that specialization.
-  llvm::PointerUnion<FunctionTemplateDecl *,
-                     MemberSpecializationInfo *,
+  llvm::PointerUnion<NamedDecl *, MemberSpecializationInfo *,
                      FunctionTemplateSpecializationInfo *,
                      DependentFunctionTemplateSpecializationInfo *>
-    TemplateOrSpecialization;
+      TemplateOrSpecialization;
 
   /// Provides source/type location info for the declaration name embedded in
   /// the DeclaratorDecl base class.
@@ -2232,6 +2253,13 @@ public:
       DeclAsWritten = Pattern;
     return !(DeclAsWritten->isDeleted() ||
              DeclAsWritten->getCanonicalDecl()->isDefaulted());
+  }
+
+  bool isIneligibleOrNotSelected() const {
+    return FunctionDeclBits.IsIneligibleOrNotSelected;
+  }
+  void setIneligibleOrNotSelected(bool II) {
+    FunctionDeclBits.IsIneligibleOrNotSelected = II;
   }
 
   /// Whether falling off this function implicitly returns null/zero.
@@ -2670,6 +2698,13 @@ public:
                                         TemplateSpecializationKind TSK) {
     setInstantiationOfMemberFunction(getASTContext(), FD, TSK);
   }
+
+  /// Specify that this function declaration was instantiated from a
+  /// FunctionDecl FD. This is only used if this is a function declaration
+  /// declared locally inside of a function template.
+  void setInstantiatedFromDecl(FunctionDecl *FD);
+
+  FunctionDecl *getInstantiatedFromDecl() const;
 
   /// Retrieves the function template that is described by this
   /// function declaration.
@@ -4050,6 +4085,12 @@ public:
   void setParamDestroyedInCallee(bool V) {
     RecordDeclBits.ParamDestroyedInCallee = V;
   }
+
+  bool isRandomized() const { return RecordDeclBits.IsRandomized; }
+
+  void setIsRandomized(bool V) { RecordDeclBits.IsRandomized = V; }
+
+  void reorderDecls(const SmallVectorImpl<Decl *> &Decls);
 
   /// Determines whether this declaration represents the
   /// injected class name.

@@ -1026,20 +1026,50 @@ InstrProfSymtab &IndexedInstrProfReader::getSymtab() {
   return *Symtab;
 }
 
-Expected<InstrProfRecord>
-IndexedInstrProfReader::getInstrProfRecord(StringRef FuncName,
-                                           uint64_t FuncHash) {
+Expected<InstrProfRecord> IndexedInstrProfReader::getInstrProfRecord(
+    StringRef FuncName, uint64_t FuncHash, uint64_t *MismatchedFuncSum) {
   ArrayRef<NamedInstrProfRecord> Data;
+  uint64_t FuncSum = 0;
   Error Err = Remapper->getRecords(FuncName, Data);
   if (Err)
     return std::move(Err);
   // Found it. Look for counters with the right hash.
+
+  // A flag to indicate if the records are from the same type
+  // of profile (i.e cs vs nocs).
+  bool CSBitMatch = false;
+  auto getFuncSum = [](const std::vector<uint64_t> &Counts) {
+    uint64_t ValueSum = 0;
+    for (unsigned I = 0, S = Counts.size(); I < S; I++) {
+      uint64_t CountValue = Counts[I];
+      if (CountValue == (uint64_t)-1)
+        continue;
+      // Handle overflow -- if that happens, return max.
+      if (std::numeric_limits<uint64_t>::max() - CountValue <= ValueSum)
+        return std::numeric_limits<uint64_t>::max();
+      ValueSum += CountValue;
+    }
+    return ValueSum;
+  };
+
   for (const NamedInstrProfRecord &I : Data) {
     // Check for a match and fill the vector if there is one.
     if (I.Hash == FuncHash)
       return std::move(I);
+    if (NamedInstrProfRecord::hasCSFlagInHash(I.Hash) ==
+        NamedInstrProfRecord::hasCSFlagInHash(FuncHash)) {
+      CSBitMatch = true;
+      if (MismatchedFuncSum == nullptr)
+        continue;
+      FuncSum = std::max(FuncSum, getFuncSum(I.Counts));
+    }
   }
-  return error(instrprof_error::hash_mismatch);
+  if (CSBitMatch) {
+    if (MismatchedFuncSum != nullptr)
+      *MismatchedFuncSum = FuncSum;
+    return error(instrprof_error::hash_mismatch);
+  }
+  return error(instrprof_error::unknown_function);
 }
 
 Expected<memprof::MemProfRecord>
@@ -1050,9 +1080,9 @@ IndexedInstrProfReader::getMemProfRecord(const uint64_t FuncNameHash) {
                                       "no memprof data available in profile");
   auto Iter = MemProfRecordTable->find(FuncNameHash);
   if (Iter == MemProfRecordTable->end())
-    return make_error<InstrProfError>(instrprof_error::hash_mismatch,
-                                      "memprof record not found for hash " +
-                                          Twine(FuncNameHash));
+    return make_error<InstrProfError>(
+        instrprof_error::unknown_function,
+        "memprof record not found for function hash " + Twine(FuncNameHash));
 
   // Setup a callback to convert from frame ids to frame using the on-disk
   // FrameData hash table.

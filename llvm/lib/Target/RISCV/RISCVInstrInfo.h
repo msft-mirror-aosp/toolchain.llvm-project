@@ -69,6 +69,14 @@ public:
                             int FrameIndex, const TargetRegisterClass *RC,
                             const TargetRegisterInfo *TRI) const override;
 
+  using TargetInstrInfo::foldMemoryOperandImpl;
+  MachineInstr *foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
+                                      ArrayRef<unsigned> Ops,
+                                      MachineBasicBlock::iterator InsertPt,
+                                      int FrameIndex,
+                                      LiveIntervals *LIS = nullptr,
+                                      VirtRegMap *VRM = nullptr) const override;
+
   // Materializes the given integer Val into DstReg.
   void movImm(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
               const DebugLoc &DL, Register DstReg, uint64_t Val,
@@ -126,14 +134,15 @@ public:
   getSerializableDirectMachineOperandTargetFlags() const override;
 
   // Return true if the function can safely be outlined from.
-  virtual bool
-  isFunctionSafeToOutlineFrom(MachineFunction &MF,
-                              bool OutlineFromLinkOnceODRs) const override;
+  bool isFunctionSafeToOutlineFrom(MachineFunction &MF,
+                                   bool OutlineFromLinkOnceODRs) const override;
 
   // Return true if MBB is safe to outline from, and return any target-specific
   // information in Flags.
-  virtual bool isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
-                                      unsigned &Flags) const override;
+  bool isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
+                              unsigned &Flags) const override;
+
+  bool shouldOutlineFromFunctionByDefault(MachineFunction &MF) const override;
 
   // Calculate target-specific information for a set of outlining candidates.
   outliner::OutlinedFunction getOutliningCandidateInfo(
@@ -164,24 +173,35 @@ public:
   MachineInstr *convertToThreeAddress(MachineInstr &MI, LiveVariables *LV,
                                       LiveIntervals *LIS) const override;
 
+  // MIR printer helper function to annotate Operands with a comment.
+  std::string
+  createMIROperandComment(const MachineInstr &MI, const MachineOperand &Op,
+                          unsigned OpIdx,
+                          const TargetRegisterInfo *TRI) const override;
+
   Register getVLENFactoredAmount(
       MachineFunction &MF, MachineBasicBlock &MBB,
       MachineBasicBlock::iterator II, const DebugLoc &DL, int64_t Amount,
       MachineInstr::MIFlag Flag = MachineInstr::NoFlags) const;
-
-  // Returns true if the given MI is an RVV instruction opcode for which we may
-  // expect to see a FrameIndex operand. When CheckFIs is true, the instruction
-  // must contain at least one FrameIndex operand.
-  bool isRVVSpill(const MachineInstr &MI, bool CheckFIs) const;
-
-  Optional<std::pair<unsigned, unsigned>>
-  isRVVSpillForZvlsseg(unsigned Opcode) const;
 
 protected:
   const RISCVSubtarget &STI;
 };
 
 namespace RISCV {
+
+// Returns true if this is the sext.w pattern, addiw rd, rs1, 0.
+bool isSEXT_W(const MachineInstr &MI);
+bool isZEXT_W(const MachineInstr &MI);
+bool isZEXT_B(const MachineInstr &MI);
+
+// Returns true if the given MI is an RVV instruction opcode for which we may
+// expect to see a FrameIndex operand.
+bool isRVVSpill(const MachineInstr &MI);
+
+Optional<std::pair<unsigned, unsigned>> isRVVSpillForZvlsseg(unsigned Opcode);
+
+bool isFaultFirstLoad(const MachineInstr &MI);
 
 // Implemented in RISCVGenInstrInfo.inc
 int16_t getNamedOperandIdx(uint16_t Opcode, uint16_t NamedIndex);
