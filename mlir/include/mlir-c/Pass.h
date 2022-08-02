@@ -15,7 +15,6 @@
 #define MLIR_C_PASS_H
 
 #include "mlir-c/IR.h"
-#include "mlir-c/Registration.h"
 #include "mlir-c/Support.h"
 
 #ifdef __cplusplus
@@ -71,7 +70,7 @@ mlirPassManagerGetAsOpPassManager(MlirPassManager passManager);
 MLIR_CAPI_EXPORTED MlirLogicalResult
 mlirPassManagerRun(MlirPassManager passManager, MlirModule module);
 
-/// Enable print-ir-after-all.
+/// Enable mlir-print-ir-after-all.
 MLIR_CAPI_EXPORTED void
 mlirPassManagerEnableIRPrinting(MlirPassManager passManager);
 

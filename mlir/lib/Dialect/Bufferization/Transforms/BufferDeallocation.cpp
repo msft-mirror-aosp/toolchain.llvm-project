@@ -83,7 +83,7 @@ walkReturnOperations(Region *region,
 static bool validateSupportedControlFlow(Operation *op) {
   WalkResult result = op->walk([&](Operation *operation) {
     // Only check ops that are inside a function.
-    if (!operation->getParentOfType<FuncOp>())
+    if (!operation->getParentOfType<func::FuncOp>())
       return WalkResult::advance();
 
     auto regions = operation->getRegions();
@@ -225,12 +225,12 @@ public:
       aliasToAllocations[alloc] = allocationInterface;
 
       // Get the alias information for the current allocation node.
-      llvm::for_each(aliases.resolve(alloc), [&](Value alias) {
+      for (Value alias : aliases.resolve(alloc)) {
         // TODO: check for incompatible implementations of the
         // AllocationOpInterface. This could be realized by promoting the
         // AllocationOpInterface to a DialectInterface.
         aliasToAllocations[alias] = allocationInterface;
-      });
+      }
     }
     return success();
   }
@@ -641,7 +641,7 @@ struct BufferDeallocationPass : BufferDeallocationBase<BufferDeallocationPass> {
   }
 
   void runOnOperation() override {
-    FuncOp func = getOperation();
+    func::FuncOp func = getOperation();
     if (func.isExternal())
       return;
 
@@ -654,7 +654,7 @@ struct BufferDeallocationPass : BufferDeallocationBase<BufferDeallocationPass> {
 
 LogicalResult bufferization::deallocateBuffers(Operation *op) {
   if (isa<ModuleOp>(op)) {
-    WalkResult result = op->walk([&](FuncOp funcOp) {
+    WalkResult result = op->walk([&](func::FuncOp funcOp) {
       if (failed(deallocateBuffers(funcOp)))
         return WalkResult::interrupt();
       return WalkResult::advance();

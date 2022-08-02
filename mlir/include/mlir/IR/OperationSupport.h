@@ -36,6 +36,7 @@ class Dialect;
 class DictionaryAttr;
 class ElementsAttr;
 class MutableOperandRangeRange;
+class NamedAttrList;
 class Operation;
 struct OperationState;
 class OpAsmParser;
@@ -69,6 +70,10 @@ public:
   using HasTraitFn = llvm::unique_function<bool(TypeID) const>;
   using ParseAssemblyFn =
       llvm::unique_function<ParseResult(OpAsmParser &, OperationState &) const>;
+  // Note: RegisteredOperationName is passed as reference here as the derived
+  // class is defined below.
+  using PopulateDefaultAttrsFn = llvm::unique_function<void(
+      const RegisteredOperationName &, NamedAttrList &) const>;
   using PrintAssemblyFn =
       llvm::unique_function<void(Operation *, OpAsmPrinter &, StringRef) const>;
   using VerifyInvariantsFn =
@@ -112,6 +117,7 @@ protected:
     GetCanonicalizationPatternsFn getCanonicalizationPatternsFn;
     HasTraitFn hasTraitFn;
     ParseAssemblyFn parseAssemblyFn;
+    PopulateDefaultAttrsFn populateDefaultAttrsFn;
     PrintAssemblyFn printAssemblyFn;
     VerifyInvariantsFn verifyInvariantsFn;
     VerifyRegionInvariantsFn verifyRegionInvariantsFn;
@@ -135,7 +141,8 @@ public:
   /// Returns true if the operation was registered with a particular trait, e.g.
   /// hasTrait<OperandsAreSignlessIntegerLike>(). Returns false if the operation
   /// is unregistered.
-  template <template <typename T> class Trait> bool hasTrait() const {
+  template <template <typename T> class Trait>
+  bool hasTrait() const {
     return hasTrait(TypeID::get<Trait>());
   }
   bool hasTrait(TypeID traitID) const {
@@ -145,7 +152,8 @@ public:
   /// Returns true if the operation *might* have the provided trait. This
   /// means that either the operation is unregistered, or it was registered with
   /// the provide trait.
-  template <template <typename T> class Trait> bool mightHaveTrait() const {
+  template <template <typename T> class Trait>
+  bool mightHaveTrait() const {
     return mightHaveTrait(TypeID::get<Trait>());
   }
   bool mightHaveTrait(TypeID traitID) const {
@@ -155,16 +163,29 @@ public:
   /// Returns an instance of the concept object for the given interface if it
   /// was registered to this operation, null otherwise. This should not be used
   /// directly.
-  template <typename T> typename T::Concept *getInterface() const {
+  template <typename T>
+  typename T::Concept *getInterface() const {
     return impl->interfaceMap.lookup<T>();
   }
 
   /// Returns true if this operation has the given interface registered to it.
-  template <typename T> bool hasInterface() const {
+  template <typename T>
+  bool hasInterface() const {
     return hasInterface(TypeID::get<T>());
   }
   bool hasInterface(TypeID interfaceID) const {
     return impl->interfaceMap.contains(interfaceID);
+  }
+
+  /// Returns true if the operation *might* have the provided interface. This
+  /// means that either the operation is unregistered, or it was registered with
+  /// the provide interface.
+  template <typename T>
+  bool mightHaveInterface() const {
+    return mightHaveInterface(TypeID::get<T>());
+  }
+  bool mightHaveInterface(TypeID interfaceID) const {
+    return !isRegistered() || hasInterface(interfaceID);
   }
 
   /// Return the dialect this operation is registered to if the dialect is
@@ -243,7 +264,8 @@ public:
            T::getParseAssemblyFn(), T::getPrintAssemblyFn(),
            T::getVerifyInvariantsFn(), T::getVerifyRegionInvariantsFn(),
            T::getFoldHookFn(), T::getGetCanonicalizationPatternsFn(),
-           T::getInterfaceMap(), T::getHasTraitFn(), T::getAttributeNames());
+           T::getInterfaceMap(), T::getHasTraitFn(), T::getAttributeNames(),
+           T::getPopulateDefaultAttrsFn());
   }
   /// The use of this method is in general discouraged in favor of
   /// 'insert<CustomOp>(dialect)'.
@@ -255,7 +277,8 @@ public:
          FoldHookFn &&foldHook,
          GetCanonicalizationPatternsFn &&getCanonicalizationPatterns,
          detail::InterfaceMap &&interfaceMap, HasTraitFn &&hasTrait,
-         ArrayRef<StringRef> attrNames);
+         ArrayRef<StringRef> attrNames,
+         PopulateDefaultAttrsFn &&populateDefaultAttrs);
 
   /// Return the dialect this operation is registered to.
   Dialect &getDialect() const { return *impl->dialect; }
@@ -326,7 +349,8 @@ public:
   }
 
   /// Returns true if the operation has a particular trait.
-  template <template <typename T> class Trait> bool hasTrait() const {
+  template <template <typename T> class Trait>
+  bool hasTrait() const {
     return hasTrait(TypeID::get<Trait>());
   }
 
@@ -352,6 +376,10 @@ public:
   ArrayRef<StringAttr> getAttributeNames() const {
     return impl->attributeNames;
   }
+
+  /// This hook implements the method to populate defaults attributes that are
+  /// unset.
+  void populateDefaultAttrs(NamedAttrList &attrs) const;
 
   /// Represent the operation name as an opaque pointer. (Used to support
   /// PointerLikeTypeTraits).
@@ -428,6 +456,23 @@ std::pair<IteratorT, bool> findAttrSorted(IteratorT first, IteratorT last,
   return findAttrUnsorted(first, last, name);
 }
 
+/// Get an attribute from a sorted range of named attributes. Returns null if
+/// the attribute was not found.
+template <typename IteratorT, typename NameT>
+Attribute getAttrFromSortedRange(IteratorT first, IteratorT last, NameT name) {
+  std::pair<IteratorT, bool> result = findAttrSorted(first, last, name);
+  return result.second ? result.first->getValue() : Attribute();
+}
+
+/// Get an attribute from a sorted range of named attributes. Returns None if
+/// the attribute was not found.
+template <typename IteratorT, typename NameT>
+Optional<NamedAttribute>
+getNamedAttrFromSortedRange(IteratorT first, IteratorT last, NameT name) {
+  std::pair<IteratorT, bool> result = findAttrSorted(first, last, name);
+  return result.second ? *result.first : Optional<NamedAttribute>();
+}
+
 } // namespace impl
 
 //===----------------------------------------------------------------------===//
@@ -445,9 +490,14 @@ public:
   using size_type = size_t;
 
   NamedAttrList() : dictionarySorted({}, true) {}
+  NamedAttrList(llvm::NoneType none) : NamedAttrList() {}
   NamedAttrList(ArrayRef<NamedAttribute> attributes);
   NamedAttrList(DictionaryAttr attributes);
-  NamedAttrList(const_iterator in_start, const_iterator in_end);
+  NamedAttrList(const_iterator inStart, const_iterator inEnd);
+
+  template <typename Container>
+  NamedAttrList(const Container &vec)
+      : NamedAttrList(ArrayRef<NamedAttribute>(vec)) {}
 
   bool operator!=(const NamedAttrList &other) const {
     return !(*this == other);
@@ -478,15 +528,15 @@ public:
             typename = std::enable_if_t<std::is_convertible<
                 typename std::iterator_traits<IteratorT>::iterator_category,
                 std::input_iterator_tag>::value>>
-  void append(IteratorT in_start, IteratorT in_end) {
+  void append(IteratorT inStart, IteratorT inEnd) {
     // TODO: expand to handle case where values appended are in order & after
     // end of current list.
     dictionarySorted.setPointerAndInt(nullptr, false);
-    attrs.append(in_start, in_end);
+    attrs.append(inStart, inEnd);
   }
 
   /// Replaces the attributes with new list of attributes.
-  void assign(const_iterator in_start, const_iterator in_end);
+  void assign(const_iterator inStart, const_iterator inEnd);
 
   /// Replaces the attributes with new list of attributes.
   void assign(ArrayRef<NamedAttribute> range) {
@@ -735,6 +785,9 @@ public:
   /// the full module.
   OpPrintingFlags &useLocalScope();
 
+  /// Print users of values as comments.
+  OpPrintingFlags &printValueUsers();
+
   /// Return if the given ElementsAttr should be elided.
   bool shouldElideElementsAttr(ElementsAttr attr) const;
 
@@ -756,6 +809,9 @@ public:
   /// Return if the printer should use local scope when dumping the IR.
   bool shouldUseLocalScope() const;
 
+  /// Return if the printer should print users of values.
+  bool shouldPrintValueUsers() const;
+
 private:
   /// Elide large elements attributes if the number of elements is larger than
   /// the upper limit.
@@ -773,6 +829,9 @@ private:
 
   /// Print operations with numberings local to the current operation.
   bool printLocalScope : 1;
+
+  /// Print users of values.
+  bool printValueUsersFlag : 1;
 };
 
 //===----------------------------------------------------------------------===//

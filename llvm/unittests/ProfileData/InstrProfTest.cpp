@@ -352,8 +352,15 @@ TEST_F(InstrProfTest, test_memprof_getrecord_error) {
   auto Profile = Writer.writeBuffer();
   readProfile(std::move(Profile));
 
+  // Missing frames give a hash_mismatch error.
   auto RecordOr = Reader->getMemProfRecord(0x9999);
-  EXPECT_THAT_ERROR(RecordOr.takeError(), Failed());
+  ASSERT_TRUE(
+      ErrorEquals(instrprof_error::hash_mismatch, RecordOr.takeError()));
+
+  // Missing functions give a unknown_function error.
+  RecordOr = Reader->getMemProfRecord(0x1111);
+  ASSERT_TRUE(
+      ErrorEquals(instrprof_error::unknown_function, RecordOr.takeError()));
 }
 
 TEST_F(InstrProfTest, test_memprof_merge) {
@@ -1140,14 +1147,16 @@ TEST_P(MaybeSparseInstrProfTest, instr_prof_symtab_compression_test) {
     // Compressing:
     std::string FuncNameStrings1;
     EXPECT_THAT_ERROR(collectPGOFuncNameStrings(
-                          FuncNames1, (DoCompression && zlib::isAvailable()),
+                          FuncNames1,
+                          (DoCompression && compression::zlib::isAvailable()),
                           FuncNameStrings1),
                       Succeeded());
 
     // Compressing:
     std::string FuncNameStrings2;
     EXPECT_THAT_ERROR(collectPGOFuncNameStrings(
-                          FuncNames2, (DoCompression && zlib::isAvailable()),
+                          FuncNames2,
+                          (DoCompression && compression::zlib::isAvailable()),
                           FuncNameStrings2),
                       Succeeded());
 

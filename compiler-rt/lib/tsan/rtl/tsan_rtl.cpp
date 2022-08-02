@@ -45,7 +45,7 @@ void (*on_initialize)(void);
 int (*on_finalize)(int);
 #endif
 
-#if !SANITIZER_GO && !SANITIZER_MAC
+#if !SANITIZER_GO && !SANITIZER_APPLE
 __attribute__((tls_model("initial-exec")))
 THREADLOCAL char cur_thread_placeholder[sizeof(ThreadState)] ALIGNED(
     SANITIZER_CACHE_LINE_SIZE);
@@ -204,23 +204,22 @@ static void DoResetImpl(uptr epoch) {
   }
   DPrintf("Resetting meta shadow...\n");
   ctx->metamap.ResetClocks();
+  StoreShadow(&ctx->last_spurious_race, Shadow::kEmpty);
   ctx->resetting = false;
 }
 
 // Clang does not understand locking all slots in the loop:
 // error: expecting mutex 'slot.mtx' to be held at start of each loop
 void DoReset(ThreadState* thr, uptr epoch) SANITIZER_NO_THREAD_SAFETY_ANALYSIS {
-  {
-    for (auto& slot : ctx->slots) {
-      slot.mtx.Lock();
-      if (UNLIKELY(epoch == 0))
-        epoch = ctx->global_epoch;
-      if (UNLIKELY(epoch != ctx->global_epoch)) {
-        // Epoch can't change once we've locked the first slot.
-        CHECK_EQ(slot.sid, 0);
-        slot.mtx.Unlock();
-        return;
-      }
+  for (auto& slot : ctx->slots) {
+    slot.mtx.Lock();
+    if (UNLIKELY(epoch == 0))
+      epoch = ctx->global_epoch;
+    if (UNLIKELY(epoch != ctx->global_epoch)) {
+      // Epoch can't change once we've locked the first slot.
+      CHECK_EQ(slot.sid, 0);
+      slot.mtx.Unlock();
+      return;
     }
   }
   DPrintf("#%d: DoReset epoch=%lu\n", thr ? thr->tid : -1, epoch);
@@ -370,7 +369,6 @@ Context::Context()
       }),
       racy_mtx(MutexTypeRacy),
       racy_stacks(),
-      racy_addresses(),
       fired_suppressions_mtx(MutexTypeFired),
       slot_mtx(MutexTypeSlots),
       resetting() {
@@ -651,9 +649,6 @@ void Initialize(ThreadState *thr) {
   __tsan::InitializePlatformEarly();
 
 #if !SANITIZER_GO
-  // Re-exec ourselves if we need to set additional env or command line args.
-  MaybeReexec();
-
   InitializeAllocator();
   ReplaceSystemMalloc();
 #endif
@@ -722,8 +717,10 @@ void MaybeSpawnBackgroundThread() {
 int Finalize(ThreadState *thr) {
   bool failed = false;
 
+#if !SANITIZER_GO
   if (common_flags()->print_module_map == 1)
     DumpProcessMap();
+#endif
 
   if (flags()->atexit_sleep_ms > 0 && ThreadCount(thr) > 1)
     internal_usleep(u64(flags()->atexit_sleep_ms) * 1000);
@@ -936,7 +933,7 @@ void TraceSwitchPartImpl(ThreadState* thr) {
     // Pathologically large stacks may not fit into the part.
     // In these cases we log only fixed number of top frames.
     const uptr kMaxFrames = 1000;
-    // Sanity check that kMaxFrames won't consume the whole part.
+    // Check that kMaxFrames won't consume the whole part.
     static_assert(kMaxFrames < TracePart::kSize / 2, "kMaxFrames is too big");
     uptr* pos = Max(&thr->shadow_stack[0], thr->shadow_stack_pos - kMaxFrames);
     for (; pos < thr->shadow_stack_pos; pos++) {
@@ -951,6 +948,15 @@ void TraceSwitchPartImpl(ThreadState* thr) {
     for (uptr i = 0; i < d.count; i++)
       TraceMutexLock(thr, d.write ? EventType::kLock : EventType::kRLock, 0,
                      d.addr, d.stack_id);
+  }
+  // Callers of TraceSwitchPart expect that TraceAcquire will always succeed
+  // after the call. It's possible that TryTraceFunc/TraceMutexLock above
+  // filled the trace part exactly up to the TracePart::kAlignment gap
+  // and the next TraceAcquire won't succeed. Skip the gap to avoid that.
+  EventFunc *ev;
+  if (!TraceAcquire(thr, &ev)) {
+    CHECK(TraceSkipGap(thr));
+    CHECK(TraceAcquire(thr, &ev));
   }
   {
     Lock lock(&ctx->slot_mtx);
