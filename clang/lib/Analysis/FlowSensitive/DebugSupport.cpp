@@ -18,6 +18,7 @@
 #include "clang/Analysis/FlowSensitive/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatAdapters.h"
@@ -31,7 +32,33 @@ using llvm::AlignStyle;
 using llvm::fmt_pad;
 using llvm::formatv;
 
-std::string debugString(Solver::Result::Assignment Assignment) {
+llvm::StringRef debugString(Value::Kind Kind) {
+  switch (Kind) {
+  case Value::Kind::Integer:
+    return "Integer";
+  case Value::Kind::Reference:
+    return "Reference";
+  case Value::Kind::Pointer:
+    return "Pointer";
+  case Value::Kind::Struct:
+    return "Struct";
+  case Value::Kind::AtomicBool:
+    return "AtomicBool";
+  case Value::Kind::Conjunction:
+    return "Conjunction";
+  case Value::Kind::Disjunction:
+    return "Disjunction";
+  case Value::Kind::Negation:
+    return "Negation";
+  case Value::Kind::Implication:
+    return "Implication";
+  case Value::Kind::Biconditional:
+    return "Biconditional";
+  }
+  llvm_unreachable("Unhandled value kind");
+}
+
+llvm::StringRef debugString(Solver::Result::Assignment Assignment) {
   switch (Assignment) {
   case Solver::Result::Assignment::AssignedFalse:
     return "False";
@@ -41,7 +68,7 @@ std::string debugString(Solver::Result::Assignment Assignment) {
   llvm_unreachable("Booleans can only be assigned true/false");
 }
 
-std::string debugString(Solver::Result::Status Status) {
+llvm::StringRef debugString(Solver::Result::Status Status) {
   switch (Status) {
   case Solver::Result::Status::Satisfiable:
     return "Satisfiable";
@@ -94,6 +121,20 @@ public:
     case Value::Kind::Negation: {
       auto &N = cast<NegationValue>(B);
       S = formatv("(not\n{0})", debugString(N.getSubVal(), Depth + 1));
+      break;
+    }
+    case Value::Kind::Implication: {
+      auto &IV = cast<ImplicationValue>(B);
+      auto L = debugString(IV.getLeftSubValue(), Depth + 1);
+      auto R = debugString(IV.getRightSubValue(), Depth + 1);
+      S = formatv("(=>\n{0}\n{1})", L, R);
+      break;
+    }
+    case Value::Kind::Biconditional: {
+      auto &BV = cast<BiconditionalValue>(B);
+      auto L = debugString(BV.getLeftSubValue(), Depth + 1);
+      auto R = debugString(BV.getRightSubValue(), Depth + 1);
+      S = formatv("(=\n{0}\n{1})", L, R);
       break;
     }
     default:

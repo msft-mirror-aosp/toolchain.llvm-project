@@ -168,6 +168,10 @@ public:
   /// Imports `f` into the current module.
   LogicalResult processFunction(llvm::Function *f);
 
+  /// Converts function attributes of LLVM Function \p f
+  /// into LLVM dialect attributes of LLVMFuncOp \p funcOp.
+  void processFunctionAttributes(llvm::Function *f, LLVMFuncOp funcOp);
+
   /// Imports GV as a GlobalOp, creating it if it doesn't exist.
   GlobalOp processGlobal(llvm::GlobalVariable *gv);
 
@@ -247,16 +251,9 @@ private:
 
 Location Importer::processDebugLoc(const llvm::DebugLoc &loc,
                                    llvm::Instruction *inst) {
-  if (!loc && inst) {
-    std::string s;
-    llvm::raw_string_ostream os(s);
-    os << "llvm-imported-inst-%";
-    inst->printAsOperand(os, /*PrintType=*/false);
-    return FileLineColLoc::get(context, os.str(), 0, 0);
-  }
-  if (!loc) {
+  if (!loc)
     return unknownLoc;
-  }
+
   // FIXME: Obtain the filename from DILocationInfo.
   return FileLineColLoc::get(context, "imported-bitcode", loc.getLine(),
                              loc.getCol());
@@ -543,9 +540,8 @@ Value Importer::processConstant(llvm::Constant *c) {
       if (!elementValue)
         return nullptr;
       if (useInsertValue) {
-        ArrayAttr indexAttr = bEntry.getI32ArrayAttr({static_cast<int32_t>(i)});
-        root = bEntry.create<InsertValueOp>(UnknownLoc::get(context), rootType,
-                                            root, elementValue, indexAttr);
+        root = bEntry.create<InsertValueOp>(UnknownLoc::get(context), root,
+                                            elementValue, i);
       } else {
         Attribute indexAttr = bEntry.getI32IntegerAttr(static_cast<int32_t>(i));
         Value indexValue = bEntry.create<ConstantOp>(
@@ -635,8 +631,8 @@ static StringRef lookupOperationNameFromOpcode(unsigned opcode) {
       INST(Load, Load),
       INST(Store, Store),
       INST(Fence, Fence),
-      // FIXME: atomiccmpxchg
-      // FIXME: atomicrmw
+      // AtomicCmpXchg is handled specially.
+      // AtomicRMW is handled specially.
       // Getelementptr is handled specially.
       INST(Trunc, Trunc),
       INST(ZExt, ZExt),
@@ -765,6 +761,39 @@ static AtomicOrdering getLLVMAtomicOrdering(llvm::AtomicOrdering ordering) {
   llvm_unreachable("incorrect atomic ordering");
 }
 
+static AtomicBinOp getLLVMAtomicBinOp(llvm::AtomicRMWInst::BinOp binOp) {
+  switch (binOp) {
+  case llvm::AtomicRMWInst::Xchg:
+    return LLVM::AtomicBinOp::xchg;
+  case llvm::AtomicRMWInst::Add:
+    return LLVM::AtomicBinOp::add;
+  case llvm::AtomicRMWInst::Sub:
+    return LLVM::AtomicBinOp::sub;
+  case llvm::AtomicRMWInst::And:
+    return LLVM::AtomicBinOp::_and;
+  case llvm::AtomicRMWInst::Nand:
+    return LLVM::AtomicBinOp::nand;
+  case llvm::AtomicRMWInst::Or:
+    return LLVM::AtomicBinOp::_or;
+  case llvm::AtomicRMWInst::Xor:
+    return LLVM::AtomicBinOp::_xor;
+  case llvm::AtomicRMWInst::Max:
+    return LLVM::AtomicBinOp::max;
+  case llvm::AtomicRMWInst::Min:
+    return LLVM::AtomicBinOp::min;
+  case llvm::AtomicRMWInst::UMax:
+    return LLVM::AtomicBinOp::umax;
+  case llvm::AtomicRMWInst::UMin:
+    return LLVM::AtomicBinOp::umin;
+  case llvm::AtomicRMWInst::FAdd:
+    return LLVM::AtomicBinOp::fadd;
+  case llvm::AtomicRMWInst::FSub:
+    return LLVM::AtomicBinOp::fsub;
+  default:
+    llvm_unreachable("unsupported atomic binary operation");
+  }
+}
+
 // `br` branches to `target`. Return the branch arguments to `br`, in the
 // same order of the PHIs in `target`.
 LogicalResult
@@ -878,8 +907,20 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
     Value rhs = processValue(inst->getOperand(1));
     if (!lhs || !rhs)
       return failure();
+
+    if (lhs.getType() != rhs.getType())
+      return failure();
+
+    Type boolType = b.getI1Type();
+    Type resType = boolType;
+    if (LLVM::isCompatibleVectorType(lhs.getType())) {
+      unsigned numElements =
+          LLVM::getVectorNumElements(lhs.getType()).getFixedValue();
+      resType = VectorType::get({numElements}, boolType);
+    }
+
     instMap[inst] = b.create<FCmpOp>(
-        loc, b.getI1Type(),
+        loc, resType,
         getFCmpPredicate(cast<llvm::FCmpInst>(inst)->getPredicate()), lhs, rhs);
     return success();
   }
@@ -907,7 +948,7 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
 
     if (brInst->isConditional()) {
       state.addAttribute(LLVM::CondBrOp::getOperandSegmentSizeAttr(),
-                         b.getI32VectorAttr(operandSegmentSizes));
+                         b.getDenseI32ArrayAttr(operandSegmentSizes));
     }
 
     b.create(state);
@@ -1066,30 +1107,68 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
                       syncscope);
     return success();
   }
+  case llvm::Instruction::AtomicRMW: {
+    auto *atomicInst = cast<llvm::AtomicRMWInst>(inst);
+    Value ptr = processValue(atomicInst->getPointerOperand());
+    Value val = processValue(atomicInst->getValOperand());
+    if (!ptr || !val)
+      return failure();
+
+    LLVM::AtomicBinOp binOp = getLLVMAtomicBinOp(atomicInst->getOperation());
+    LLVM::AtomicOrdering ordering =
+        getLLVMAtomicOrdering(atomicInst->getOrdering());
+
+    Type type = processType(inst->getType());
+    if (!type)
+      return failure();
+
+    instMap[inst] = b.create<AtomicRMWOp>(loc, type, binOp, ptr, val, ordering);
+    return success();
+  }
+  case llvm::Instruction::AtomicCmpXchg: {
+    auto *cmpXchgInst = cast<llvm::AtomicCmpXchgInst>(inst);
+    Value ptr = processValue(cmpXchgInst->getPointerOperand());
+    Value cmpVal = processValue(cmpXchgInst->getCompareOperand());
+    Value newVal = processValue(cmpXchgInst->getNewValOperand());
+    if (!ptr || !cmpVal || !newVal)
+      return failure();
+
+    LLVM::AtomicOrdering ordering =
+        getLLVMAtomicOrdering(cmpXchgInst->getSuccessOrdering());
+    LLVM::AtomicOrdering failOrdering =
+        getLLVMAtomicOrdering(cmpXchgInst->getFailureOrdering());
+
+    Type type = processType(inst->getType());
+    if (!type)
+      return failure();
+
+    instMap[inst] = b.create<AtomicCmpXchgOp>(loc, type, ptr, cmpVal, newVal,
+                                              ordering, failOrdering);
+    return success();
+  }
   case llvm::Instruction::GetElementPtr: {
     // FIXME: Support inbounds GEPs.
     llvm::GetElementPtrInst *gep = cast<llvm::GetElementPtrInst>(inst);
     Value basePtr = processValue(gep->getOperand(0));
     Type sourceElementType = processType(gep->getSourceElementType());
 
-    SmallVector<Value> indices;
-    for (llvm::Value *operand : llvm::drop_begin(gep->operand_values())) {
-      indices.push_back(processValue(operand));
-      if (!indices.back())
-        return failure();
-    }
     // Treat every indices as dynamic since GEPOp::build will refine those
     // indices into static attributes later. One small downside of this
     // approach is that many unused `llvm.mlir.constant` would be emitted
     // at first place.
-    SmallVector<int32_t> structIndices(indices.size(),
-                                       LLVM::GEPOp::kDynamicIndex);
+    SmallVector<GEPArg> indices;
+    for (llvm::Value *operand : llvm::drop_begin(gep->operand_values())) {
+      Value val = processValue(operand);
+      if (!val)
+        return failure();
+      indices.push_back(val);
+    }
 
     Type type = processType(inst->getType());
     if (!type)
       return failure();
-    instMap[inst] = b.create<GEPOp>(loc, type, sourceElementType, basePtr,
-                                    indices, structIndices);
+    instMap[inst] =
+        b.create<GEPOp>(loc, type, sourceElementType, basePtr, indices);
     return success();
   }
   case llvm::Instruction::InsertValue: {
@@ -1101,11 +1180,8 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
     if (!aggOperand)
       return failure();
 
-    SmallVector<int32_t> idxValues;
-    for (unsigned idx : ivInst->getIndices())
-      idxValues.push_back(static_cast<int32_t>(idx));
-    ArrayAttr indices = b.getI32ArrayAttr(idxValues);
-
+    SmallVector<int64_t> indices;
+    llvm::append_range(indices, ivInst->getIndices());
     instMap[inst] = b.create<InsertValueOp>(loc, aggOperand, inserted, indices);
     return success();
   }
@@ -1119,12 +1195,9 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
     if (!type)
       return failure();
 
-    SmallVector<int32_t> idxValues;
-    for (unsigned idx : evInst->getIndices())
-      idxValues.push_back(static_cast<int32_t>(idx));
-    ArrayAttr indices = b.getI32ArrayAttr(idxValues);
-
-    instMap[inst] = b.create<ExtractValueOp>(loc, type, aggOperand, indices);
+    SmallVector<int64_t> indices;
+    llvm::append_range(indices, evInst->getIndices());
+    instMap[inst] = b.create<ExtractValueOp>(loc, aggOperand, indices);
     return success();
   }
   case llvm::Instruction::ShuffleVector: {
@@ -1136,8 +1209,7 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
     if (!vec2)
       return failure();
 
-    ArrayAttr mask = b.getI32ArrayAttr(svInst->getShuffleMask());
-
+    SmallVector<int32_t> mask(svInst->getShuffleMask());
     instMap[inst] = b.create<ShuffleVectorOp>(loc, vec1, vec2, mask);
     return success();
   }
@@ -1166,6 +1238,15 @@ FlatSymbolRefAttr Importer::getPersonalityAsAttr(llvm::Function *f) {
   return FlatSymbolRefAttr();
 }
 
+void Importer::processFunctionAttributes(llvm::Function *func,
+                                         LLVMFuncOp funcOp) {
+  auto addNamedUnitAttr = [&](StringRef name) {
+    return funcOp->setAttr(name, UnitAttr::get(context));
+  };
+  if (func->hasFnAttribute(llvm::Attribute::ReadNone))
+    addNamedUnitAttr(LLVMDialect::getReadnoneAttrName());
+}
+
 LogicalResult Importer::processFunction(llvm::Function *f) {
   blocks.clear();
   instMap.clear();
@@ -1191,6 +1272,36 @@ LogicalResult Importer::processFunction(llvm::Function *f) {
       UnknownLoc::get(context), f->getName(), functionType,
       convertLinkageFromLLVM(f->getLinkage()), dsoLocal, cconv);
 
+  for (const auto &arg : llvm::enumerate(functionType.getParams())) {
+    llvm::SmallVector<NamedAttribute, 1> argAttrs;
+    if (auto *type = f->getParamByValType(arg.index())) {
+      auto mlirType = processType(type);
+      argAttrs.push_back(
+          NamedAttribute(b.getStringAttr(LLVMDialect::getByValAttrName()),
+                         TypeAttr::get(mlirType)));
+    }
+    if (auto *type = f->getParamByRefType(arg.index())) {
+      auto mlirType = processType(type);
+      argAttrs.push_back(
+          NamedAttribute(b.getStringAttr(LLVMDialect::getByRefAttrName()),
+                         TypeAttr::get(mlirType)));
+    }
+    if (auto *type = f->getParamStructRetType(arg.index())) {
+      auto mlirType = processType(type);
+      argAttrs.push_back(
+          NamedAttribute(b.getStringAttr(LLVMDialect::getStructRetAttrName()),
+                         TypeAttr::get(mlirType)));
+    }
+    if (auto *type = f->getParamInAllocaType(arg.index())) {
+      auto mlirType = processType(type);
+      argAttrs.push_back(
+          NamedAttribute(b.getStringAttr(LLVMDialect::getInAllocaAttrName()),
+                         TypeAttr::get(mlirType)));
+    }
+
+    fop.setArgAttrs(arg.index(), argAttrs);
+  }
+
   if (FlatSymbolRefAttr personality = getPersonalityAsAttr(f))
     fop->setAttr(b.getStringAttr("personality"), personality);
   else if (f->hasPersonalityFn())
@@ -1199,6 +1310,9 @@ LogicalResult Importer::processFunction(llvm::Function *f) {
 
   if (f->hasGC())
     fop.setGarbageCollectorAttr(b.getStringAttr(f->getGC()));
+
+  // Handle Function attributes.
+  processFunctionAttributes(f, fop);
 
   if (f->isDeclaration())
     return success();

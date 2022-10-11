@@ -84,24 +84,6 @@ func.func @elementsattr_toolarge2() -> () {
 
 // -----
 
-func.func @elementsattr_malformed_opaque() -> () {
-  "foo"(){bar = opaque<10, "0xQZz123"> : tensor<1xi8>} : () -> () // expected-error {{expected dialect namespace}}
-}
-
-// -----
-
-func.func @elementsattr_malformed_opaque1() -> () {
-  "foo"(){bar = opaque<"_", "0xQZz123"> : tensor<1xi8>} : () -> () // expected-error {{expected string containing hex digits starting with `0x`}}
-}
-
-// -----
-
-func.func @elementsattr_malformed_opaque2() -> () {
-  "foo"(){bar = opaque<"_", "00abc"> : tensor<1xi8>} : () -> () // expected-error {{expected string containing hex digits starting with `0x`}}
-}
-
-// -----
-
 func.func @mi() {
   // expected-error @+1 {{expected element literal of primitive type}}
   "fooi64"(){bar = sparse<vector<1xi64>,[,[,1]
@@ -519,3 +501,63 @@ func.func @duplicate_dictionary_attr_key() {
 "J// -----
 
 "       // expected-error {{expected}}
+
+// -----
+
+// expected-error@+1 {{expected '<' after 'dense_resource'}}
+#attr = dense_resource>
+
+// -----
+
+// expected-error@+1 {{expected '>'}}
+#attr = dense_resource<resource
+
+// -----
+
+// expected-error@+1 {{expected ':'}}
+#attr = dense_resource<resource>
+
+// -----
+
+// expected-error@+1 {{`dense_resource` expected a shaped type}}
+#attr = dense_resource<resource> : i32
+
+// -----
+
+// expected-error@below {{expected '<' after 'array'}}
+#attr = array
+
+// -----
+
+// expected-error@below {{expected integer or float type}}
+#attr = array<vector<i32>>
+
+// -----
+
+// expected-error@below {{element type bitwidth must be a multiple of 8}}
+#attr = array<i7>
+
+// -----
+
+// expected-error@below {{expected ':' after dense array type}}
+#attr = array<i8)
+
+// -----
+
+// expected-error@below {{expected '>' to close an array attribute}}
+#attr = array<i8: 1)
+
+// -----
+
+// expected-error@below {{dense array attribute expected ranked tensor type}}
+test.typed_attr i32 = array<1>
+
+// -----
+
+// expected-error@below {{does not match parsed type}}
+test.typed_attr tensor<1xi32> = array<>
+
+// -----
+
+// expected-error@below {{does not match parsed type}}
+test.typed_attr tensor<0xi32> = array<1>

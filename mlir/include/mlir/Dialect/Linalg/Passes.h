@@ -26,6 +26,9 @@ namespace bufferization {
 struct OneShotBufferizationOptions;
 } // namespace bufferization
 
+#define GEN_PASS_DECL
+#include "mlir/Dialect/Linalg/Passes.h.inc"
+
 std::unique_ptr<Pass> createConvertElementwiseToLinalgPass();
 
 std::unique_ptr<Pass> createLinalgFoldUnitExtentDimsPass();
@@ -97,21 +100,9 @@ std::unique_ptr<OperationPass<func::FuncOp>> createLinalgStrategyPadPass(
     const linalg::LinalgTransformationFilter &filter =
         linalg::LinalgTransformationFilter());
 
-/// Create a LinalgStrategyGeneralizePass.
-std::unique_ptr<OperationPass<func::FuncOp>> createLinalgStrategyGeneralizePass(
-    StringRef opName = "", const linalg::LinalgTransformationFilter &filter =
-                               linalg::LinalgTransformationFilter());
-
 /// Create a LinalgStrategyDecomposePass.
 // TODO: if/when we need finer control add an `opName` parameter.
 std::unique_ptr<OperationPass<func::FuncOp>> createLinalgStrategyDecomposePass(
-    const linalg::LinalgTransformationFilter &filter =
-        linalg::LinalgTransformationFilter());
-
-/// Create a LinalgStrategyInterchangePass.
-std::unique_ptr<OperationPass<func::FuncOp>>
-createLinalgStrategyInterchangePass(
-    ArrayRef<int64_t> iteratorInterchange = {},
     const linalg::LinalgTransformationFilter &filter =
         linalg::LinalgTransformationFilter());
 
@@ -119,21 +110,6 @@ createLinalgStrategyInterchangePass(
 std::unique_ptr<OperationPass<func::FuncOp>> createLinalgStrategyPeelPass(
     StringRef opName = "",
     const linalg::LinalgPeelOptions &opt = linalg::LinalgPeelOptions(),
-    const linalg::LinalgTransformationFilter &filter =
-        linalg::LinalgTransformationFilter());
-
-/// Create a LinalgStrategyVectorizePass.
-std::unique_ptr<OperationPass<func::FuncOp>> createLinalgStrategyVectorizePass(
-    StringRef opName = "",
-    linalg::LinalgVectorizationOptions opt =
-        linalg::LinalgVectorizationOptions(),
-    const linalg::LinalgTransformationFilter &filter =
-        linalg::LinalgTransformationFilter(),
-    bool padVectorize = false);
-
-/// Create a LinalgStrategyEnablePass.
-std::unique_ptr<OperationPass<func::FuncOp>> createLinalgStrategyEnablePass(
-    linalg::LinalgEnablingOptions opt = linalg::LinalgEnablingOptions(),
     const linalg::LinalgTransformationFilter &filter =
         linalg::LinalgTransformationFilter());
 

@@ -10,9 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PassDetail.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/Analysis/DependenceAnalysis.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Passes.h"
@@ -113,15 +112,14 @@ static SmallVector<Value> getTiledOperands(LinalgOp producer) {
 /// obtained from the producer itself, since they are not tiled + fused.
 static LinalgOp fuse(OpBuilder &b, LinalgOp producer,
                      const DenseMap<unsigned, Range> &fusedLoopsAndRanges) {
-  SmallVector<Value, 8> ivs, tileSizes, sizeBounds;
-  SmallVector<Range, 8> loopRanges;
+  SmallVector<OpFoldResult> ivs, tileSizes, sizeBounds;
+  SmallVector<Range> loopRanges;
   Location loc = producer.getLoc();
-  auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
-  auto one = b.create<arith::ConstantIndexOp>(loc, 1);
 
   for (unsigned i = 0, e = producer.getNumLoops(); i < e; ++i) {
     auto shapeDim = getShapeDefiningLoopRange(producer, i);
-    Value dim = createOrFoldDimOp(b, loc, shapeDim.shape, shapeDim.dimension);
+    OpFoldResult dim =
+        createFoldedDimOp(b, loc, shapeDim.shape, shapeDim.dimension);
     sizeBounds.push_back(dim);
     auto it = fusedLoopsAndRanges.find(i);
     if (it != fusedLoopsAndRanges.end()) {
@@ -131,8 +129,8 @@ static LinalgOp fuse(OpBuilder &b, LinalgOp producer,
       LLVM_DEBUG(llvm::dbgs() << "tiled loop#" << i << " with LoopRange "
                               << loopRanges.back() << "\n");
     } else {
-      tileSizes.push_back(zero);
-      loopRanges.push_back(Range{zero, dim, one});
+      tileSizes.push_back(b.getIndexAttr(0));
+      loopRanges.push_back(Range{b.getIndexAttr(0), dim, b.getIndexAttr(1)});
       LLVM_DEBUG(llvm::dbgs() << "full loop#" << i << " with LoopRange "
                               << loopRanges.back() << "\n");
     }
@@ -167,9 +165,8 @@ static LinalgOp fuse(OpBuilder &b, LinalgOp producer,
   Operation *clonedOp = producer.clone(b, loc, resultTypes, clonedShapes);
 
   // Shift all IndexOp results by the tile offset.
-  SmallVector<Value> allIvs;
-  llvm::transform(loopRanges, std::back_inserter(allIvs),
-                  [](Range range) { return range.offset; });
+  SmallVector<OpFoldResult> allIvs = llvm::to_vector(
+      llvm::map_range(loopRanges, [&](Range range) { return range.offset; }));
   offsetIndices(b, clonedOp, allIvs);
 
   return clonedOp;

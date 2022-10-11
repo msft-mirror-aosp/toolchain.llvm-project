@@ -121,45 +121,25 @@ static void removeEmptyPTLoad(SmallVector<PhdrEntry *, 0> &phdrs) {
 
 void elf::copySectionsIntoPartitions() {
   SmallVector<InputSectionBase *, 0> newSections;
+  const size_t ehSize = ehInputSections.size();
   for (unsigned part = 2; part != partitions.size() + 1; ++part) {
     for (InputSectionBase *s : inputSections) {
-      if (!(s->flags & SHF_ALLOC) || !s->isLive())
+      if (!(s->flags & SHF_ALLOC) || !s->isLive() || s->type != SHT_NOTE)
         continue;
-      InputSectionBase *copy;
-      if (s->type == SHT_NOTE)
-        copy = make<InputSection>(cast<InputSection>(*s));
-      else if (auto *es = dyn_cast<EhInputSection>(s))
-        copy = make<EhInputSection>(*es);
-      else
-        continue;
+      auto *copy = make<InputSection>(cast<InputSection>(*s));
       copy->partition = part;
       newSections.push_back(copy);
+    }
+    for (size_t i = 0; i != ehSize; ++i) {
+      assert(ehInputSections[i]->isLive());
+      auto *copy = make<EhInputSection>(*ehInputSections[i]);
+      copy->partition = part;
+      ehInputSections.push_back(copy);
     }
   }
 
   inputSections.insert(inputSections.end(), newSections.begin(),
                        newSections.end());
-}
-
-void elf::combineEhSections() {
-  llvm::TimeTraceScope timeScope("Combine EH sections");
-  for (InputSectionBase *&s : inputSections) {
-    // Ignore dead sections and the partition end marker (.part.end),
-    // whose partition number is out of bounds.
-    if (!s->isLive() || s->partition == 255)
-      continue;
-
-    Partition &part = s->getPartition();
-    if (auto *es = dyn_cast<EhInputSection>(s)) {
-      part.ehFrame->addSection(es);
-      s = nullptr;
-    } else if (s->kind() == SectionBase::Regular && part.armExidx &&
-               part.armExidx->addSection(cast<InputSection>(s))) {
-      s = nullptr;
-    }
-  }
-
-  llvm::erase_value(inputSections, nullptr);
 }
 
 static Defined *addOptionalRegular(StringRef name, SectionBase *sec,
@@ -337,6 +317,7 @@ template <class ELFT> void elf::createSyntheticSections() {
 
   StringRef relaDynName = config->isRela ? ".rela.dyn" : ".rel.dyn";
 
+  const unsigned threadCount = config->threadCount;
   for (Partition &part : partitions) {
     auto add = [&](SyntheticSection &sec) {
       sec.partition = part.getNumber();
@@ -370,11 +351,11 @@ template <class ELFT> void elf::createSyntheticSections() {
     }
 
     if (config->androidPackDynRelocs)
-      part.relaDyn =
-          std::make_unique<AndroidPackedRelocationSection<ELFT>>(relaDynName);
+      part.relaDyn = std::make_unique<AndroidPackedRelocationSection<ELFT>>(
+          relaDynName, threadCount);
     else
       part.relaDyn = std::make_unique<RelocationSection<ELFT>>(
-          relaDynName, config->zCombreloc);
+          relaDynName, config->zCombreloc, threadCount);
 
     if (config->hasDynSymTab) {
       add(*part.dynSymTab);
@@ -406,7 +387,7 @@ template <class ELFT> void elf::createSyntheticSections() {
     }
 
     if (config->relrPackDynRelocs) {
-      part.relrDyn = std::make_unique<RelrSection<ELFT>>();
+      part.relrDyn = std::make_unique<RelrSection<ELFT>>(threadCount);
       add(*part.relrDyn);
     }
 
@@ -424,6 +405,11 @@ template <class ELFT> void elf::createSyntheticSections() {
       // InputSections.
       part.armExidx = std::make_unique<ARMExidxSyntheticSection>();
       add(*part.armExidx);
+    }
+
+    if (!config->packageMetadata.empty()) {
+      part.packageMetadataNote = std::make_unique<PackageMetadataNote>();
+      add(*part.packageMetadataNote);
     }
   }
 
@@ -483,7 +469,8 @@ template <class ELFT> void elf::createSyntheticSections() {
   // We always need to add rel[a].plt to output if it has entries.
   // Even for static linking it can contain R_[*]_IRELATIVE relocations.
   in.relaPlt = std::make_unique<RelocationSection<ELFT>>(
-      config->isRela ? ".rela.plt" : ".rel.plt", /*sort=*/false);
+      config->isRela ? ".rela.plt" : ".rel.plt", /*sort=*/false,
+      /*threadCount=*/1);
   add(*in.relaPlt);
 
   // The relaIplt immediately follows .rel[a].dyn to ensure that the IRelative
@@ -494,7 +481,7 @@ template <class ELFT> void elf::createSyntheticSections() {
   // behaviour by placing the iplt section in .rel.plt.
   in.relaIplt = std::make_unique<RelocationSection<ELFT>>(
       config->androidPackDynRelocs ? in.relaPlt->name : relaDynName,
-      /*sort=*/false);
+      /*sort=*/false, /*threadCount=*/1);
   add(*in.relaIplt);
 
   if ((config->emachine == EM_386 || config->emachine == EM_X86_64) &&
@@ -602,7 +589,8 @@ template <class ELFT> void Writer<ELFT>::run() {
       return;
 
     if (auto e = buffer->commit())
-      error("failed to write to the output file: " + toString(std::move(e)));
+      fatal("failed to write output '" + buffer->getPath() +
+            "': " + toString(std::move(e)));
   }
 }
 
@@ -1121,14 +1109,10 @@ template <class ELFT> void Writer<ELFT>::setReservedSymbolSections() {
 // The more branches in getSectionRank that match, the more similar they are.
 // Since each branch corresponds to a bit flag, we can just use
 // countLeadingZeros.
-static int getRankProximityAux(const OutputSection &a, const OutputSection &b) {
-  return countLeadingZeros(a.sortRank ^ b.sortRank);
-}
-
 static int getRankProximity(OutputSection *a, SectionCommand *b) {
   auto *osd = dyn_cast<OutputDesc>(b);
   return (osd && osd->osec.hasInputSections)
-             ? getRankProximityAux(*a, osd->osec)
+             ? countLeadingZeros(a->sortRank ^ osd->osec.sortRank)
              : -1;
 }
 
@@ -1294,7 +1278,7 @@ static DenseMap<const InputSectionBase *, int> buildSectionOrder() {
 
   // We want both global and local symbols. We get the global ones from the
   // symbol table and iterate the object files for the local ones.
-  for (Symbol *sym : symtab->symbols())
+  for (Symbol *sym : symtab->getSymbols())
     addSym(*sym);
 
   for (ELFFileBase *file : ctx->objectFiles)
@@ -1910,7 +1894,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   }
 
   if (config->hasDynSymTab) {
-    parallelForEach(symtab->symbols(), [](Symbol *sym) {
+    parallelForEach(symtab->getSymbols(), [](Symbol *sym) {
       sym->isPreemptible = computeIsPreemptible(*sym);
     });
   }
@@ -1927,21 +1911,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     // a linker-script-defined symbol is absolute.
     ppc64noTocRelax.clear();
     if (!config->relocatable) {
-      // Scan all relocations. Each relocation goes through a series of tests to
-      // determine if it needs special treatment, such as creating GOT, PLT,
-      // copy relocations, etc. Note that relocations for non-alloc sections are
-      // directly processed by InputSection::relocateNonAlloc.
-      for (InputSectionBase *sec : inputSections)
-        if (sec->isLive() && isa<InputSection>(sec) && (sec->flags & SHF_ALLOC))
-          scanRelocations<ELFT>(*sec);
-      for (Partition &part : partitions) {
-        for (EhInputSection *sec : part.ehFrame->sections)
-          scanRelocations<ELFT>(*sec);
-        if (part.armExidx && part.armExidx->isLive())
-          for (InputSection *sec : part.armExidx->exidxSections)
-            scanRelocations<ELFT>(*sec);
-      }
-
+      scanRelocations<ELFT>();
       reportUndefinedSymbols();
       postScanRelocations();
     }
@@ -1982,7 +1952,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     llvm::TimeTraceScope timeScope("Add symbols to symtabs");
     // Now that we have defined all possible global symbols including linker-
     // synthesized ones. Visit all symbols to give the finishing touches.
-    for (Symbol *sym : symtab->symbols()) {
+    for (Symbol *sym : symtab->getSymbols()) {
       if (!sym->isUsedInRegularObj || !includeInSymtab(*sym))
         continue;
       if (!config->relocatable)
@@ -2107,16 +2077,20 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     // symbol table section (dynSymTab) must be the first one.
     for (Partition &part : partitions) {
       if (part.relaDyn) {
+        part.relaDyn->mergeRels();
         // Compute DT_RELACOUNT to be used by part.dynamic.
         part.relaDyn->partitionRels();
         finalizeSynthetic(part.relaDyn.get());
+      }
+      if (part.relrDyn) {
+        part.relrDyn->mergeRels();
+        finalizeSynthetic(part.relrDyn.get());
       }
 
       finalizeSynthetic(part.dynSymTab.get());
       finalizeSynthetic(part.gnuHashTab.get());
       finalizeSynthetic(part.hashTab.get());
       finalizeSynthetic(part.verDef.get());
-      finalizeSynthetic(part.relrDyn.get());
       finalizeSynthetic(part.ehFrameHdr.get());
       finalizeSynthetic(part.verSym.get());
       finalizeSynthetic(part.verNeed.get());
@@ -2858,9 +2832,10 @@ template <class ELFT> void Writer<ELFT>::openFile() {
 }
 
 template <class ELFT> void Writer<ELFT>::writeSectionsBinary() {
+  parallel::TaskGroup tg;
   for (OutputSection *sec : outputSections)
     if (sec->flags & SHF_ALLOC)
-      sec->writeTo<ELFT>(Out::bufferStart + sec->offset);
+      sec->writeTo<ELFT>(Out::bufferStart + sec->offset, tg);
 }
 
 static void fillTrap(uint8_t *i, uint8_t *end) {
@@ -2903,16 +2878,21 @@ template <class ELFT> void Writer<ELFT>::writeTrapInstr() {
 template <class ELFT> void Writer<ELFT>::writeSections() {
   llvm::TimeTraceScope timeScope("Write sections");
 
-  // In -r or --emit-relocs mode, write the relocation sections first as in
-  // ELf_Rel targets we might find out that we need to modify the relocated
-  // section while doing it.
-  for (OutputSection *sec : outputSections)
-    if (sec->type == SHT_REL || sec->type == SHT_RELA)
-      sec->writeTo<ELFT>(Out::bufferStart + sec->offset);
-
-  for (OutputSection *sec : outputSections)
-    if (sec->type != SHT_REL && sec->type != SHT_RELA)
-      sec->writeTo<ELFT>(Out::bufferStart + sec->offset);
+  {
+    // In -r or --emit-relocs mode, write the relocation sections first as in
+    // ELf_Rel targets we might find out that we need to modify the relocated
+    // section while doing it.
+    parallel::TaskGroup tg;
+    for (OutputSection *sec : outputSections)
+      if (sec->type == SHT_REL || sec->type == SHT_RELA)
+        sec->writeTo<ELFT>(Out::bufferStart + sec->offset, tg);
+  }
+  {
+    parallel::TaskGroup tg;
+    for (OutputSection *sec : outputSections)
+      if (sec->type != SHT_REL && sec->type != SHT_RELA)
+        sec->writeTo<ELFT>(Out::bufferStart + sec->offset, tg);
+  }
 
   // Finally, check that all dynamic relocation addends were written correctly.
   if (config->checkDynamicRelocs && config->writeAddends) {

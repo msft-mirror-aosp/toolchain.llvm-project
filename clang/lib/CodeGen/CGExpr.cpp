@@ -906,10 +906,8 @@ static bool isFlexibleArrayMemberExpr(const Expr *E,
     if (const auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl())) {
       // FIXME: Sema doesn't treat a T[1] union member as a flexible array
       // member, only a T[0] or T[] member gets that treatment.
-      // Under StrictFlexArraysLevel, obey c99+ that disallows FAM in union, see
-      // C11 6.7.2.1 §18
       if (FD->getParent()->isUnion())
-        return StrictFlexArraysLevel < 2;
+        return true;
       RecordDecl::field_iterator FI(
           DeclContext::decl_iterator(const_cast<FieldDecl *>(FD)));
       return ++FI == FD->getParent()->field_end();
@@ -1661,21 +1659,7 @@ static bool getRangeForType(CodeGenFunction &CGF, QualType Ty,
     End = llvm::APInt(CGF.getContext().getTypeSize(Ty), 2);
   } else {
     const EnumDecl *ED = ET->getDecl();
-    llvm::Type *LTy = CGF.ConvertTypeForMem(ED->getIntegerType());
-    unsigned Bitwidth = LTy->getScalarSizeInBits();
-    unsigned NumNegativeBits = ED->getNumNegativeBits();
-    unsigned NumPositiveBits = ED->getNumPositiveBits();
-
-    if (NumNegativeBits) {
-      unsigned NumBits = std::max(NumNegativeBits, NumPositiveBits + 1);
-      assert(NumBits <= Bitwidth);
-      End = llvm::APInt(Bitwidth, 1) << (NumBits - 1);
-      Min = -End;
-    } else {
-      assert(NumPositiveBits <= Bitwidth);
-      End = llvm::APInt(Bitwidth, 1) << NumPositiveBits;
-      Min = llvm::APInt::getZero(Bitwidth);
-    }
+    ED->getValueRange(End, Min);
   }
   return true;
 }
@@ -1743,6 +1727,10 @@ llvm::Value *CodeGenFunction::EmitLoadOfScalar(Address Addr, bool Volatile,
                                                LValueBaseInfo BaseInfo,
                                                TBAAAccessInfo TBAAInfo,
                                                bool isNontemporal) {
+  if (auto *GV = dyn_cast<llvm::GlobalValue>(Addr.getPointer()))
+    if (GV->isThreadLocal())
+      Addr = Addr.withPointer(Builder.CreateThreadLocalAddress(GV));
+
   if (const auto *ClangVecTy = Ty->getAs<VectorType>()) {
     // Boolean vectors use `iN` as storage type.
     if (ClangVecTy->isExtVectorBoolType()) {
@@ -1884,6 +1872,10 @@ void CodeGenFunction::EmitStoreOfScalar(llvm::Value *Value, Address Addr,
                                         LValueBaseInfo BaseInfo,
                                         TBAAAccessInfo TBAAInfo,
                                         bool isInit, bool isNontemporal) {
+  if (auto *GV = dyn_cast<llvm::GlobalValue>(Addr.getPointer()))
+    if (GV->isThreadLocal())
+      Addr = Addr.withPointer(Builder.CreateThreadLocalAddress(GV));
+
   llvm::Type *SrcTy = Value->getType();
   if (const auto *ClangVecTy = Ty->getAs<VectorType>()) {
     auto *VecTy = dyn_cast<llvm::FixedVectorType>(SrcTy);
@@ -2614,6 +2606,10 @@ static LValue EmitGlobalVarDeclLValue(CodeGenFunction &CGF,
   }
 
   llvm::Value *V = CGF.CGM.GetAddrOfGlobalVar(VD);
+
+  if (VD->getTLSKind() != VarDecl::TLS_None)
+    V = CGF.Builder.CreateThreadLocalAddress(V);
+
   llvm::Type *RealVarTy = CGF.getTypes().ConvertTypeForMem(VD->getType());
   V = EmitBitCastOfLValueToProperType(CGF, V, RealVarTy);
   CharUnits Alignment = CGF.getContext().getDeclAlign(VD);
@@ -2883,6 +2879,10 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
       llvm_unreachable("DeclRefExpr for Decl not entered in LocalDeclMap?");
     }
 
+    // Handle threadlocal function locals.
+    if (VD->getTLSKind() != VarDecl::TLS_None)
+      addr =
+          addr.withPointer(Builder.CreateThreadLocalAddress(addr.getPointer()));
 
     // Check for OpenMP threadprivate variables.
     if (getLangOpts().OpenMP && !getLangOpts().OpenMPSimd &&
@@ -2940,8 +2940,13 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
   // FIXME: While we're emitting a binding from an enclosing scope, all other
   // DeclRefExprs we see should be implicitly treated as if they also refer to
   // an enclosing scope.
-  if (const auto *BD = dyn_cast<BindingDecl>(ND))
+  if (const auto *BD = dyn_cast<BindingDecl>(ND)) {
+    if (E->refersToEnclosingVariableOrCapture()) {
+      auto *FD = LambdaCaptureFields.lookup(BD);
+      return EmitCapturedFieldLValue(*this, FD, CXXABIThisValue);
+    }
     return EmitLValue(BD->getBinding());
+  }
 
   // We can form DeclRefExprs naming GUID declarations when reconstituting
   // non-type template parameters into expressions.
@@ -3292,7 +3297,7 @@ void CodeGenFunction::EmitCheck(
   assert(IsSanitizerScope);
   assert(Checked.size() > 0);
   assert(CheckHandler >= 0 &&
-         size_t(CheckHandler) < llvm::array_lengthof(SanitizerHandlers));
+         size_t(CheckHandler) < std::size(SanitizerHandlers));
   const StringRef CheckName = SanitizerHandlers[CheckHandler].Name;
 
   llvm::Value *FatalCond = nullptr;
@@ -3755,7 +3760,7 @@ static Address emitArraySubscriptGEP(CodeGenFunction &CGF, Address addr,
                                      const llvm::Twine &name = "arrayidx") {
   // All the indices except that last must be zero.
 #ifndef NDEBUG
-  for (auto idx : indices.drop_back())
+  for (auto *idx : indices.drop_back())
     assert(isa<llvm::ConstantInt>(idx) &&
            cast<llvm::ConstantInt>(idx)->isZero());
 #endif
@@ -4292,7 +4297,7 @@ unsigned CodeGenFunction::getDebugInfoFIndex(const RecordDecl *Rec,
                                              unsigned FieldIndex) {
   unsigned I = 0, Skipped = 0;
 
-  for (auto F : Rec->getDefinition()->fields()) {
+  for (auto *F : Rec->getDefinition()->fields()) {
     if (I == FieldIndex)
       break;
     if (F->isUnnamedBitfield())
@@ -5046,7 +5051,10 @@ static CGCallee EmitDirectCallee(CodeGenFunction &CGF, GlobalDecl GD) {
   if (auto builtinID = FD->getBuiltinID()) {
     std::string NoBuiltinFD = ("no-builtin-" + FD->getName()).str();
     std::string NoBuiltins = "no-builtins";
-    std::string FDInlineName = (FD->getName() + ".inline").str();
+
+    auto *A = FD->getAttr<AsmLabelAttr>();
+    StringRef Ident = A ? A->getLabel() : FD->getName();
+    std::string FDInlineName = (Ident + ".inline").str();
 
     bool IsPredefinedLibFunction =
         CGF.getContext().BuiltinInfo.isPredefinedLibFunction(builtinID);

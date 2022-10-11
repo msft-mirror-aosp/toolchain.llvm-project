@@ -207,8 +207,7 @@ Sema::ActOnModuleDecl(SourceLocation StartLoc, SourceLocation ModuleLoc,
   // here, in order to support macro import.
 
   // Only one module-declaration is permitted per source file.
-  if (!ModuleScopes.empty() &&
-      ModuleScopes.back().Module->isModulePurview()) {
+  if (isCurrentModulePurview()) {
     Diag(ModuleLoc, diag::err_module_redeclaration);
     Diag(VisibleModules.getImportLoc(ModuleScopes.back().Module),
          diag::note_prev_module_declaration);
@@ -717,7 +716,7 @@ Decl *Sema::ActOnStartExportDecl(Scope *S, SourceLocation ExportLoc,
   //   An export-declaration shall appear only [...] in the purview of a module
   //   interface unit. An export-declaration shall not appear directly or
   //   indirectly within [...] a private-module-fragment.
-  if (ModuleScopes.empty() || !ModuleScopes.back().Module->isModulePurview()) {
+  if (!isCurrentModulePurview()) {
     Diag(ExportLoc, diag::err_export_not_in_module_interface) << 0;
     D->setInvalidDecl();
     return D;
@@ -910,6 +909,17 @@ Decl *Sema::ActOnFinishExportDecl(Scope *S, Decl *D, SourceLocation RBraceLoc) {
         // no declarations (transitively), in which case it's ill-formed.
         diagExportedUnnamedDecl(*this, UnnamedDeclKind::Context, Child,
                                 BlockStart);
+      }
+      if (auto *FD = dyn_cast<FunctionDecl>(Child)) {
+        // [dcl.inline]/7
+        // If an inline function or variable that is attached to a named module
+        // is declared in a definition domain, it shall be defined in that
+        // domain.
+        // So, if the current declaration does not have a definition, we must
+        // check at the end of the TU (or when the PMF starts) to see that we
+        // have a definition at that point.
+        if (FD->isInlineSpecified() && !FD->isDefined())
+          PendingInlineFuncDecls.insert(FD);
       }
     }
   }

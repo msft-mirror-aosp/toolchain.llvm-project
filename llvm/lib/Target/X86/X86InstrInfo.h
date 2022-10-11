@@ -374,6 +374,10 @@ public:
                             int FrameIndex, const TargetRegisterClass *RC,
                             const TargetRegisterInfo *TRI) const override;
 
+  void loadStoreTileReg(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+                        unsigned Opc, Register Reg, int FrameIdx,
+                        bool isKill = false) const;
+
   bool expandPostRAPseudo(MachineInstr &MI) const override;
 
   /// Check whether the target can fold a load that feeds a subreg operand
@@ -544,7 +548,7 @@ public:
   ArrayRef<std::pair<unsigned, const char *>>
   getSerializableDirectMachineOperandTargetFlags() const override;
 
-  virtual outliner::OutlinedFunction getOutliningCandidateInfo(
+  outliner::OutlinedFunction getOutliningCandidateInfo(
       std::vector<outliner::Candidate> &RepeatedSequenceLocs) const override;
 
   bool isFunctionSafeToOutlineFrom(MachineFunction &MF,

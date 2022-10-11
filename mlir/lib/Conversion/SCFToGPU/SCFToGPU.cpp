@@ -16,7 +16,7 @@
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/ParallelLoopMapper.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -328,6 +328,13 @@ static Value deriveStaticUpperBound(Value upperBound,
     }
   }
 
+  if (auto minOp = upperBound.getDefiningOp<arith::MinSIOp>()) {
+    for (Value operand : {minOp.getLhs(), minOp.getRhs()}) {
+      if (auto staticBound = deriveStaticUpperBound(operand, rewriter))
+        return staticBound;
+    }
+  }
+
   if (auto multiplyOp = upperBound.getDefiningOp<arith::MulIOp>()) {
     if (auto lhs = dyn_cast_or_null<arith::ConstantIndexOp>(
             deriveStaticUpperBound(multiplyOp.getOperand(0), rewriter)
@@ -336,8 +343,8 @@ static Value deriveStaticUpperBound(Value upperBound,
               deriveStaticUpperBound(multiplyOp.getOperand(1), rewriter)
                   .getDefiningOp())) {
         // Assumptions about the upper bound of minimum computations no longer
-        // work if multiplied by a negative value, so abort in this case.
-        if (lhs.value() < 0 || rhs.value() < 0)
+        // work if multiplied by mixed signs, so abort in this case.
+        if (lhs.value() < 0 != rhs.value() < 0)
           return {};
 
         return rewriter.create<arith::ConstantIndexOp>(

@@ -22,11 +22,19 @@ if (HAS_WERROR_GLOBAL_CTORS)
 endif()
 
 if(LLVM_ENABLE_ZLIB)
-  set(imported_libs ZLIB::ZLIB)
+  list(APPEND imported_libs ZLIB::ZLIB)
 endif()
 
 if(LLVM_ENABLE_ZSTD)
-  list(APPEND imported_libs zstd::libzstd_shared)
+  if(TARGET zstd::libzstd_shared AND NOT LLVM_USE_STATIC_ZSTD)
+    set(zstd_target zstd::libzstd_shared)
+  else()
+    set(zstd_target zstd::libzstd_static)
+  endif()
+endif()
+
+if(LLVM_ENABLE_ZSTD)
+  list(APPEND imported_libs ${zstd_target})
 endif()
 
 if( MSVC OR MINGW )
@@ -57,6 +65,9 @@ elseif( CMAKE_HOST_UNIX )
   set(system_libs ${system_libs} ${LLVM_PTHREAD_LIB})
   if( UNIX AND NOT (BEOS OR HAIKU) )
     set(system_libs ${system_libs} m)
+  endif()
+  if( UNIX AND ${CMAKE_SYSTEM_NAME} MATCHES "SunOS" )
+    set(system_libs ${system_libs} kstat)
   endif()
   if( FUCHSIA )
     set(system_libs ${system_libs} zircon)
@@ -122,6 +133,7 @@ add_llvm_component_library(LLVMSupport
   ARMWinEH.cpp
   Allocator.cpp
   AutoConvert.cpp
+  Base64.cpp
   BinaryStreamError.cpp
   BinaryStreamReader.cpp
   BinaryStreamRef.cpp
@@ -297,11 +309,12 @@ if(LLVM_ENABLE_ZSTD)
   # CMAKE_BUILD_TYPE is only meaningful to single-configuration generators.
   if(CMAKE_BUILD_TYPE)
     string(TOUPPER ${CMAKE_BUILD_TYPE} build_type)
-    get_property(zstd_library TARGET zstd::libzstd_shared PROPERTY LOCATION_${build_type})
+    get_property(zstd_library TARGET ${zstd_target} PROPERTY LOCATION_${build_type})
   endif()
   if(NOT zstd_library)
-    get_property(zstd_library TARGET zstd::libzstd_shared PROPERTY LOCATION)
+    get_property(zstd_library TARGET ${zstd_target} PROPERTY LOCATION)
   endif()
+  get_library_name(${zstd_library} zstd_library)
   set(llvm_system_libs ${llvm_system_libs} "${zstd_library}")
 endif()
 

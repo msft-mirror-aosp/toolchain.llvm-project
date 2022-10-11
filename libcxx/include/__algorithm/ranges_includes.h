@@ -27,7 +27,7 @@
 #  pragma GCC system_header
 #endif
 
-#if _LIBCPP_STD_VER > 17 && !defined(_LIBCPP_HAS_NO_INCOMPLETE_RANGES)
+#if _LIBCPP_STD_VER > 17
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
@@ -56,7 +56,9 @@ struct __fn {
         std::move(__last1),
         std::move(__first2),
         std::move(__last2),
-        ranges::__make_projected_comp(__comp, __proj1, __proj2));
+        std::move(__comp),
+        std::move(__proj1),
+        std::move(__proj2));
   }
 
   template <
@@ -73,7 +75,9 @@ struct __fn {
         ranges::end(__range1),
         ranges::begin(__range2),
         ranges::end(__range2),
-        ranges::__make_projected_comp(__comp, __proj1, __proj2));
+        std::move(__comp),
+        std::move(__proj1),
+        std::move(__proj2));
   }
 };
 
@@ -86,6 +90,6 @@ inline namespace __cpo {
 
 _LIBCPP_END_NAMESPACE_STD
 
-#endif // _LIBCPP_STD_VER > 17 && !defined(_LIBCPP_HAS_NO_INCOMPLETE_RANGES)
+#endif // _LIBCPP_STD_VER > 17
 
 #endif // _LIBCPP___ALGORITHM_RANGES_INCLUDES_H
