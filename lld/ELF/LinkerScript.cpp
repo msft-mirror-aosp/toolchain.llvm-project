@@ -238,7 +238,7 @@ void LinkerScript::addSymbol(SymbolAssignment *cmd) {
 
   Symbol *sym = symtab->insert(cmd->name);
   sym->mergeProperties(newSym);
-  sym->replace(newSym);
+  newSym.overwrite(*sym);
   sym->isUsedInRegularObj = true;
   cmd->sym = cast<Defined>(sym);
 }
@@ -256,7 +256,7 @@ static void declareSymbol(SymbolAssignment *cmd) {
   // We can't calculate final value right now.
   Symbol *sym = symtab->insert(cmd->name);
   sym->mergeProperties(newSym);
-  sym->replace(newSym);
+  newSym.overwrite(*sym);
 
   cmd->sym = cast<Defined>(sym);
   cmd->provide = false;
@@ -846,7 +846,12 @@ void LinkerScript::addOrphanSections() {
   // to be created before we create relocation output section, so we want
   // to create target sections first. We do not want priority handling
   // for synthetic sections because them are special.
+  size_t n = 0;
   for (InputSectionBase *isec : inputSections) {
+    // Process InputSection and MergeInputSection.
+    if (LLVM_LIKELY(isa<InputSection>(isec)))
+      inputSections[n++] = isec;
+
     // In -r links, SHF_LINK_ORDER sections are added while adding their parent
     // sections because we need to know the parent's output section before we
     // can select an output section for the SHF_LINK_ORDER section.
@@ -863,6 +868,8 @@ void LinkerScript::addOrphanSections() {
         if (depSec->flags & SHF_LINK_ORDER)
           add(depSec);
   }
+  // Keep just InputSection.
+  inputSections.resize(n);
 
   // If no SECTIONS command was given, we should insert sections commands
   // before others, so that we can handle scripts which refers them,

@@ -274,6 +274,96 @@ LogicalResult transform::AlternativesOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ForeachOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform::ForeachOp::apply(transform::TransformResults &results,
+                            transform::TransformState &state) {
+  ArrayRef<Operation *> payloadOps = state.getPayloadOps(getTarget());
+  SmallVector<SmallVector<Operation *>> resultOps(getNumResults(), {});
+
+  for (Operation *op : payloadOps) {
+    auto scope = state.make_region_scope(getBody());
+    if (failed(state.mapBlockArguments(getIterationVariable(), {op})))
+      return DiagnosedSilenceableFailure::definiteFailure();
+
+    // Execute loop body.
+    for (Operation &transform : getBody().front().without_terminator()) {
+      DiagnosedSilenceableFailure result = state.applyTransform(
+          cast<transform::TransformOpInterface>(transform));
+      if (!result.succeeded())
+        return result;
+    }
+
+    // Append yielded payload ops to result list (if any).
+    for (unsigned i = 0; i < getNumResults(); ++i) {
+      ArrayRef<Operation *> yieldedOps =
+          state.getPayloadOps(getYieldOp().getOperand(i));
+      resultOps[i].append(yieldedOps.begin(), yieldedOps.end());
+    }
+  }
+
+  for (unsigned i = 0; i < getNumResults(); ++i)
+    results.set(getResult(i).cast<OpResult>(), resultOps[i]);
+
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::ForeachOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  BlockArgument iterVar = getIterationVariable();
+  if (any_of(getBody().front().without_terminator(), [&](Operation &op) {
+        return isHandleConsumed(iterVar, cast<TransformOpInterface>(&op));
+      })) {
+    consumesHandle(getTarget(), effects);
+  } else {
+    onlyReadsHandle(getTarget(), effects);
+  }
+
+  for (Value result : getResults())
+    producesHandle(result, effects);
+}
+
+void transform::ForeachOp::getSuccessorRegions(
+    Optional<unsigned> index, ArrayRef<Attribute> operands,
+    SmallVectorImpl<RegionSuccessor> &regions) {
+  Region *bodyRegion = &getBody();
+  if (!index) {
+    regions.emplace_back(bodyRegion, bodyRegion->getArguments());
+    return;
+  }
+
+  // Branch back to the region or the parent.
+  assert(*index == 0 && "unexpected region index");
+  regions.emplace_back(bodyRegion, bodyRegion->getArguments());
+  regions.emplace_back();
+}
+
+OperandRange
+transform::ForeachOp::getSuccessorEntryOperands(Optional<unsigned> index) {
+  // The iteration variable op handle is mapped to a subset (one op to be
+  // precise) of the payload ops of the ForeachOp operand.
+  assert(index && *index == 0 && "unexpected region index");
+  return getOperation()->getOperands();
+}
+
+transform::YieldOp transform::ForeachOp::getYieldOp() {
+  return cast<transform::YieldOp>(getBody().front().getTerminator());
+}
+
+LogicalResult transform::ForeachOp::verify() {
+  auto yieldOp = getYieldOp();
+  if (getNumResults() != yieldOp.getNumOperands())
+    return emitOpError() << "expects the same number of results as the "
+                            "terminator has operands";
+  for (Value v : yieldOp.getOperands())
+    if (!v.getType().isa<pdl::OperationType>())
+      return yieldOp->emitOpError("expects only PDL_Operation operands");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // GetClosestIsolatedParentOp
 //===----------------------------------------------------------------------===//
 
@@ -293,6 +383,36 @@ DiagnosedSilenceableFailure transform::GetClosestIsolatedParentOp::apply(
     parents.insert(parent);
   }
   results.set(getResult().cast<OpResult>(), parents.getArrayRef());
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===----------------------------------------------------------------------===//
+// GetProducerOfOperand
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform::GetProducerOfOperand::apply(transform::TransformResults &results,
+                                       transform::TransformState &state) {
+  int64_t operandNumber = getOperandNumber();
+  SmallVector<Operation *> producers;
+  for (Operation *target : state.getPayloadOps(getTarget())) {
+    Operation *producer =
+        target->getNumOperands() <= operandNumber
+            ? nullptr
+            : target->getOperand(operandNumber).getDefiningOp();
+    if (!producer) {
+      DiagnosedSilenceableFailure diag =
+          emitSilenceableError()
+          << "could not find a producer for operand number: " << operandNumber
+          << " of " << *target;
+      diag.attachNote(target->getLoc()) << "target op";
+      results.set(getResult().cast<OpResult>(),
+                  SmallVector<mlir::Operation *>{});
+      return diag;
+    }
+    producers.push_back(producer);
+  }
+  results.set(getResult().cast<OpResult>(), producers);
   return DiagnosedSilenceableFailure::success();
 }
 
@@ -399,8 +519,14 @@ transform::SequenceOp::apply(transform::TransformResults &results,
   for (Operation &transform : getBodyBlock()->without_terminator()) {
     DiagnosedSilenceableFailure result =
         state.applyTransform(cast<TransformOpInterface>(transform));
-    if (!result.succeeded())
+    if (result.isDefiniteFailure())
       return result;
+
+    if (result.isSilenceableFailure()) {
+      if (getFailurePropagationMode() == FailurePropagationMode::Propagate)
+        return result;
+      (void)result.silence();
+    }
   }
 
   // Forward the operation mapping for values yielded from the sequence to the

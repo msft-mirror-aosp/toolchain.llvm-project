@@ -2,8 +2,8 @@ include(ExtendPath)
 include(LLVMDistributionSupport)
 include(FindPrefixFromConfig)
 
-set(LLVM_INSTALL_PACKAGE_DIR lib${LLVM_LIBDIR_SUFFIX}/cmake/llvm)
-set(llvm_cmake_builddir "${LLVM_BINARY_DIR}/${LLVM_INSTALL_PACKAGE_DIR}")
+# CMAKE_INSTALL_PACKAGEDIR might be absolute, so don't reuse below.
+set(llvm_cmake_builddir "${LLVM_LIBRARY_DIR}/cmake/llvm")
 
 # First for users who use an installed LLVM, create the LLVMExports.cmake file.
 set(LLVM_EXPORTS_FILE ${llvm_cmake_builddir}/LLVMExports.cmake)
@@ -134,6 +134,7 @@ list(REMOVE_DUPLICATES LLVM_CONFIG_LIBRARY_DIRS)
 
 set(LLVM_CONFIG_BINARY_DIR "\${LLVM_INSTALL_PREFIX}")
 extend_path(LLVM_CONFIG_CMAKE_DIR "\${LLVM_INSTALL_PREFIX}" "${LLVM_INSTALL_PACKAGE_DIR}")
+extend_path(LLVM_CONFIG_TOOLS_BINARY_DIR "\${LLVM_INSTALL_PREFIX}" "${LLVM_TOOLS_INSTALL_DIR}")
 
 # Generate a default location for lit
 if (LLVM_INSTALL_UTILS AND LLVM_BUILD_UTILS)

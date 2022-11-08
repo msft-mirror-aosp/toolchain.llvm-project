@@ -118,7 +118,7 @@ function(add_llvm_symbol_exports target_name export_file)
       set_property(TARGET ${target_name} APPEND_STRING PROPERTY
                    LINK_FLAGS "  -Wl,--version-script,\"${CMAKE_CURRENT_BINARY_DIR}/${native_export_file}\"")
     endif()
-  else()
+  elseif(WIN32)
     set(native_export_file "${target_name}.def")
 
     add_custom_command(OUTPUT ${native_export_file}
@@ -129,7 +129,18 @@ function(add_llvm_symbol_exports target_name export_file)
       COMMENT "Creating export file for ${target_name}")
     set(export_file_linker_flag "${CMAKE_CURRENT_BINARY_DIR}/${native_export_file}")
     if(MSVC)
+      # cl.exe or clang-cl, i.e. MSVC style command line interface
       set(export_file_linker_flag "/DEF:\"${export_file_linker_flag}\"")
+    elseif(CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+      # clang in msvc mode, calling a link.exe/lld-link style linker
+      set(export_file_linker_flag "-Wl,/DEF:\"${export_file_linker_flag}\"")
+    elseif(MINGW)
+      # ${export_file_linker_flag}, which is the plain file name, works as is
+      # when passed to the compiler driver, which then passes it on to the
+      # linker as an input file.
+      set(export_file_linker_flag "\"${export_file_linker_flag}\"")
+    else()
+      message(FATAL_ERROR "Unsupported Windows toolchain")
     endif()
     set_property(TARGET ${target_name} APPEND_STRING PROPERTY
                  LINK_FLAGS " ${export_file_linker_flag}")
@@ -1089,8 +1100,11 @@ function(process_llvm_pass_plugins)
 
       ## Part 1: Extension header to be included whenever we need extension
       #  processing.
-      set(LLVM_INSTALL_PACKAGE_DIR lib${LLVM_LIBDIR_SUFFIX}/cmake/llvm)
-      set(llvm_cmake_builddir "${LLVM_BINARY_DIR}/${LLVM_INSTALL_PACKAGE_DIR}")
+      if(NOT DEFINED LLVM_INSTALL_PACKAGE_DIR)
+          message(FATAL_ERROR "LLVM_INSTALL_PACKAGE_DIR must be defined and writable. GEN_CONFIG should only be passe when building LLVM proper.")
+      endif()
+      # LLVM_INSTALL_PACKAGE_DIR might be absolute, so don't reuse below.
+      set(llvm_cmake_builddir "${LLVM_LIBRARY_DIR}/cmake/llvm")
       file(WRITE
           "${llvm_cmake_builddir}/LLVMConfigExtensions.cmake"
           "set(LLVM_STATIC_EXTENSIONS ${LLVM_STATIC_EXTENSIONS})")
@@ -1950,7 +1964,7 @@ endfunction()
 function(add_lit_testsuites project directory)
   if (NOT LLVM_ENABLE_IDE)
     cmake_parse_arguments(ARG "EXCLUDE_FROM_CHECK_ALL" "FOLDER" "PARAMS;DEPENDS;ARGS" ${ARGN})
-    
+
     if (NOT ARG_FOLDER)
       set(ARG_FOLDER "Test Subdirectories")
     endif()
@@ -2006,11 +2020,11 @@ function(llvm_install_library_symlink name dest type)
 
   set(output_dir lib${LLVM_LIBDIR_SUFFIX})
   if(WIN32 AND "${type}" STREQUAL "SHARED")
-    set(output_dir bin)
+    set(output_dir "${CMAKE_INSTALL_BINDIR}")
   endif()
 
   install(SCRIPT ${INSTALL_SYMLINK}
-          CODE "install_symlink(${full_name} ${full_dest} ${output_dir})"
+          CODE "install_symlink(\"${full_name}\" \"${full_dest}\" \"${output_dir}\")"
           COMPONENT ${component})
 
 endfunction()
@@ -2045,8 +2059,10 @@ function(llvm_install_symlink project name dest)
     set(full_dest llvm${CMAKE_EXECUTABLE_SUFFIX})
   endif()
 
+  set(output_dir "${${project}_TOOLS_INSTALL_DIR}")
+
   install(SCRIPT ${INSTALL_SYMLINK}
-          CODE "install_symlink(${full_name} ${full_dest} ${${project}_TOOLS_INSTALL_DIR})"
+          CODE "install_symlink(\"${full_name}\" \"${full_dest}\" \"${output_dir}\")"
           COMPONENT ${component})
 
   if (NOT LLVM_ENABLE_IDE AND NOT ARG_ALWAYS_GENERATE)
@@ -2130,7 +2146,14 @@ function(llvm_add_tool_symlink project link_name target)
     add_custom_command(OUTPUT ${output_path}
                      COMMAND ${CMAKE_COMMAND} -E ${LLVM_LINK_OR_COPY} "${dest_binary}" "${output_path}"
                      DEPENDS ${target})
-    add_custom_target(${target_name} ALL DEPENDS ${target} ${output_path})
+
+    # TODO: Make use of generator expressions below once CMake 3.19 or higher is the minimum supported version.
+    set(should_build_all)
+    get_target_property(target_excluded_from_all ${target} EXCLUDE_FROM_ALL)
+    if (NOT target_excluded_from_all)
+      set(should_build_all ALL)
+    endif()
+    add_custom_target(${target_name} ${should_build_all} DEPENDS ${target} ${output_path})
     set_target_properties(${target_name} PROPERTIES FOLDER Tools)
 
     # Make sure both the link and target are toolchain tools

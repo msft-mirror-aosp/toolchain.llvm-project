@@ -278,7 +278,7 @@ manual, or execute ``cmake --help-variable VARIABLE_NAME``.
 
 **CMAKE_CXX_STANDARD**:STRING
   Sets the C++ standard to conform to when building LLVM.  Possible values are
-  14, 17, 20.  LLVM Requires C++ 14 or higher.  This defaults to 14.
+  17 and 20.  LLVM Requires C++ 17 or higher.  This defaults to 17.
 
 **CMAKE_INSTALL_BINDIR**:PATH
   The path to install executables, relative to the *CMAKE_INSTALL_PREFIX*.
@@ -941,9 +941,11 @@ the ``cmake`` command or by setting it directly in ``ccmake`` or ``cmake-gui``).
 
 This file is available in two different locations.
 
-* ``<INSTALL_PREFIX>/lib/cmake/llvm/LLVMConfig.cmake`` where
-  ``<INSTALL_PREFIX>`` is the install prefix of an installed version of LLVM.
-  On Linux typically this is ``/usr/lib/cmake/llvm/LLVMConfig.cmake``.
+* ``<LLVM_INSTALL_PACKAGE_DIR>/LLVMConfig.cmake`` where
+  ``<LLVM_INSTALL_PACKAGE_DIR>`` is the location where LLVM CMake modules are
+  installed as part of an installed version of LLVM. This is typically
+  ``cmake/llvm/`` within the lib directory. On Linux, this is typically
+  ``/usr/lib/cmake/llvm/LLVMConfig.cmake``.
 
 * ``<LLVM_BUILD_ROOT>/lib/cmake/llvm/LLVMConfig.cmake`` where
   ``<LLVM_BUILD_ROOT>`` is the root of the LLVM build tree. **Note: this is only

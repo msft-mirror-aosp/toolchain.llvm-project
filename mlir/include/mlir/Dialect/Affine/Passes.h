@@ -28,6 +28,9 @@ class AffineForOp;
 /// producer-consumer and sibling fusion.
 enum FusionMode { Greedy, ProducerConsumer, Sibling };
 
+#define GEN_PASS_DECL
+#include "mlir/Dialect/Affine/Passes.h.inc"
+
 /// Creates a simplification pass for affine structures (maps and sets). In
 /// addition, this pass also normalizes memrefs to have the trivial (identity)
 /// layout map.
@@ -109,6 +112,14 @@ std::unique_ptr<OperationPass<func::FuncOp>>
 createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize);
 /// Overload relying on pass options for initialization.
 std::unique_ptr<OperationPass<func::FuncOp>> createSuperVectorizePass();
+
+/// Populate patterns that expand affine index operations into more fundamental
+/// operations (not necessarily restricted to Affine dialect).
+void populateAffineExpandIndexOpsPatterns(RewritePatternSet &patterns);
+
+/// Creates a pass to expand affine index operations into more fundamental
+/// operations (not necessarily restricted to Affine dialect).
+std::unique_ptr<Pass> createAffineExpandIndexOpsPass();
 
 //===----------------------------------------------------------------------===//
 // Registration

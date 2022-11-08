@@ -153,7 +153,7 @@ declare_mlir_dialect_python_bindings(
 declare_mlir_dialect_python_bindings(
   ADD_TO_PARENT MLIRPythonSources.Dialects
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mlir"
-  TD_FILE dialects/ArithmeticOps.td
+  TD_FILE dialects/ArithOps.td
   SOURCES
     dialects/arith.py
     dialects/_arith_ops_ext.py
@@ -363,8 +363,7 @@ declare_mlir_python_extension(MLIRPythonExtension.AsyncDialectPasses
     MLIRCAPIAsync
 )
 
-# Only enable the ExecutionEngine if the native target is configured in.
-if(TARGET ${LLVM_NATIVE_ARCH})
+if(MLIR_ENABLE_EXECUTION_ENGINE)
   declare_mlir_python_extension(MLIRPythonExtension.ExecutionEngine
     MODULE_NAME _mlirExecutionEngine
     ADD_TO_PARENT MLIRPythonSources.ExecutionEngine

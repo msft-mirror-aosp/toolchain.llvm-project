@@ -116,6 +116,8 @@ public:
 
   void walkImmediateSubElements(function_ref<void(Attribute)> walkAttrsFn,
                                 function_ref<void(Type)> walkTypesFn) const;
+  Type replaceImmediateSubElements(ArrayRef<Attribute> replAttrs,
+                                   ArrayRef<Type> replTypes) const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -177,6 +179,8 @@ public:
 
   void walkImmediateSubElements(function_ref<void(Attribute)> walkAttrsFn,
                                 function_ref<void(Type)> walkTypesFn) const;
+  Type replaceImmediateSubElements(ArrayRef<Attribute> replAttrs,
+                                   ArrayRef<Type> replTypes) const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -244,6 +248,8 @@ public:
 
   void walkImmediateSubElements(function_ref<void(Attribute)> walkAttrsFn,
                                 function_ref<void(Type)> walkTypesFn) const;
+  Type replaceImmediateSubElements(ArrayRef<Attribute> replAttrs,
+                                   ArrayRef<Type> replTypes) const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -375,6 +381,8 @@ public:
 
   void walkImmediateSubElements(function_ref<void(Attribute)> walkAttrsFn,
                                 function_ref<void(Type)> walkTypesFn) const;
+  Type replaceImmediateSubElements(ArrayRef<Attribute> replAttrs,
+                                   ArrayRef<Type> replTypes) const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -408,7 +416,7 @@ public:
   Type getElementType() const;
 
   /// Returns the number of elements in the fixed vector.
-  unsigned getNumElements();
+  unsigned getNumElements() const;
 
   /// Verifies that the type about to be constructed is well-formed.
   static LogicalResult verify(function_ref<InFlightDiagnostic()> emitError,
@@ -416,6 +424,8 @@ public:
 
   void walkImmediateSubElements(function_ref<void(Attribute)> walkAttrsFn,
                                 function_ref<void(Type)> walkTypesFn) const;
+  Type replaceImmediateSubElements(ArrayRef<Attribute> replAttrs,
+                                   ArrayRef<Type> replTypes) const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -450,7 +460,7 @@ public:
   /// Returns the scaling factor of the number of elements in the vector. The
   /// vector contains at least the resulting number of elements, or any non-zero
   /// multiple of this number.
-  unsigned getMinNumElements();
+  unsigned getMinNumElements() const;
 
   /// Verifies that the type about to be constructed is well-formed.
   static LogicalResult verify(function_ref<InFlightDiagnostic()> emitError,
@@ -458,6 +468,8 @@ public:
 
   void walkImmediateSubElements(function_ref<void(Attribute)> walkAttrsFn,
                                 function_ref<void(Type)> walkTypesFn) const;
+  Type replaceImmediateSubElements(ArrayRef<Attribute> replAttrs,
+                                   ArrayRef<Type> replTypes) const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -523,6 +535,15 @@ Type getScalableVectorType(Type elementType, unsigned numElements);
 /// (aggregates such as struct) or types that don't have a size (such as void).
 llvm::TypeSize getPrimitiveTypeSizeInBits(Type type);
 
+/// The positions of different values in the data layout entry for pointers.
+enum class PtrDLEntryPos { Size = 0, Abi = 1, Preferred = 2, Index = 3 };
+
+/// Returns the value that corresponds to named position `pos` from the
+/// data layout entry `attr` assuming it's a dense integer elements attribute.
+/// Returns `None` if `pos` is not present in the entry.
+/// Currently only `PtrDLEntryPos::Index` is optional, and all other positions
+/// may be assumed to be present.
+Optional<unsigned> extractPointerSpecValue(Attribute attr, PtrDLEntryPos pos);
 } // namespace LLVM
 } // namespace mlir
 

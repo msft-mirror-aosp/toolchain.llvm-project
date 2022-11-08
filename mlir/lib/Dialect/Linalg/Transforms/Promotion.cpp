@@ -10,13 +10,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PassDetail.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Complex/IR/Complex.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
-#include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineExprVisitor.h"
@@ -223,14 +222,21 @@ FailureOr<PromotionInfo> mlir::linalg::promoteSubviewAsNewBuffer(
     if (droppedDims[en.index()])
       continue;
     auto rangeValue = en.value();
-    // Try to extract a tight constant.
+    // Try to extract a tight constant. If the size is known statically, no need
+    // to look for the bound.
     LLVM_DEBUG(llvm::dbgs() << "Extract tightest: " << rangeValue.size << "\n");
-    FailureOr<int64_t> upperBound =
-        getConstantUpperBoundForIndex(rangeValue.size);
-    Value size =
-        failed(upperBound)
-            ? rangeValue.size
-            : b.create<arith::ConstantIndexOp>(loc, upperBound.value());
+    Value size;
+    if (auto attr = rangeValue.size.dyn_cast<Attribute>()) {
+      size = getValueOrCreateConstantIndexOp(b, loc, rangeValue.size);
+    } else {
+      Value materializedSize =
+          getValueOrCreateConstantIndexOp(b, loc, rangeValue.size);
+      FailureOr<int64_t> upperBound =
+          getConstantUpperBoundForIndex(materializedSize);
+      size = failed(upperBound)
+                 ? materializedSize
+                 : b.create<arith::ConstantIndexOp>(loc, upperBound.value());
+    }
     LLVM_DEBUG(llvm::dbgs() << "Extracted tightest: " << size << "\n");
     fullSizes.push_back(size);
     partialSizes.push_back(

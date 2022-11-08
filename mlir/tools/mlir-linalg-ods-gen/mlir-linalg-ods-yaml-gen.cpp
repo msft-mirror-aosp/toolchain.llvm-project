@@ -14,9 +14,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/AsmParser/AsmParser.h"
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/Parser/Parser.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/Optional.h"
@@ -721,7 +722,8 @@ static LogicalResult generateNamedGenericOpOds(LinalgOpConfig &opConfig,
         assert(arg.defaultFn);
         std::string enumName = convertOperandKindToEnumName(arg.kind);
         static const char typeFmt[] = "{0}::{1}";
-        static const char defFmt[] = "DefaultValuedAttr<{0}, \"{1}\">:${2}";
+        static const char defFmt[] =
+            "DefaultValuedOptionalAttr<{0}, \"{1}\">:${2}";
         attrDefs.push_back(llvm::formatv(
             defFmt, llvm::formatv("{0}Attr", enumName),
             llvm::formatv(typeFmt, enumName, arg.defaultFn), arg.name));
@@ -735,7 +737,8 @@ static LogicalResult generateNamedGenericOpOds(LinalgOpConfig &opConfig,
         size_t size = arg.indexAttrMap->affineMap().getNumResults();
         assert(arg.defaultIndices.value().size() == size);
         static const char typeFmt[] = "RankedI64ElementsAttr<[{0}]>";
-        static const char defFmt[] = "DefaultValuedAttr<{0}, \"{ {1} }\">:${2}";
+        static const char defFmt[] =
+            "DefaultValuedOptionalAttr<{0}, \"{ {1} }\">:${2}";
         std::string defaultVals;
         llvm::raw_string_ostream ss(defaultVals);
         llvm::interleave(

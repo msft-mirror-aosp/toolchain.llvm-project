@@ -13,8 +13,7 @@
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
 
-namespace lld {
-namespace elf {
+namespace lld::elf {
 
 class InputFile;
 class SharedFile;
@@ -33,13 +32,17 @@ class SharedFile;
 // is one add* function per symbol type.
 class SymbolTable {
 public:
-  ArrayRef<Symbol *> symbols() const { return symVector; }
+  ArrayRef<Symbol *> getSymbols() const { return symVector; }
 
   void wrap(Symbol *sym, Symbol *real, Symbol *wrap);
 
   Symbol *insert(StringRef name);
 
-  Symbol *addSymbol(const Symbol &newSym);
+  template <typename T> Symbol *addSymbol(const T &newSym) {
+    Symbol *sym = insert(newSym.getName());
+    sym->resolve(newSym);
+    return sym;
+  }
   Symbol *addAndCheckDuplicate(const Defined &newSym);
 
   void scanVersionScript();
@@ -86,7 +89,6 @@ private:
 
 extern std::unique_ptr<SymbolTable> symtab;
 
-} // namespace elf
-} // namespace lld
+} // namespace lld::elf
 
 #endif

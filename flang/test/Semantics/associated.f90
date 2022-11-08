@@ -135,9 +135,9 @@ subroutine assoc()
     intprocPointer1 => intVar
     !ERROR: POINTER= argument 'intprocpointer1' is a procedure pointer but the TARGET= argument 'intvar' is not a procedure or procedure pointer
     lVar = associated(intprocPointer1, intVar)
-    !ERROR: Procedure pointer 'intprocpointer1' associated with incompatible procedure designator 'elementalproc': incompatible dummy argument #1: incompatible dummy data object attributes
+    !ERROR: Procedure pointer 'intprocpointer1' associated with incompatible procedure designator 'elementalproc': incompatible procedure attributes: Elemental
     intProcPointer1 => elementalProc
-    !WARNING: Procedure pointer 'intprocpointer1' associated with incompatible procedure designator 'elementalproc': incompatible dummy argument #1: incompatible dummy data object attributes
+    !WARNING: Procedure pointer 'intprocpointer1' associated with incompatible procedure designator 'elementalproc': incompatible procedure attributes: Elemental
     lvar = associated(intProcPointer1, elementalProc)
     !ERROR: POINTER= argument 'intpointervar1' is an object pointer but the TARGET= argument 'intfunc' is a procedure designator
     lvar = associated (intPointerVar1, intFunc)
