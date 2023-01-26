@@ -17,7 +17,7 @@ using namespace mlir;
 using namespace mlir::arith;
 
 /// Function that evaluates the result of doing something on arithmetic
-/// constants and returns None on overflow.
+/// constants and returns std::nullopt on overflow.
 using ConstArithFn =
     function_ref<Optional<APInt>(const APInt &, const APInt &)>;
 
@@ -466,13 +466,18 @@ void arith::MinUIOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
 // ExtUIOp
 //===----------------------------------------------------------------------===//
 
+static ConstantIntRanges extUIRange(const ConstantIntRanges &range,
+                                    Type destType) {
+  unsigned destWidth = ConstantIntRanges::getStorageBitwidth(destType);
+  APInt umin = range.umin().zext(destWidth);
+  APInt umax = range.umax().zext(destWidth);
+  return ConstantIntRanges::fromUnsigned(umin, umax);
+}
+
 void arith::ExtUIOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
                                        SetIntRangeFn setResultRange) {
   Type destType = getResult().getType();
-  unsigned destWidth = ConstantIntRanges::getStorageBitwidth(destType);
-  APInt umin = argRanges[0].umin().zext(destWidth);
-  APInt umax = argRanges[0].umax().zext(destWidth);
-  setResultRange(getResult(), ConstantIntRanges::fromUnsigned(umin, umax));
+  setResultRange(getResult(), extUIRange(argRanges[0], destType));
 }
 
 //===----------------------------------------------------------------------===//
@@ -553,6 +558,25 @@ void arith::IndexCastOp::inferResultRanges(
 
   if (srcWidth < destWidth)
     setResultRange(getResult(), extSIRange(argRanges[0], destType));
+  else if (srcWidth > destWidth)
+    setResultRange(getResult(), truncIRange(argRanges[0], destType));
+  else
+    setResultRange(getResult(), argRanges[0]);
+}
+
+//===----------------------------------------------------------------------===//
+// IndexCastUIOp
+//===----------------------------------------------------------------------===//
+
+void arith::IndexCastUIOp::inferResultRanges(
+    ArrayRef<ConstantIntRanges> argRanges, SetIntRangeFn setResultRange) {
+  Type sourceType = getOperand().getType();
+  Type destType = getResult().getType();
+  unsigned srcWidth = ConstantIntRanges::getStorageBitwidth(sourceType);
+  unsigned destWidth = ConstantIntRanges::getStorageBitwidth(destType);
+
+  if (srcWidth < destWidth)
+    setResultRange(getResult(), extUIRange(argRanges[0], destType));
   else if (srcWidth > destWidth)
     setResultRange(getResult(), truncIRange(argRanges[0], destType));
   else

@@ -12,6 +12,7 @@
 #include "Symbols.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/Compiler.h"
 
 namespace lld::elf {
 
@@ -84,10 +85,10 @@ private:
   // This mapping is 1:N because two symbols with different versions
   // can have the same name. We use this map to handle "extern C++ {}"
   // directive in version scripts.
-  llvm::Optional<llvm::StringMap<SmallVector<Symbol *, 0>>> demangledSyms;
+  std::optional<llvm::StringMap<SmallVector<Symbol *, 0>>> demangledSyms;
 };
 
-extern std::unique_ptr<SymbolTable> symtab;
+LLVM_LIBRARY_VISIBILITY extern SymbolTable symtab;
 
 } // namespace lld::elf
 

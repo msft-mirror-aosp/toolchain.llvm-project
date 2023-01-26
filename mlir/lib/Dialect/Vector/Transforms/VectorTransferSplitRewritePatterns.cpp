@@ -43,7 +43,7 @@ static Optional<int64_t> extractConstantIndex(Value v) {
   if (auto affineApplyOp = v.getDefiningOp<AffineApplyOp>())
     if (affineApplyOp.getAffineMap().isSingleConstant())
       return affineApplyOp.getAffineMap().getSingleConstantResult();
-  return None;
+  return std::nullopt;
 }
 
 // Missing foldings of scf.if make it necessary to perform poor man's folding
@@ -170,13 +170,13 @@ static MemRefType getCastCompatibleMemRefType(MemRefType aT, MemRefType bT) {
       resStrides(bT.getRank(), 0);
   for (int64_t idx = 0, e = aT.getRank(); idx < e; ++idx) {
     resShape[idx] =
-        (aShape[idx] == bShape[idx]) ? aShape[idx] : ShapedType::kDynamicSize;
+        (aShape[idx] == bShape[idx]) ? aShape[idx] : ShapedType::kDynamic;
     resStrides[idx] = (aStrides[idx] == bStrides[idx])
                           ? aStrides[idx]
-                          : ShapedType::kDynamicStrideOrOffset;
+                          : ShapedType::kDynamic;
   }
   resOffset =
-      (aOffset == bOffset) ? aOffset : ShapedType::kDynamicStrideOrOffset;
+      (aOffset == bOffset) ? aOffset : ShapedType::kDynamic;
   return MemRefType::get(
       resShape, aT.getElementType(),
       StridedLayoutAttr::get(aT.getContext(), resOffset, resStrides));
@@ -428,11 +428,12 @@ static void createFullPartialVectorTransferWrite(RewriterBase &b,
   auto notInBounds = b.create<arith::XOrIOp>(
       loc, inBoundsCond, b.create<arith::ConstantIntOp>(loc, true, 1));
   b.create<scf::IfOp>(loc, notInBounds, [&](OpBuilder &b, Location loc) {
-    BlockAndValueMapping mapping;
+    IRMapping mapping;
     Value load = b.create<memref::LoadOp>(
         loc,
         b.create<vector::TypeCastOp>(
-            loc, MemRefType::get({}, xferOp.getVector().getType()), alloc));
+            loc, MemRefType::get({}, xferOp.getVector().getType()), alloc),
+        ValueRange());
     mapping.map(xferOp.getVector(), load);
     b.clone(*xferOp.getOperation(), mapping);
     b.create<scf::YieldOp>(loc, ValueRange{});
@@ -525,7 +526,9 @@ LogicalResult mlir::vector::splitFullAndPartialTransfer(
   SmallVector<bool, 4> bools(xferOp.getTransferRank(), true);
   auto inBoundsAttr = b.getBoolArrayAttr(bools);
   if (options.vectorTransferSplit == VectorTransferSplit::ForceInBounds) {
-    xferOp->setAttr(xferOp.getInBoundsAttrStrName(), inBoundsAttr);
+    b.updateRootInPlace(xferOp, [&]() {
+      xferOp->setAttr(xferOp.getInBoundsAttrStrName(), inBoundsAttr);
+    });
     return success();
   }
 
@@ -596,7 +599,9 @@ LogicalResult mlir::vector::splitFullAndPartialTransfer(
     for (unsigned i = 0, e = returnTypes.size(); i != e; ++i)
       xferReadOp.setOperand(i, fullPartialIfOp.getResult(i));
 
-    xferOp->setAttr(xferOp.getInBoundsAttrStrName(), inBoundsAttr);
+    b.updateRootInPlace(xferOp, [&]() {
+      xferOp->setAttr(xferOp.getInBoundsAttrStrName(), inBoundsAttr);
+    });
 
     return success();
   }
@@ -610,7 +615,7 @@ LogicalResult mlir::vector::splitFullAndPartialTransfer(
   // Do an in bounds write to either the output or the extra allocated buffer.
   // The operation is cloned to prevent deleting information needed for the
   // later IR creation.
-  BlockAndValueMapping mapping;
+  IRMapping mapping;
   mapping.map(xferWriteOp.getSource(), memrefAndIndices.front());
   mapping.map(xferWriteOp.getIndices(), memrefAndIndices.drop_front());
   auto *clone = b.clone(*xferWriteOp, mapping);
@@ -623,7 +628,7 @@ LogicalResult mlir::vector::splitFullAndPartialTransfer(
   else
     createFullPartialLinalgCopy(b, xferWriteOp, inBoundsCond, alloc);
 
-  xferOp->erase();
+  b.eraseOp(xferOp);
 
   return success();
 }
@@ -634,11 +639,5 @@ LogicalResult mlir::vector::VectorTransferFullPartialRewriter::matchAndRewrite(
   if (!xferOp || failed(splitFullAndPartialTransferPrecondition(xferOp)) ||
       failed(filter(xferOp)))
     return failure();
-  rewriter.startRootUpdate(xferOp);
-  if (succeeded(splitFullAndPartialTransfer(rewriter, xferOp, options))) {
-    rewriter.finalizeRootUpdate(xferOp);
-    return success();
-  }
-  rewriter.cancelRootUpdate(xferOp);
-  return failure();
+  return splitFullAndPartialTransfer(rewriter, xferOp, options);
 }

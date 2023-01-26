@@ -227,7 +227,7 @@ Parser::DeclGroupPtrTy Parser::ParseNamespace(DeclaratorContext Context,
   UsingDirectiveDecl *ImplicitUsingDirectiveDecl = nullptr;
   Decl *NamespcDecl = Actions.ActOnStartNamespaceDef(
       getCurScope(), InlineLoc, NamespaceLoc, IdentLoc, Ident,
-      T.getOpenLocation(), attrs, ImplicitUsingDirectiveDecl);
+      T.getOpenLocation(), attrs, ImplicitUsingDirectiveDecl, false);
 
   PrettyDeclStackTraceEntry CrashInfo(Actions.Context, NamespcDecl,
                                       NamespaceLoc, "parsing namespace");
@@ -254,9 +254,10 @@ void Parser::ParseInnerNamespace(const InnerNamespaceInfoList &InnerNSs,
   if (index == InnerNSs.size()) {
     while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
            Tok.isNot(tok::eof)) {
-      ParsedAttributes Attrs(AttrFactory);
-      MaybeParseCXX11Attributes(Attrs);
-      ParseExternalDeclaration(Attrs);
+      ParsedAttributes DeclAttrs(AttrFactory);
+      MaybeParseCXX11Attributes(DeclAttrs);
+      ParsedAttributes EmptyDeclSpecAttrs(AttrFactory);
+      ParseExternalDeclaration(DeclAttrs, EmptyDeclSpecAttrs);
     }
 
     // The caller is what called check -- we are simply calling
@@ -274,7 +275,7 @@ void Parser::ParseInnerNamespace(const InnerNamespaceInfoList &InnerNSs,
   Decl *NamespcDecl = Actions.ActOnStartNamespaceDef(
       getCurScope(), InnerNSs[index].InlineLoc, InnerNSs[index].NamespaceLoc,
       InnerNSs[index].IdentLoc, InnerNSs[index].Ident,
-      Tracker.getOpenLocation(), attrs, ImplicitUsingDirectiveDecl);
+      Tracker.getOpenLocation(), attrs, ImplicitUsingDirectiveDecl, true);
   assert(!ImplicitUsingDirectiveDecl &&
          "nested namespace definition cannot define anonymous namespace");
 
@@ -358,7 +359,11 @@ Decl *Parser::ParseLinkage(ParsingDeclSpec &DS, DeclaratorContext Context) {
                 Tok.is(tok::l_brace) ? Tok.getLocation() : SourceLocation());
 
   ParsedAttributes DeclAttrs(AttrFactory);
-  MaybeParseCXX11Attributes(DeclAttrs);
+  ParsedAttributes DeclSpecAttrs(AttrFactory);
+
+  while (MaybeParseCXX11Attributes(DeclAttrs) ||
+         MaybeParseGNUAttributes(DeclSpecAttrs))
+    ;
 
   if (Tok.isNot(tok::l_brace)) {
     // Reset the source range in DS, as the leading "extern"
@@ -367,7 +372,7 @@ Decl *Parser::ParseLinkage(ParsingDeclSpec &DS, DeclaratorContext Context) {
     DS.SetRangeEnd(SourceLocation());
     // ... but anyway remember that such an "extern" was seen.
     DS.setExternInLinkageSpec(true);
-    ParseExternalDeclaration(DeclAttrs, &DS);
+    ParseExternalDeclaration(DeclAttrs, DeclSpecAttrs, &DS);
     return LinkageSpec ? Actions.ActOnFinishLinkageSpecification(
                              getCurScope(), LinkageSpec, SourceLocation())
                        : nullptr;
@@ -407,9 +412,9 @@ Decl *Parser::ParseLinkage(ParsingDeclSpec &DS, DeclaratorContext Context) {
         break;
       [[fallthrough]];
     default:
-      ParsedAttributes Attrs(AttrFactory);
-      MaybeParseCXX11Attributes(Attrs);
-      ParseExternalDeclaration(Attrs);
+      ParsedAttributes DeclAttrs(AttrFactory);
+      MaybeParseCXX11Attributes(DeclAttrs);
+      ParseExternalDeclaration(DeclAttrs, DeclSpecAttrs);
       continue;
     }
 
@@ -439,9 +444,10 @@ Decl *Parser::ParseExportDeclaration() {
 
   if (Tok.isNot(tok::l_brace)) {
     // FIXME: Factor out a ParseExternalDeclarationWithAttrs.
-    ParsedAttributes Attrs(AttrFactory);
-    MaybeParseCXX11Attributes(Attrs);
-    ParseExternalDeclaration(Attrs);
+    ParsedAttributes DeclAttrs(AttrFactory);
+    MaybeParseCXX11Attributes(DeclAttrs);
+    ParsedAttributes EmptyDeclSpecAttrs(AttrFactory);
+    ParseExternalDeclaration(DeclAttrs, EmptyDeclSpecAttrs);
     return Actions.ActOnFinishExportDecl(getCurScope(), ExportDecl,
                                          SourceLocation());
   }
@@ -458,9 +464,10 @@ Decl *Parser::ParseExportDeclaration() {
 
   while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
          Tok.isNot(tok::eof)) {
-    ParsedAttributes Attrs(AttrFactory);
-    MaybeParseCXX11Attributes(Attrs);
-    ParseExternalDeclaration(Attrs);
+    ParsedAttributes DeclAttrs(AttrFactory);
+    MaybeParseCXX11Attributes(DeclAttrs);
+    ParsedAttributes EmptyDeclSpecAttrs(AttrFactory);
+    ParseExternalDeclaration(DeclAttrs, EmptyDeclSpecAttrs);
   }
 
   T.consumeClose();
@@ -1579,6 +1586,7 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
           tok::kw___is_array,
           tok::kw___is_assignable,
           tok::kw___is_base_of,
+          tok::kw___is_bounded_array,
           tok::kw___is_class,
           tok::kw___is_complete_type,
           tok::kw___is_compound,
@@ -1604,15 +1612,18 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
           tok::kw___is_nothrow_assignable,
           tok::kw___is_nothrow_constructible,
           tok::kw___is_nothrow_destructible,
+          tok::kw___is_nullptr,
           tok::kw___is_object,
           tok::kw___is_pod,
           tok::kw___is_pointer,
           tok::kw___is_polymorphic,
           tok::kw___is_reference,
+          tok::kw___is_referenceable,
           tok::kw___is_rvalue_expr,
           tok::kw___is_rvalue_reference,
           tok::kw___is_same,
           tok::kw___is_scalar,
+          tok::kw___is_scoped_enum,
           tok::kw___is_sealed,
           tok::kw___is_signed,
           tok::kw___is_standard_layout,
@@ -1620,6 +1631,7 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
           tok::kw___is_trivially_assignable,
           tok::kw___is_trivially_constructible,
           tok::kw___is_trivially_copyable,
+          tok::kw___is_unbounded_array,
           tok::kw___is_union,
           tok::kw___is_unsigned,
           tok::kw___is_void,
@@ -1990,8 +2002,8 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
           // "template<>", so that we treat this construct as a class
           // template specialization.
           FakedParamLists.push_back(Actions.ActOnTemplateParameterList(
-              0, SourceLocation(), TemplateInfo.TemplateLoc, LAngleLoc, None,
-              LAngleLoc, nullptr));
+              0, SourceLocation(), TemplateInfo.TemplateLoc, LAngleLoc,
+              std::nullopt, LAngleLoc, nullptr));
           TemplateParams = &FakedParamLists;
         }
       }
@@ -2061,7 +2073,7 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
         DSC == DeclSpecContext::DSC_type_specifier,
         DSC == DeclSpecContext::DSC_template_param ||
             DSC == DeclSpecContext::DSC_template_type_arg,
-        &SkipBody);
+        OffsetOfState, &SkipBody);
 
     // If ActOnTag said the type was dependent, try again with the
     // less common call.
@@ -3179,7 +3191,11 @@ ExprResult Parser::ParseCXXMemberInitializer(Decl *D, bool IsFunction,
          "Data member initializer not starting with '=' or '{'");
 
   EnterExpressionEvaluationContext Context(
-      Actions, Sema::ExpressionEvaluationContext::PotentiallyEvaluated, D);
+      Actions,
+      isa_and_present<FieldDecl>(D)
+          ? Sema::ExpressionEvaluationContext::PotentiallyEvaluatedIfUsed
+          : Sema::ExpressionEvaluationContext::PotentiallyEvaluated,
+      D);
   if (TryConsumeToken(tok::equal, EqualLoc)) {
     if (Tok.is(tok::kw_delete)) {
       // In principle, an initializer of '= delete p;' is legal, but it will
@@ -3798,7 +3814,6 @@ MemInitResult Parser::ParseMemInitializer(Decl *ConstructorDecl) {
 
     // Parse the optional expression-list.
     ExprVector ArgExprs;
-    CommaLocsTy CommaLocs;
     auto RunSignatureHelp = [&] {
       if (TemplateTypeTy.isInvalid())
         return QualType();
@@ -3808,8 +3823,7 @@ MemInitResult Parser::ParseMemInitializer(Decl *ConstructorDecl) {
       CalledSignatureHelp = true;
       return PreferredType;
     };
-    if (Tok.isNot(tok::r_paren) &&
-        ParseExpressionList(ArgExprs, CommaLocs, [&] {
+    if (Tok.isNot(tok::r_paren) && ParseExpressionList(ArgExprs, [&] {
           PreferredType.enterFunctionArgument(Tok.getLocation(),
                                               RunSignatureHelp);
         })) {
@@ -4481,8 +4495,6 @@ void Parser::ParseCXX11AttributeSpecifierInternal(ParsedAttributes &Attrs,
     if (!TryConsumeToken(tok::colon) && CommonScopeName)
       Diag(Tok.getLocation(), diag::err_expected) << tok::colon;
   }
-
-  llvm::SmallDenseMap<IdentifierInfo *, SourceLocation, 4> SeenAttrs;
 
   bool AttrParsed = false;
   while (!Tok.isOneOf(tok::r_square, tok::semi, tok::eof)) {

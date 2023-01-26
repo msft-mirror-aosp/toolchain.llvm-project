@@ -10,6 +10,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/Lexer.h"
 #include <algorithm>
+#include <optional>
 
 namespace clang {
 namespace tidy {
@@ -149,8 +150,8 @@ void IncludeSorter::addInclude(StringRef FileName, bool IsAngled,
     IncludeBucket[Kind].push_back(FileName.str());
 }
 
-Optional<FixItHint> IncludeSorter::createIncludeInsertion(StringRef FileName,
-                                                          bool IsAngled) {
+std::optional<FixItHint>
+IncludeSorter::createIncludeInsertion(StringRef FileName, bool IsAngled) {
   std::string IncludeStmt;
   if (Style == IncludeStyle::IS_Google_ObjC) {
     IncludeStmt = IsAngled
@@ -179,7 +180,7 @@ Optional<FixItHint> IncludeSorter::createIncludeInsertion(StringRef FileName,
         return FixItHint::CreateInsertion(Location.getBegin(), IncludeStmt);
       }
       if (FileName == IncludeEntry) {
-        return llvm::None;
+        return std::nullopt;
       }
     }
     // FileName comes after all include entries in bucket, insert it after
@@ -203,7 +204,7 @@ Optional<FixItHint> IncludeSorter::createIncludeInsertion(StringRef FileName,
     }
   }
   if (NonEmptyKind == IK_InvalidInclude) {
-    return llvm::None;
+    return std::nullopt;
   }
 
   if (NonEmptyKind < IncludeKind) {
@@ -230,7 +231,7 @@ OptionEnumMapping<utils::IncludeSorter::IncludeStyle>::getEnumMapping() {
       Mapping[] = {{utils::IncludeSorter::IS_LLVM, "llvm"},
                    {utils::IncludeSorter::IS_Google, "google"},
                    {utils::IncludeSorter::IS_Google_ObjC, "google-objc"}};
-  return makeArrayRef(Mapping);
+  return ArrayRef(Mapping);
 }
 } // namespace tidy
 } // namespace clang

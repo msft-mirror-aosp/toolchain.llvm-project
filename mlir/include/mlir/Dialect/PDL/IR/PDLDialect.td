@@ -66,12 +66,10 @@ def PDL_Dialect : Dialect {
   let cppNamespace = "::mlir::pdl";
 
   let useDefaultTypePrinterParser = 1;
+  let useFoldAPI = kEmitFoldAdaptorFolder;
   let extraClassDeclaration = [{
     void registerTypes();
   }];
-
-  // FIXME: Flip to prefixed.
-  let emitAccessorPrefix = kEmitAccessorPrefix_Both;
 }
 
 #endif // MLIR_DIALECT_PDL_IR_PDLDIALECT

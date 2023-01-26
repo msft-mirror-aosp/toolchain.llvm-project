@@ -12,6 +12,7 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Lex/Lexer.h"
+#include <optional>
 
 namespace clang {
 namespace tidy {
@@ -29,22 +30,22 @@ static StringRef getUnqualifiedName(StringRef QualifiedName) {
 UsingInserter::UsingInserter(const SourceManager &SourceMgr)
     : SourceMgr(SourceMgr) {}
 
-Optional<FixItHint> UsingInserter::createUsingDeclaration(
+std::optional<FixItHint> UsingInserter::createUsingDeclaration(
     ASTContext &Context, const Stmt &Statement, StringRef QualifiedName) {
   StringRef UnqualifiedName = getUnqualifiedName(QualifiedName);
   const FunctionDecl *Function = getSurroundingFunction(Context, Statement);
   if (!Function)
-    return None;
+    return std::nullopt;
 
   if (AddedUsing.count(std::make_pair(Function, QualifiedName.str())) != 0)
-    return None;
+    return std::nullopt;
 
   SourceLocation InsertLoc = Lexer::getLocForEndOfToken(
       Function->getBody()->getBeginLoc(), 0, SourceMgr, Context.getLangOpts());
 
   // Only use using declarations in the main file, not in includes.
   if (SourceMgr.getFileID(InsertLoc) != SourceMgr.getMainFileID())
-    return None;
+    return std::nullopt;
 
   // FIXME: This declaration could be masked. Investigate if
   // there is a way to avoid using Sema.
@@ -55,7 +56,7 @@ Optional<FixItHint> UsingInserter::createUsingDeclaration(
            .empty();
   if (AlreadyHasUsingDecl) {
     AddedUsing.emplace(NameInFunction(Function, QualifiedName.str()));
-    return None;
+    return std::nullopt;
   }
   // Find conflicting declarations and references.
   auto ConflictingDecl = namedDecl(hasName(UnqualifiedName));
@@ -65,7 +66,7 @@ Optional<FixItHint> UsingInserter::createUsingDeclaration(
       !match(findAll(declRefExpr(to(ConflictingDecl))), *Function, Context)
            .empty();
   if (HasConflictingDeclaration || HasConflictingDeclRef)
-    return None;
+    return std::nullopt;
 
   std::string Declaration =
       (llvm::Twine("\nusing ") + QualifiedName + ";").str();

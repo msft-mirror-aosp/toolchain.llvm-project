@@ -1704,7 +1704,6 @@ template <class BidirectionalIterator, class Compare>
 */
 
 #include <__assert> // all public C++ headers provide the assertion handler
-#include <__bits>
 #include <__config>
 #include <__debug>
 #include <cstddef>
@@ -1917,6 +1916,7 @@ template <class BidirectionalIterator, class Compare>
 
 #if !defined(_LIBCPP_REMOVE_TRANSITIVE_INCLUDES) && _LIBCPP_STD_VER <= 20
 #  include <atomic>
+#  include <concepts>
 #  include <iterator>
 #  include <memory>
 #  include <stdexcept>

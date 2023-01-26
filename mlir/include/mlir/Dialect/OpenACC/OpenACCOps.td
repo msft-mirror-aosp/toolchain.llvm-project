@@ -26,10 +26,8 @@ def OpenACC_Dialect : Dialect {
   }];
 
   let useDefaultAttributePrinterParser = 1;
+  let useFoldAPI = kEmitFoldAdaptorFolder;
   let cppNamespace = "::mlir::acc";
-
-  // TODO: Flip to _Prefixed.
-  let emitAccessorPrefix = kEmitAccessorPrefix_Both;
 }
 
 // AccCommon requires definition of OpenACC_Dialect.

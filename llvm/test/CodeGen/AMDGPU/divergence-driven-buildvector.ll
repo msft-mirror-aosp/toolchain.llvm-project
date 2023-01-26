@@ -3,7 +3,7 @@
 ; RUN: llc -march=amdgcn -mcpu=gfx900 < %s | FileCheck -check-prefix=GFX9 %s
 ; RUN: llc -march=amdgcn -mcpu=gfx906 < %s | FileCheck -check-prefix=GFX906 %s
 
-define amdgpu_kernel void @uniform_vec_0_i16(i32 addrspace(1)* %out, i16 %a) {
+define amdgpu_kernel void @uniform_vec_0_i16(ptr addrspace(1) %out, i16 %a) {
 ; GCN-LABEL: uniform_vec_0_i16:
 ; GCN:       ; %bb.0:
 ; GCN-NEXT:    s_load_dword s2, s[0:1], 0xb
@@ -40,7 +40,7 @@ define amdgpu_kernel void @uniform_vec_0_i16(i32 addrspace(1)* %out, i16 %a) {
   %tmp = insertelement <2 x i16> undef, i16 0, i32 0
   %vec = insertelement <2 x i16> %tmp, i16 %a, i32 1
   %val = bitcast <2 x i16> %vec to i32
-  store i32 %val, i32 addrspace(1)* %out, align 4
+  store i32 %val, ptr addrspace(1) %out, align 4
   ret void
 }
 
@@ -68,7 +68,7 @@ define i32 @divergent_vec_0_i16(i16 %a) {
   ret i32 %val
 }
 
-define amdgpu_kernel void @uniform_vec_i16_0(i32 addrspace(1)* %out, i16 %a) {
+define amdgpu_kernel void @uniform_vec_i16_0(ptr addrspace(1) %out, i16 %a) {
 ; GCN-LABEL: uniform_vec_i16_0:
 ; GCN:       ; %bb.0:
 ; GCN-NEXT:    s_load_dword s2, s[0:1], 0xb
@@ -105,7 +105,7 @@ define amdgpu_kernel void @uniform_vec_i16_0(i32 addrspace(1)* %out, i16 %a) {
   %tmp = insertelement <2 x i16> undef, i16 %a, i32 0
   %vec = insertelement <2 x i16> %tmp, i16 0, i32 1
   %val = bitcast <2 x i16> %vec to i32
-  store i32 %val, i32 addrspace(1)* %out, align 4
+  store i32 %val, ptr addrspace(1) %out, align 4
   ret void
 }
 
@@ -133,7 +133,7 @@ define i32 @divergent_vec_i16_0(i16 %a) {
   ret i32 %val
 }
 
-define amdgpu_kernel void @uniform_vec_f16_0(float addrspace(1)* %out, half %a) {
+define amdgpu_kernel void @uniform_vec_f16_0(ptr addrspace(1) %out, half %a) {
 ; GCN-LABEL: uniform_vec_f16_0:
 ; GCN:       ; %bb.0:
 ; GCN-NEXT:    s_load_dword s2, s[0:1], 0xb
@@ -170,7 +170,7 @@ define amdgpu_kernel void @uniform_vec_f16_0(float addrspace(1)* %out, half %a) 
   %tmp = insertelement <2 x half> undef, half %a, i32 0
   %vec = insertelement <2 x half> %tmp, half 0.0, i32 1
   %val = bitcast <2 x half> %vec to float
-  store float %val, float addrspace(1)* %out, align 4
+  store float %val, ptr addrspace(1) %out, align 4
   ret void
 }
 
@@ -198,7 +198,7 @@ define float @divergent_vec_f16_0(half %a) {
   ret float %val
 }
 
-define amdgpu_kernel void @uniform_vec_i16_LL(i32 addrspace(4)* %in0, i32 addrspace(4)* %in1) {
+define amdgpu_kernel void @uniform_vec_i16_LL(ptr addrspace(4) %in0, ptr addrspace(4) %in1) {
 ; GCN-LABEL: uniform_vec_i16_LL:
 ; GCN:       ; %bb.0:
 ; GCN-NEXT:    s_load_dwordx4 s[0:3], s[0:1], 0x9
@@ -239,8 +239,8 @@ define amdgpu_kernel void @uniform_vec_i16_LL(i32 addrspace(4)* %in0, i32 addrsp
 ; GFX906-NEXT:    ; use s0
 ; GFX906-NEXT:    ;;#ASMEND
 ; GFX906-NEXT:    s_endpgm
-  %val0 = load volatile i32, i32 addrspace(4)* %in0
-  %val1 = load volatile i32, i32 addrspace(4)* %in1
+  %val0 = load volatile i32, ptr addrspace(4) %in0
+  %val1 = load volatile i32, ptr addrspace(4) %in1
   %lo = trunc i32 %val0 to i16
   %hi = trunc i32 %val1 to i16
   %vec.0 = insertelement <2 x i16> undef, i16 %lo, i32 0
@@ -262,15 +262,15 @@ define i32 @divergent_vec_i16_LL(i16 %a, i16 %b) {
 ; GFX9-LABEL: divergent_vec_i16_LL:
 ; GFX9:       ; %bb.0:
 ; GFX9-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX9-NEXT:    v_and_b32_e32 v0, 0xffff, v0
-; GFX9-NEXT:    v_lshl_or_b32 v0, v1, 16, v0
+; GFX9-NEXT:    s_mov_b32 s4, 0x5040100
+; GFX9-NEXT:    v_perm_b32 v0, v1, v0, s4
 ; GFX9-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX906-LABEL: divergent_vec_i16_LL:
 ; GFX906:       ; %bb.0:
 ; GFX906-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX906-NEXT:    v_and_b32_e32 v0, 0xffff, v0
-; GFX906-NEXT:    v_lshl_or_b32 v0, v1, 16, v0
+; GFX906-NEXT:    s_mov_b32 s4, 0x5040100
+; GFX906-NEXT:    v_perm_b32 v0, v1, v0, s4
 ; GFX906-NEXT:    s_setpc_b64 s[30:31]
   %tmp = insertelement <2 x i16> undef, i16 %a, i32 0
   %vec = insertelement <2 x i16> %tmp, i16 %b, i32 1
@@ -278,7 +278,7 @@ define i32 @divergent_vec_i16_LL(i16 %a, i16 %b) {
   ret i32 %val
 }
 
-define amdgpu_kernel void @uniform_vec_i16_LH(i32 addrspace(1)* %out, i16 %a, i32 %b) {
+define amdgpu_kernel void @uniform_vec_i16_LH(ptr addrspace(1) %out, i16 %a, i32 %b) {
 ; GCN-LABEL: uniform_vec_i16_LH:
 ; GCN:       ; %bb.0:
 ; GCN-NEXT:    s_load_dwordx4 s[0:3], s[0:1], 0x9
@@ -318,7 +318,7 @@ define amdgpu_kernel void @uniform_vec_i16_LH(i32 addrspace(1)* %out, i16 %a, i3
   %tmp = insertelement <2 x i16> undef, i16 %a, i32 0
   %vec = insertelement <2 x i16> %tmp, i16 %tr, i32 1
   %val = bitcast <2 x i16> %vec to i32
-  store i32 %val, i32 addrspace(1)* %out, align 4
+  store i32 %val, ptr addrspace(1) %out, align 4
   ret void
 }
 
@@ -333,15 +333,15 @@ define i32 @divergent_vec_i16_LH(i16 %a, i32 %b) {
 ; GFX9-LABEL: divergent_vec_i16_LH:
 ; GFX9:       ; %bb.0:
 ; GFX9-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX9-NEXT:    v_mov_b32_e32 v2, 0xffff
-; GFX9-NEXT:    v_bfi_b32 v0, v2, v0, v1
+; GFX9-NEXT:    s_mov_b32 s4, 0xffff
+; GFX9-NEXT:    v_bfi_b32 v0, s4, v0, v1
 ; GFX9-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX906-LABEL: divergent_vec_i16_LH:
 ; GFX906:       ; %bb.0:
 ; GFX906-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX906-NEXT:    v_mov_b32_e32 v2, 0xffff
-; GFX906-NEXT:    v_bfi_b32 v0, v2, v0, v1
+; GFX906-NEXT:    s_mov_b32 s4, 0xffff
+; GFX906-NEXT:    v_bfi_b32 v0, s4, v0, v1
 ; GFX906-NEXT:    s_setpc_b64 s[30:31]
   %shift = lshr i32 %b, 16
   %tr = trunc i32 %shift to i16
@@ -351,7 +351,7 @@ define i32 @divergent_vec_i16_LH(i16 %a, i32 %b) {
   ret i32 %val
 }
 
-define amdgpu_kernel void @uniform_vec_i16_HH(i32 addrspace(1)* %out, i32 %a, i32 %b) {
+define amdgpu_kernel void @uniform_vec_i16_HH(ptr addrspace(1) %out, i32 %a, i32 %b) {
 ; GCN-LABEL: uniform_vec_i16_HH:
 ; GCN:       ; %bb.0:
 ; GCN-NEXT:    s_load_dwordx4 s[0:3], s[0:1], 0x9
@@ -393,7 +393,7 @@ define amdgpu_kernel void @uniform_vec_i16_HH(i32 addrspace(1)* %out, i32 %a, i3
   %tmp = insertelement <2 x i16> undef, i16 %tr_a, i32 0
   %vec = insertelement <2 x i16> %tmp, i16 %tr_b, i32 1
   %val = bitcast <2 x i16> %vec to i32
-  store i32 %val, i32 addrspace(1)* %out, align 4
+  store i32 %val, ptr addrspace(1) %out, align 4
   ret void
 }
 
@@ -409,17 +409,15 @@ define i32 @divergent_vec_i16_HH(i32 %a, i32 %b) {
 ; GFX9-LABEL: divergent_vec_i16_HH:
 ; GFX9:       ; %bb.0:
 ; GFX9-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX9-NEXT:    v_lshrrev_b32_e32 v0, 16, v0
-; GFX9-NEXT:    v_mov_b32_e32 v2, 0xffff0000
-; GFX9-NEXT:    v_and_or_b32 v0, v1, v2, v0
+; GFX9-NEXT:    s_mov_b32 s4, 0x7060302
+; GFX9-NEXT:    v_perm_b32 v0, v1, v0, s4
 ; GFX9-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX906-LABEL: divergent_vec_i16_HH:
 ; GFX906:       ; %bb.0:
 ; GFX906-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX906-NEXT:    v_lshrrev_b32_e32 v0, 16, v0
-; GFX906-NEXT:    v_mov_b32_e32 v2, 0xffff0000
-; GFX906-NEXT:    v_and_or_b32 v0, v1, v2, v0
+; GFX906-NEXT:    s_mov_b32 s4, 0x7060302
+; GFX906-NEXT:    v_perm_b32 v0, v1, v0, s4
 ; GFX906-NEXT:    s_setpc_b64 s[30:31]
   %shift_a = lshr i32 %a, 16
   %tr_a = trunc i32 %shift_a to i16
@@ -431,7 +429,7 @@ define i32 @divergent_vec_i16_HH(i32 %a, i32 %b) {
   ret i32 %val
 }
 
-define amdgpu_kernel void @uniform_vec_f16_LL(i32 addrspace(4)* %in0, i32 addrspace(4)* %in1) {
+define amdgpu_kernel void @uniform_vec_f16_LL(ptr addrspace(4) %in0, ptr addrspace(4) %in1) {
 ; GCN-LABEL: uniform_vec_f16_LL:
 ; GCN:       ; %bb.0:
 ; GCN-NEXT:    s_load_dwordx4 s[0:3], s[0:1], 0x9
@@ -472,8 +470,8 @@ define amdgpu_kernel void @uniform_vec_f16_LL(i32 addrspace(4)* %in0, i32 addrsp
 ; GFX906-NEXT:    ; use s0
 ; GFX906-NEXT:    ;;#ASMEND
 ; GFX906-NEXT:    s_endpgm
-  %val0 = load volatile i32, i32 addrspace(4)* %in0
-  %val1 = load volatile i32, i32 addrspace(4)* %in1
+  %val0 = load volatile i32, ptr addrspace(4) %in0
+  %val1 = load volatile i32, ptr addrspace(4) %in1
   %lo.i = trunc i32 %val0 to i16
   %hi.i = trunc i32 %val1 to i16
   %lo = bitcast i16 %lo.i to half
@@ -499,15 +497,15 @@ define float @divergent_vec_f16_LL(half %a, half %b) {
 ; GFX9-LABEL: divergent_vec_f16_LL:
 ; GFX9:       ; %bb.0:
 ; GFX9-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX9-NEXT:    v_and_b32_e32 v0, 0xffff, v0
-; GFX9-NEXT:    v_lshl_or_b32 v0, v1, 16, v0
+; GFX9-NEXT:    s_mov_b32 s4, 0x5040100
+; GFX9-NEXT:    v_perm_b32 v0, v1, v0, s4
 ; GFX9-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX906-LABEL: divergent_vec_f16_LL:
 ; GFX906:       ; %bb.0:
 ; GFX906-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX906-NEXT:    v_and_b32_e32 v0, 0xffff, v0
-; GFX906-NEXT:    v_lshl_or_b32 v0, v1, 16, v0
+; GFX906-NEXT:    s_mov_b32 s4, 0x5040100
+; GFX906-NEXT:    v_perm_b32 v0, v1, v0, s4
 ; GFX906-NEXT:    s_setpc_b64 s[30:31]
   %tmp = insertelement <2 x half> undef, half %a, i32 0
   %vec = insertelement <2 x half> %tmp, half %b, i32 1
@@ -515,7 +513,7 @@ define float @divergent_vec_f16_LL(half %a, half %b) {
   ret float %val
 }
 
-define <2 x i16> @build_vec_v2i16_undeflo_divergent(i16 addrspace(3)* %in) #0 {
+define <2 x i16> @build_vec_v2i16_undeflo_divergent(ptr addrspace(3) %in) #0 {
 ; GCN-LABEL: build_vec_v2i16_undeflo_divergent:
 ; GCN:       ; %bb.0: ; %entry
 ; GCN-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
@@ -538,12 +536,12 @@ define <2 x i16> @build_vec_v2i16_undeflo_divergent(i16 addrspace(3)* %in) #0 {
 ; GFX906-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX906-NEXT:    s_setpc_b64 s[30:31]
 entry:
-  %load = load i16, i16 addrspace(3)* %in
+  %load = load i16, ptr addrspace(3) %in
   %build = insertelement <2 x i16> undef, i16 %load, i32 0
   ret <2 x i16> %build
 }
 
-define amdgpu_kernel void @build_vec_v2i16_undeflo_uniform(i16 addrspace(3)* %in, i32 addrspace(1)* %out) #0 {
+define amdgpu_kernel void @build_vec_v2i16_undeflo_uniform(ptr addrspace(3) %in, ptr addrspace(1) %out) #0 {
 ; GCN-LABEL: build_vec_v2i16_undeflo_uniform:
 ; GCN:       ; %bb.0: ; %entry
 ; GCN-NEXT:    s_load_dword s2, s[0:1], 0x9
@@ -582,9 +580,9 @@ define amdgpu_kernel void @build_vec_v2i16_undeflo_uniform(i16 addrspace(3)* %in
 ; GFX906-NEXT:    global_store_dword v1, v0, s[2:3]
 ; GFX906-NEXT:    s_endpgm
 entry:
-  %load = load i16, i16 addrspace(3)* %in
+  %load = load i16, ptr addrspace(3) %in
   %build = insertelement <2 x i16> undef, i16 %load, i32 0
   %result = bitcast <2 x i16> %build to i32
-  store i32 %result, i32 addrspace(1)* %out
+  store i32 %result, ptr addrspace(1) %out
   ret void
 }

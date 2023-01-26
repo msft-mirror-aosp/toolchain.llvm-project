@@ -22,7 +22,7 @@ class SPIRV_LogicalBinaryOp<string mnemonic, Type operandsType,
       // Result type is SPIRV_Bool.
       SPIRV_BinaryOp<mnemonic, SPIRV_Bool, operandsType,
                    !listconcat(traits, [
-                     NoSideEffect, SameTypeOperands,
+                     Pure, SameTypeOperands,
                      SameOperandsAndResultShape,
                      TypesMatchWith<"type of result to correspond to the `i1` "
                                     "equivalent of the operand",
@@ -30,11 +30,6 @@ class SPIRV_LogicalBinaryOp<string mnemonic, Type operandsType,
                                     "getUnaryOpResultType($_self)"
                      >])> {
   let assemblyFormat = "$operand1 `,` $operand2 `:` type($operand1) attr-dict";
-
-  let builders = [
-    OpBuilder<(ins "Value":$lhs, "Value":$rhs),
-    [{::buildLogicalBinaryOp($_builder, $_state, lhs, rhs);}]>
-  ];
 }
 
 class SPIRV_LogicalUnaryOp<string mnemonic, Type operandType,
@@ -42,18 +37,13 @@ class SPIRV_LogicalUnaryOp<string mnemonic, Type operandType,
       // Result type is SPIRV_Bool.
       SPIRV_UnaryOp<mnemonic, SPIRV_Bool, operandType,
                   !listconcat(traits, [
-                     NoSideEffect, SameTypeOperands, SameOperandsAndResultShape,
+                     Pure, SameTypeOperands, SameOperandsAndResultShape,
                      TypesMatchWith<"type of result to correspond to the `i1` "
                                     "equivalent of the operand",
                                     "operand", "result",
                                     "getUnaryOpResultType($_self)"
                      >])> {
   let assemblyFormat = "$operand `:` type($operand) attr-dict";
-
-  let builders = [
-    OpBuilder<(ins "Value":$value),
-    [{::buildLogicalUnaryOp($_builder, $_state, value);}]>
-  ];
 }
 
 // -----
@@ -723,6 +713,7 @@ def SPIRV_LogicalNotEqualOp : SPIRV_LogicalBinaryOp<"LogicalNotEqual",
     %2 = spirv.LogicalNotEqual %0, %1 : vector<4xi1>
     ```
   }];
+  let hasFolder = true;
 }
 
 // -----
@@ -787,11 +778,11 @@ def SPIRV_OrderedOp : SPIRV_LogicalBinaryOp<"Ordered", SPIRV_Float, [Commutative
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     ordered-op ::= ssa-id `=` `spirv.Ordered` ssa-use, ssa-use
-    ```mlir
+    ```
 
     #### Example:
 
-    ```
+    ```mlir
     %4 = spirv.Ordered %0, %1 : f32
     %5 = spirv.Ordered %2, %3 : vector<4xf32>
     ```
@@ -869,7 +860,7 @@ def SPIRV_SGreaterThanEqualOp : SPIRV_LogicalBinaryOp<"SGreaterThanEqual",
     ```
     #### Example:
 
-    ```
+    ```mlir
     %4 = spirv.SGreaterThanEqual %0, %1 : i32
     %5 = spirv.SGreaterThanEqual %2, %3 : vector<4xi32>
 
@@ -952,7 +943,7 @@ def SPIRV_SLessThanEqualOp : SPIRV_LogicalBinaryOp<"SLessThanEqual",
 // -----
 
 def SPIRV_SelectOp : SPIRV_Op<"Select",
-    [NoSideEffect,
+    [Pure,
      AllTypesMatch<["true_value", "false_value", "result"]>,
      UsableInSpecConstantOp]> {
   let summary = [{
@@ -1145,11 +1136,11 @@ def SPIRV_UnorderedOp : SPIRV_LogicalBinaryOp<"Unordered", SPIRV_Float, [Commuta
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     unordered-op ::= ssa-id `=` `spirv.Unordered` ssa-use, ssa-use
-    ```mlir
+    ```
 
     #### Example:
 
-    ```
+    ```mlir
     %4 = spirv.Unordered %0, %1 : f32
     %5 = spirv.Unordered %2, %3 : vector<4xf32>
     ```

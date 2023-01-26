@@ -117,9 +117,8 @@ class MacroInfo {
   /// Whether this macro was used as header guard.
   bool UsedForHeaderGuard : 1;
 
-  // Only the Preprocessor gets to create and destroy these.
+  // Only the Preprocessor gets to create these.
   MacroInfo(SourceLocation DefLoc);
-  ~MacroInfo() = default;
 
 public:
   /// Return the location that the macro was defined at.
@@ -248,7 +247,7 @@ public:
   }
   bool tokens_empty() const { return NumReplacementTokens == 0; }
   ArrayRef<Token> tokens() const {
-    return llvm::makeArrayRef(ReplacementTokens, NumReplacementTokens);
+    return llvm::ArrayRef(ReplacementTokens, NumReplacementTokens);
   }
 
   llvm::MutableArrayRef<Token>
@@ -573,7 +572,7 @@ public:
   }
 
   ArrayRef<ModuleMacro *> overrides() const {
-    return llvm::makeArrayRef(overrides_begin(), overrides_end());
+    return llvm::ArrayRef(overrides_begin(), overrides_end());
   }
   /// \}
 

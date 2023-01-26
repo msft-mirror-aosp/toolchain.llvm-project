@@ -188,10 +188,10 @@ class ARMFastISel final : public FastISel {
     bool ARMEmitCmp(const Value *Src1Value, const Value *Src2Value,
                     bool isZExt);
     bool ARMEmitLoad(MVT VT, Register &ResultReg, Address &Addr,
-                     MaybeAlign Alignment = None, bool isZExt = true,
+                     MaybeAlign Alignment = std::nullopt, bool isZExt = true,
                      bool allocReg = true);
     bool ARMEmitStore(MVT VT, unsigned SrcReg, Address &Addr,
-                      MaybeAlign Alignment = None);
+                      MaybeAlign Alignment = std::nullopt);
     bool ARMComputeAddress(const Value *Obj, Address &Addr);
     void ARMSimplifyAddress(Address &Addr, MVT VT, bool useAM3);
     bool ARMIsMemCpySmall(uint64_t Len);
@@ -309,8 +309,8 @@ unsigned ARMFastISel::fastEmitInst_r(unsigned MachineInstOpcode,
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD, II)
                    .addReg(Op0));
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD,
-                   TII.get(TargetOpcode::COPY), ResultReg)
-                   .addReg(II.ImplicitDefs[0]));
+                            TII.get(TargetOpcode::COPY), ResultReg)
+                        .addReg(II.getImplicitDefs()[0]));
   }
   return ResultReg;
 }
@@ -336,8 +336,8 @@ unsigned ARMFastISel::fastEmitInst_rr(unsigned MachineInstOpcode,
                    .addReg(Op0)
                    .addReg(Op1));
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD,
-                           TII.get(TargetOpcode::COPY), ResultReg)
-                   .addReg(II.ImplicitDefs[0]));
+                            TII.get(TargetOpcode::COPY), ResultReg)
+                        .addReg(II.getImplicitDefs()[0]));
   }
   return ResultReg;
 }
@@ -361,8 +361,8 @@ unsigned ARMFastISel::fastEmitInst_ri(unsigned MachineInstOpcode,
                    .addReg(Op0)
                    .addImm(Imm));
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD,
-                           TII.get(TargetOpcode::COPY), ResultReg)
-                   .addReg(II.ImplicitDefs[0]));
+                            TII.get(TargetOpcode::COPY), ResultReg)
+                        .addReg(II.getImplicitDefs()[0]));
   }
   return ResultReg;
 }
@@ -380,8 +380,8 @@ unsigned ARMFastISel::fastEmitInst_i(unsigned MachineInstOpcode,
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD, II)
                    .addImm(Imm));
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD,
-                           TII.get(TargetOpcode::COPY), ResultReg)
-                   .addReg(II.ImplicitDefs[0]));
+                            TII.get(TargetOpcode::COPY), ResultReg)
+                        .addReg(II.getImplicitDefs()[0]));
   }
   return ResultReg;
 }

@@ -49,12 +49,21 @@ def ArithUnsignedWhenEquivalent : Pass<"arith-unsigned-when-equivalent"> {
   let constructor = "mlir::arith::createArithUnsignedWhenEquivalentPass()";
 }
 
+def ArithIntRangeOpts : Pass<"int-range-optimizations"> {
+  let summary = "Do optimizations based on integer range analysis";
+  let description = [{
+    This pass runs integer range analysis and apllies optimizations based on its
+    results. e.g. replace arith.cmpi with const if it can be inferred from
+    args ranges.
+  }];
+}
+
 def ArithEmulateWideInt : Pass<"arith-emulate-wide-int"> {
   let summary = "Emulate 2*N-bit integer operations using N-bit operations";
   let description = [{
-    Emulate integer operations that use too wide integer types with equivalent
-    operations on supported narrow integer types. This is done by splitting
-    original integer values into two halves.
+    Emulate arith integer operations that use too wide integer types with
+    equivalent operations on supported narrow integer types. This is done by
+    splitting original integer values into two halves.
 
     This pass is intended preserve semantics but not necessarily provide the
     most efficient implementation.

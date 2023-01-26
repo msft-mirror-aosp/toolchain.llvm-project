@@ -24,11 +24,11 @@ namespace {
 struct MemRefInlinerInterface : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;
   bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned,
-                       BlockAndValueMapping &valueMapping) const final {
+                       IRMapping &valueMapping) const final {
     return true;
   }
   bool isLegalToInline(Operation *, Region *, bool wouldBeCloned,
-                       BlockAndValueMapping &) const final {
+                       IRMapping &) const final {
     return true;
   }
 };
@@ -48,9 +48,9 @@ llvm::Optional<Operation *> mlir::memref::findDealloc(Value allocValue) {
   for (Operation *user : allocValue.getUsers()) {
     if (!hasEffect<MemoryEffects::Free>(user, allocValue))
       continue;
-    // If we found > 1 dealloc, return None.
+    // If we found > 1 dealloc, return std::nullopt.
     if (dealloc)
-      return llvm::None;
+      return std::nullopt;
     dealloc = user;
   }
   return dealloc;

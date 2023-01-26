@@ -15,16 +15,33 @@
 #include <__functional/unwrap_ref.h>
 #include <__fwd/get.h>
 #include <__fwd/tuple.h>
-#include <__tuple/sfinae_helpers.h>
-#include <__tuple/tuple_element.h>
-#include <__tuple/tuple_indices.h>
-#include <__tuple/tuple_size.h>
+#include <__tuple_dir/sfinae_helpers.h>
+#include <__tuple_dir/tuple_element.h>
+#include <__tuple_dir/tuple_indices.h>
+#include <__tuple_dir/tuple_size.h>
+#include <__type_traits/common_reference.h>
+#include <__type_traits/common_type.h>
+#include <__type_traits/conditional.h>
+#include <__type_traits/is_assignable.h>
+#include <__type_traits/is_constructible.h>
+#include <__type_traits/is_convertible.h>
+#include <__type_traits/is_copy_assignable.h>
+#include <__type_traits/is_default_constructible.h>
 #include <__type_traits/is_implicitly_default_constructible.h>
+#include <__type_traits/is_move_assignable.h>
+#include <__type_traits/is_nothrow_assignable.h>
+#include <__type_traits/is_nothrow_constructible.h>
+#include <__type_traits/is_nothrow_copy_assignable.h>
+#include <__type_traits/is_nothrow_copy_constructible.h>
+#include <__type_traits/is_nothrow_default_constructible.h>
+#include <__type_traits/is_nothrow_move_assignable.h>
+#include <__type_traits/is_same.h>
+#include <__type_traits/is_swappable.h>
+#include <__type_traits/nat.h>
 #include <__utility/forward.h>
 #include <__utility/move.h>
 #include <__utility/piecewise_construct.h>
 #include <cstddef>
-#include <type_traits>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #  pragma GCC system_header
@@ -135,12 +152,12 @@ struct _LIBCPP_TEMPLATE_VIS pair
     };
 
     template <class _Tuple>
-    using _CheckTLC _LIBCPP_NODEBUG = typename conditional<
+    using _CheckTLC _LIBCPP_NODEBUG = __conditional_t<
         __tuple_like_with_size<_Tuple, 2>::value
             && !is_same<typename decay<_Tuple>::type, pair>::value,
         _CheckTupleLikeConstructor,
         __check_tuple_constructor_fail
-    >::type;
+    >;
 
     template<bool _Dummy = true, typename enable_if<
             _CheckArgsDep<_Dummy>::__enable_explicit_default()
@@ -290,10 +307,10 @@ struct _LIBCPP_TEMPLATE_VIS pair
                 typename __make_tuple_indices<sizeof...(_Args2) >::type()) {}
 
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_SINCE_CXX20
-    pair& operator=(typename conditional<
+    pair& operator=(__conditional_t<
                         is_copy_assignable<first_type>::value &&
                         is_copy_assignable<second_type>::value,
-                    pair, __nat>::type const& __p)
+                    pair, __nat> const& __p)
         _NOEXCEPT_(is_nothrow_copy_assignable<first_type>::value &&
                    is_nothrow_copy_assignable<second_type>::value)
     {
@@ -303,10 +320,10 @@ struct _LIBCPP_TEMPLATE_VIS pair
     }
 
     _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_SINCE_CXX20
-    pair& operator=(typename conditional<
+    pair& operator=(__conditional_t<
                         is_move_assignable<first_type>::value &&
                         is_move_assignable<second_type>::value,
-                    pair, __nat>::type&& __p)
+                    pair, __nat>&& __p)
         _NOEXCEPT_(is_nothrow_move_assignable<first_type>::value &&
                    is_nothrow_move_assignable<second_type>::value)
     {

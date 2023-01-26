@@ -92,7 +92,7 @@ def SPIRV_GroupNonUniformBallotOp : SPIRV_Op<"GroupNonUniformBallot", []> {
 // -----
 
 def SPIRV_GroupNonUniformBroadcastOp : SPIRV_Op<"GroupNonUniformBroadcast",
-  [NoSideEffect, AllTypesMatch<["value", "result"]>]> {
+  [Pure, AllTypesMatch<["value", "result"]>]> {
   let summary = [{
     Result is the Value of the invocation identified by the id Id to all
     active invocations in the group.
@@ -124,11 +124,11 @@ def SPIRV_GroupNonUniformBroadcastOp : SPIRV_Op<"GroupNonUniformBroadcast",
     group-non-uniform-broadcast-op ::= ssa-id `=`
         `spirv.GroupNonUniformBroadcast` scope ssa_use, ssa_use
         `:` integer-float-scalar-vector-type `,` integer-type
-    ```mlir
+    ```
 
     #### Example:
 
-    ```
+    ```mlir
     %scalar_value = ... : f32
     %vector_value = ... : vector<4xf32>
     %id = ... : i32
@@ -667,7 +667,7 @@ def SPIRV_GroupNonUniformSMinOp : SPIRV_GroupNonUniformArithmeticOp<"GroupNonUni
 // -----
 
 def SPIRV_GroupNonUniformShuffleOp : SPIRV_Op<"GroupNonUniformShuffle",
-    [NoSideEffect, AllTypesMatch<["value", "result"]>]> {
+    [Pure, AllTypesMatch<["value", "result"]>]> {
   let summary = [{
     Result is the Value of the invocation identified by the id Id.
   }];
@@ -719,7 +719,7 @@ def SPIRV_GroupNonUniformShuffleOp : SPIRV_Op<"GroupNonUniformShuffle",
 // -----
 
 def SPIRV_GroupNonUniformShuffleDownOp : SPIRV_Op<"GroupNonUniformShuffleDown",
-    [NoSideEffect, AllTypesMatch<["value", "result"]>]> {
+    [Pure, AllTypesMatch<["value", "result"]>]> {
   let summary = [{
     Result is the Value of the invocation identified by the current
     invocation’s id within the group + Delta.
@@ -774,7 +774,7 @@ def SPIRV_GroupNonUniformShuffleDownOp : SPIRV_Op<"GroupNonUniformShuffleDown",
 // -----
 
 def SPIRV_GroupNonUniformShuffleUpOp : SPIRV_Op<"GroupNonUniformShuffleUp",
-    [NoSideEffect, AllTypesMatch<["value", "result"]>]> {
+    [Pure, AllTypesMatch<["value", "result"]>]> {
   let summary = [{
     Result is the Value of the invocation identified by the current
     invocation’s id within the group - Delta.
@@ -828,7 +828,7 @@ def SPIRV_GroupNonUniformShuffleUpOp : SPIRV_Op<"GroupNonUniformShuffleUp",
 // -----
 
 def SPIRV_GroupNonUniformShuffleXorOp : SPIRV_Op<"GroupNonUniformShuffleXor",
-    [NoSideEffect, AllTypesMatch<["value", "result"]>]> {
+    [Pure, AllTypesMatch<["value", "result"]>]> {
   let summary = [{
     Result is the Value of the invocation identified by the current
     invocation’s id within the group xor’ed with Mask.

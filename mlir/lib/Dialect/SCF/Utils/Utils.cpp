@@ -15,9 +15,10 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/MathExtras.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/STLExtras.h"
@@ -114,7 +115,7 @@ SmallVector<scf::ForOp> mlir::replaceLoopNestWithNewYields(
   // This method is recursive (to make it more readable). Adding an
   // assertion here to limit the recursion. (See
   // https://discourse.llvm.org/t/rfc-update-to-mlir-developer-policy-on-recursion/62235)
-  assert(loopNest.size() <= 6 &&
+  assert(loopNest.size() <= 10 &&
          "exceeded recursion limit when yielding value from loop nest");
 
   // To yield a value from a perfectly nested loop nest, the following
@@ -259,7 +260,7 @@ FailureOr<func::FuncOp> mlir::outlineSingleBlockRegion(RewriterBase &rewriter,
     // `originalTerminator` was moved to `outlinedFuncBody` and is still valid.
     // Clone `originalTerminator` to take the callOp results then erase it from
     // `outlinedFuncBody`.
-    BlockAndValueMapping bvm;
+    IRMapping bvm;
     bvm.map(originalTerminator->getOperands(), call->getResults());
     rewriter.clone(*originalTerminator, bvm);
     rewriter.eraseOp(originalTerminator);
@@ -275,7 +276,7 @@ FailureOr<func::FuncOp> mlir::outlineSingleBlockRegion(RewriterBase &rewriter,
       OpBuilder::InsertionGuard g(rewriter);
       rewriter.setInsertionPointToStart(outlinedFuncBody);
       if (Operation *cst = orig.getDefiningOp<arith::ConstantIndexOp>()) {
-        BlockAndValueMapping bvm;
+        IRMapping bvm;
         repl = rewriter.clone(*cst, bvm)->getResult(0);
       }
     }
@@ -429,7 +430,7 @@ static void generateUnrolledLoop(
   SmallVector<Value, 4> lastYielded(yieldedValues);
 
   for (unsigned i = 1; i < unrollFactor; i++) {
-    BlockAndValueMapping operandMap;
+    IRMapping operandMap;
 
     // Prepare operand map.
     operandMap.map(iterArgs, lastYielded);
@@ -825,7 +826,7 @@ static LogicalResult hoistOpsBetween(scf::ForOp outer, scf::ForOp inner) {
     }
     // Skip if op has side effects.
     // TODO: loads to immutable memory regions are ok.
-    if (!MemoryEffectOpInterface::hasNoEffect(&op)) {
+    if (!isMemoryEffectFree(&op)) {
       status = failure();
       continue;
     }

@@ -150,7 +150,7 @@ LogicalResult LaunchConfigConversion<SourceOp, builtin>::matchAndRewrite(
       spirv::getBuiltinVariableValue(op, builtin, indexType, rewriter);
   rewriter.replaceOpWithNewOp<spirv::CompositeExtractOp>(
       op, indexType, spirvBuiltin,
-      rewriter.getI32ArrayAttr({static_cast<int32_t>(op.dimension())}));
+      rewriter.getI32ArrayAttr({static_cast<int32_t>(op.getDimension())}));
   return success();
 }
 
@@ -171,12 +171,12 @@ SingleDimLaunchConfigConversion<SourceOp, builtin>::matchAndRewrite(
 LogicalResult WorkGroupSizeConversion::matchAndRewrite(
     gpu::BlockDimOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
-  auto workGroupSizeAttr = spirv::lookupLocalWorkGroupSize(op);
+  DenseI32ArrayAttr workGroupSizeAttr = spirv::lookupLocalWorkGroupSize(op);
   if (!workGroupSizeAttr)
     return failure();
 
-  auto val = workGroupSizeAttr
-                 .getValues<int32_t>()[static_cast<int32_t>(op.dimension())];
+  int val =
+      workGroupSizeAttr.asArrayRef()[static_cast<int32_t>(op.getDimension())];
   auto convertedType =
       getTypeConverter()->convertType(op.getResult().getType());
   if (!convertedType)
@@ -224,9 +224,9 @@ lowerAsEntryFunction(gpu::GPUFuncOp funcOp, TypeConverter &typeConverter,
   auto newFuncOp = rewriter.create<spirv::FuncOp>(
       funcOp.getLoc(), funcOp.getName(),
       rewriter.getFunctionType(signatureConverter.getConvertedTypes(),
-                               llvm::None));
+                               std::nullopt));
   for (const auto &namedAttr : funcOp->getAttrs()) {
-    if (namedAttr.getName() == FunctionOpInterface::getTypeAttrName() ||
+    if (namedAttr.getName() == funcOp.getFunctionTypeAttrName() ||
         namedAttr.getName() == SymbolTable::getSymbolAttrName())
       continue;
     newFuncOp->setAttr(namedAttr.getName(), namedAttr.getValue());
@@ -265,7 +265,7 @@ getDefaultABIAttrs(MLIRContext *context, gpu::GPUFuncOp funcOp,
       return failure();
     // Vulkan's interface variable requirements needs scalars to be wrapped in a
     // struct. The struct held in storage buffer.
-    Optional<spirv::StorageClass> sc;
+    std::optional<spirv::StorageClass> sc;
     if (funcOp.getArgument(argIndex).getType().isIntOrIndexOrFloat())
       sc = spirv::StorageClass::StorageBuffer;
     argABI.push_back(spirv::getInterfaceVarABIAttr(0, argIndex, sc, context));
@@ -329,7 +329,7 @@ LogicalResult GPUModuleConversion::matchAndRewrite(
   // Add a keyword to the module name to avoid symbolic conflict.
   std::string spvModuleName = (kSPIRVModule + moduleOp.getName()).str();
   auto spvModule = rewriter.create<spirv::ModuleOp>(
-      moduleOp.getLoc(), addressingModel, *memoryModel, llvm::None,
+      moduleOp.getLoc(), addressingModel, *memoryModel, std::nullopt,
       StringRef(spvModuleName));
 
   // Move the region from the module op into the SPIR-V module.
@@ -338,6 +338,15 @@ LogicalResult GPUModuleConversion::matchAndRewrite(
                               spvModuleRegion.begin());
   // The spirv.module build method adds a block. Remove that.
   rewriter.eraseBlock(&spvModuleRegion.back());
+
+  // Some of the patterns call `lookupTargetEnv` during conversion and they
+  // will fail if called after GPUModuleConversion and we don't preserve
+  // `TargetEnv` attribute.
+  // Copy TargetEnvAttr only if it is attached directly to the GPUModuleOp.
+  if (auto attr = moduleOp->getAttrOfType<spirv::TargetEnvAttr>(
+          spirv::getTargetEnvAttrName()))
+    spvModule->setAttr(spirv::getTargetEnvAttrName(), attr);
+
   rewriter.eraseOp(moduleOp);
   return success();
 }
@@ -389,7 +398,7 @@ LogicalResult GPUShuffleConversion::matchAndRewrite(
   unsigned subgroupSize =
       targetEnv.getAttr().getResourceLimits().getSubgroupSize();
   IntegerAttr widthAttr;
-  if (!matchPattern(shuffleOp.width(), m_Constant(&widthAttr)) ||
+  if (!matchPattern(shuffleOp.getWidth(), m_Constant(&widthAttr)) ||
       widthAttr.getValue().getZExtValue() != subgroupSize)
     return rewriter.notifyMatchFailure(
         shuffleOp, "shuffle width and target subgroup size mismatch");
@@ -400,10 +409,14 @@ LogicalResult GPUShuffleConversion::matchAndRewrite(
   auto scope = rewriter.getAttr<spirv::ScopeAttr>(spirv::Scope::Subgroup);
   Value result;
 
-  switch (shuffleOp.mode()) {
+  switch (shuffleOp.getMode()) {
   case gpu::ShuffleMode::XOR:
     result = rewriter.create<spirv::GroupNonUniformShuffleXorOp>(
-        loc, scope, adaptor.value(), adaptor.offset());
+        loc, scope, adaptor.getValue(), adaptor.getOffset());
+    break;
+  case gpu::ShuffleMode::IDX:
+    result = rewriter.create<spirv::GroupNonUniformShuffleOp>(
+        loc, scope, adaptor.getValue(), adaptor.getOffset());
     break;
   default:
     return rewriter.notifyMatchFailure(shuffleOp, "unimplemented shuffle mode");
@@ -412,6 +425,117 @@ LogicalResult GPUShuffleConversion::matchAndRewrite(
   rewriter.replaceOp(shuffleOp, {result, trueVal});
   return success();
 }
+
+//===----------------------------------------------------------------------===//
+// Group ops
+//===----------------------------------------------------------------------===//
+
+template <typename UniformOp, typename NonUniformOp>
+static Value createGroupReduceOpImpl(OpBuilder &builder, Location loc,
+                                     Value arg, bool isGroup, bool isUniform) {
+  Type type = arg.getType();
+  auto scope = mlir::spirv::ScopeAttr::get(builder.getContext(),
+                                           isGroup ? spirv::Scope::Workgroup
+                                                   : spirv::Scope::Subgroup);
+  auto groupOp = spirv::GroupOperationAttr::get(builder.getContext(),
+                                                spirv::GroupOperation::Reduce);
+  if (isUniform) {
+    return builder.create<UniformOp>(loc, type, scope, groupOp, arg)
+        .getResult();
+  }
+  return builder.create<NonUniformOp>(loc, type, scope, groupOp, arg, Value{})
+      .getResult();
+}
+
+static llvm::Optional<Value> createGroupReduceOp(OpBuilder &builder,
+                                                 Location loc, Value arg,
+                                                 gpu::AllReduceOperation opType,
+                                                 bool isGroup, bool isUniform) {
+  using FuncT = Value (*)(OpBuilder &, Location, Value, bool, bool);
+  struct OpHandler {
+    gpu::AllReduceOperation type;
+    FuncT intFunc;
+    FuncT floatFunc;
+  };
+
+  Type type = arg.getType();
+  using MembptrT = FuncT OpHandler::*;
+  MembptrT handlerPtr;
+  if (type.isa<FloatType>()) {
+    handlerPtr = &OpHandler::floatFunc;
+  } else if (type.isa<IntegerType>()) {
+    handlerPtr = &OpHandler::intFunc;
+  } else {
+    return std::nullopt;
+  }
+
+  using ReduceType = gpu::AllReduceOperation;
+  namespace spv = spirv;
+  const OpHandler handlers[] = {
+      {ReduceType::ADD,
+       &createGroupReduceOpImpl<spv::GroupIAddOp, spv::GroupNonUniformIAddOp>,
+       &createGroupReduceOpImpl<spv::GroupFAddOp, spv::GroupNonUniformFAddOp>},
+      {ReduceType::MUL,
+       &createGroupReduceOpImpl<spv::GroupIMulKHROp,
+                                spv::GroupNonUniformIMulOp>,
+       &createGroupReduceOpImpl<spv::GroupFMulKHROp,
+                                spv::GroupNonUniformFMulOp>},
+  };
+
+  for (auto &handler : handlers)
+    if (handler.type == opType)
+      return (handler.*handlerPtr)(builder, loc, arg, isGroup, isUniform);
+
+  return std::nullopt;
+}
+
+/// Pattern to convert a gpu.all_reduce op into a SPIR-V group op.
+class GPUAllReduceConversion final
+    : public OpConversionPattern<gpu::AllReduceOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(gpu::AllReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto opType = op.getOp();
+
+    // gpu.all_reduce can have either reduction op attribute or reduction
+    // region. Only attribute version is supported.
+    if (!opType)
+      return failure();
+
+    auto result =
+        createGroupReduceOp(rewriter, op.getLoc(), adaptor.getValue(), *opType,
+                            /*isGroup*/ true, op.getUniform());
+    if (!result)
+      return failure();
+
+    rewriter.replaceOp(op, *result);
+    return success();
+  }
+};
+
+/// Pattern to convert a gpu.subgroup_reduce op into a SPIR-V group op.
+class GPUSubgroupReduceConversion final
+    : public OpConversionPattern<gpu::SubgroupReduceOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(gpu::SubgroupReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto opType = op.getOp();
+    auto result =
+        createGroupReduceOp(rewriter, op.getLoc(), adaptor.getValue(), opType,
+                            /*isGroup*/ false, op.getUniform());
+    if (!result)
+      return failure();
+
+    rewriter.replaceOp(op, *result);
+    return success();
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // GPU To SPIRV Patterns.
@@ -435,5 +559,6 @@ void mlir::populateGPUToSPIRVPatterns(SPIRVTypeConverter &typeConverter,
                                       spirv::BuiltIn::NumSubgroups>,
       SingleDimLaunchConfigConversion<gpu::SubgroupSizeOp,
                                       spirv::BuiltIn::SubgroupSize>,
-      WorkGroupSizeConversion>(typeConverter, patterns.getContext());
+      WorkGroupSizeConversion, GPUAllReduceConversion,
+      GPUSubgroupReduceConversion>(typeConverter, patterns.getContext());
 }

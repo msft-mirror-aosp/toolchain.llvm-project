@@ -590,9 +590,8 @@ SwiftAggLowering::getCoerceAndExpandTypes() const {
       hasPadding = true;
     }
 
-    if (!packed && !entry.Begin.isMultipleOf(
-          CharUnits::fromQuantity(
-            CGM.getDataLayout().getABITypeAlignment(entry.Type))))
+    if (!packed && !entry.Begin.isMultipleOf(CharUnits::fromQuantity(
+                       CGM.getDataLayout().getABITypeAlign(entry.Type))))
       packed = true;
 
     elts.push_back(entry.Type);
@@ -652,7 +651,7 @@ bool swiftcall::shouldPassIndirectly(CodeGenModule &CGM,
 CharUnits swiftcall::getMaximumVoluntaryIntegerSize(CodeGenModule &CGM) {
   // Currently always the size of an ordinary pointer.
   return CGM.getContext().toCharUnitsFromBits(
-           CGM.getContext().getTargetInfo().getPointerWidth(0));
+      CGM.getContext().getTargetInfo().getPointerWidth(LangAS::Default));
 }
 
 CharUnits swiftcall::getNaturalAlignment(CodeGenModule &CGM, llvm::Type *type) {
@@ -662,7 +661,7 @@ CharUnits swiftcall::getNaturalAlignment(CodeGenModule &CGM, llvm::Type *type) {
   if (!isPowerOf2(size)) {
     size = 1ULL << (llvm::findLastSet(size, llvm::ZB_Undefined) + 1);
   }
-  assert(size >= CGM.getDataLayout().getABITypeAlignment(type));
+  assert(CGM.getDataLayout().getABITypeAlign(type) <= size);
   return CharUnits::fromQuantity(size);
 }
 

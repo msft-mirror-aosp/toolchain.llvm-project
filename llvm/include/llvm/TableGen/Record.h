@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -254,7 +255,7 @@ public:
   void Profile(FoldingSetNodeID &ID) const;
 
   ArrayRef<Record *> getClasses() const {
-    return makeArrayRef(getTrailingObjects<Record *>(), NumClasses);
+    return ArrayRef(getTrailingObjects<Record *>(), NumClasses);
   }
 
   using const_record_iterator = Record * const *;
@@ -741,7 +742,7 @@ public:
   std::string getAsString() const override;
 
   ArrayRef<Init*> getValues() const {
-    return makeArrayRef(getTrailingObjects<Init *>(), NumValues);
+    return ArrayRef(getTrailingObjects<Init *>(), NumValues);
   }
 
   const_iterator begin() const { return getTrailingObjects<Init *>(); }
@@ -784,7 +785,7 @@ public:
 ///
 class UnOpInit : public OpInit, public FoldingSetNode {
 public:
-  enum UnaryOp : uint8_t { CAST, NOT, HEAD, TAIL, SIZE, EMPTY, GETDAGOP };
+  enum UnaryOp : uint8_t { CAST, NOT, HEAD, TAIL, SIZE, EMPTY, GETDAGOP, LOG2 };
 
 private:
   Init *LHS;
@@ -833,9 +834,31 @@ public:
 /// !op (X, Y) - Combine two inits.
 class BinOpInit : public OpInit, public FoldingSetNode {
 public:
-  enum BinaryOp : uint8_t { ADD, SUB, MUL, AND, OR, XOR, SHL, SRA, SRL, LISTCONCAT,
-                            LISTSPLAT, STRCONCAT, INTERLEAVE, CONCAT, EQ,
-                            NE, LE, LT, GE, GT, SETDAGOP };
+  enum BinaryOp : uint8_t {
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    AND,
+    OR,
+    XOR,
+    SHL,
+    SRA,
+    SRL,
+    LISTCONCAT,
+    LISTSPLAT,
+    LISTREMOVE,
+    STRCONCAT,
+    INTERLEAVE,
+    CONCAT,
+    EQ,
+    NE,
+    LE,
+    LT,
+    GE,
+    GT,
+    SETDAGOP
+  };
 
 private:
   Init *LHS, *RHS;
@@ -877,6 +900,8 @@ public:
   BinaryOp getOpcode() const { return (BinaryOp)Opc; }
   Init *getLHS() const { return LHS; }
   Init *getRHS() const { return RHS; }
+
+  std::optional<bool> CompareInit(unsigned Opc, Init *LHS, Init *RHS) const;
 
   // Fold - If possible, fold this to a simpler init.  Return this if not
   // possible to fold.
@@ -993,11 +1018,11 @@ public:
   }
 
   ArrayRef<Init *> getConds() const {
-    return makeArrayRef(getTrailingObjects<Init *>(), NumConds);
+    return ArrayRef(getTrailingObjects<Init *>(), NumConds);
   }
 
   ArrayRef<Init *> getVals() const {
-    return makeArrayRef(getTrailingObjects<Init *>()+NumConds, NumConds);
+    return ArrayRef(getTrailingObjects<Init *>() + NumConds, NumConds);
   }
 
   Init *Fold(Record *CurRec) const;
@@ -1315,7 +1340,7 @@ public:
   size_t         args_size () const { return NumArgs; }
   bool           args_empty() const { return NumArgs == 0; }
 
-  ArrayRef<Init *> args() const { return makeArrayRef(args_begin(), NumArgs); }
+  ArrayRef<Init *> args() const { return ArrayRef(args_begin(), NumArgs); }
 
   Init *getBit(unsigned Bit) const override {
     llvm_unreachable("Illegal bit reference off anonymous def");
@@ -1423,11 +1448,11 @@ public:
   }
 
   ArrayRef<Init *> getArgs() const {
-    return makeArrayRef(getTrailingObjects<Init *>(), NumArgs);
+    return ArrayRef(getTrailingObjects<Init *>(), NumArgs);
   }
 
   ArrayRef<StringInit *> getArgNames() const {
-    return makeArrayRef(getTrailingObjects<StringInit *>(), NumArgNames);
+    return ArrayRef(getTrailingObjects<StringInit *>(), NumArgNames);
   }
 
   Init *resolveReferences(Resolver &R) const override;
@@ -1804,7 +1829,7 @@ public:
   /// This method looks up the specified field and returns its value as a
   /// string, throwing an exception if the value is not a string and
   /// llvm::Optional() if the field does not exist.
-  llvm::Optional<StringRef> getValueAsOptionalString(StringRef FieldName) const;
+  std::optional<StringRef> getValueAsOptionalString(StringRef FieldName) const;
 
   /// This method looks up the specified field and returns its value as a
   /// BitsInit, throwing an exception if the field does not exist or if the

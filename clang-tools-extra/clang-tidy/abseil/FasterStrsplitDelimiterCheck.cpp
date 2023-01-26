@@ -10,6 +10,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Tooling/FixIt.h"
+#include <optional>
 
 using namespace clang::ast_matchers;
 
@@ -21,8 +22,8 @@ namespace {
 
 AST_MATCHER(StringLiteral, lengthIsOne) { return Node.getLength() == 1; }
 
-llvm::Optional<std::string> makeCharacterLiteral(const StringLiteral *Literal,
-                                                 const ASTContext &Context) {
+std::optional<std::string> makeCharacterLiteral(const StringLiteral *Literal,
+                                                const ASTContext &Context) {
   assert(Literal->getLength() == 1 &&
          "Only single character string should be matched");
   assert(Literal->getCharByteWidth() == 1 &&
@@ -45,11 +46,11 @@ llvm::Optional<std::string> makeCharacterLiteral(const StringLiteral *Literal,
   // Now replace the " with '.
   std::string::size_type Pos = Result.find_first_of('"');
   if (Pos == Result.npos)
-    return llvm::None;
+    return std::nullopt;
   Result[Pos] = '\'';
   Pos = Result.find_last_of('"');
   if (Pos == Result.npos)
-    return llvm::None;
+    return std::nullopt;
   Result[Pos] = '\'';
   return Result;
 }
@@ -105,7 +106,7 @@ void FasterStrsplitDelimiterCheck::check(
   if (Literal->getBeginLoc().isMacroID() || Literal->getEndLoc().isMacroID())
     return;
 
-  llvm::Optional<std::string> Replacement =
+  std::optional<std::string> Replacement =
       makeCharacterLiteral(Literal, *Result.Context);
   if (!Replacement)
     return;

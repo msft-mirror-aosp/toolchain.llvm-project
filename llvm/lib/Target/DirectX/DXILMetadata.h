@@ -13,6 +13,8 @@
 #ifndef LLVM_TARGET_DIRECTX_DXILMETADATA_H
 #define LLVM_TARGET_DIRECTX_DXILMETADATA_H
 
+#include <stdint.h>
+
 namespace llvm {
 class Module;
 class NamedMDNode;
@@ -29,6 +31,9 @@ public:
 
   bool isEmpty();
 };
+
+void createShaderModelMD(Module &M);
+void createEntryMD(Module &M, const uint64_t ShaderFlags);
 
 } // namespace dxil
 } // namespace llvm

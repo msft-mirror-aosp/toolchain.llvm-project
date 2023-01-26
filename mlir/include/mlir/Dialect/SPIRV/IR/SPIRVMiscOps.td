@@ -28,11 +28,11 @@ def SPIRV_KHRAssumeTrueOp : SPIRV_KhrVendorOp<"AssumeTrue", []> {
 
     ```
     assumetruekhr-op ::= `spirv.KHR.AssumeTrue` ssa-use
-    ```mlir
+    ```
 
     #### Example:
 
-    ```
+    ```mlir
     spirv.KHR.AssumeTrue %arg
     ```
   }];
@@ -56,7 +56,7 @@ def SPIRV_KHRAssumeTrueOp : SPIRV_KhrVendorOp<"AssumeTrue", []> {
 
 // -----
 
-def SPIRV_UndefOp : SPIRV_Op<"Undef", [NoSideEffect]> {
+def SPIRV_UndefOp : SPIRV_Op<"Undef", [Pure]> {
   let summary = "Make an intermediate object whose value is undefined.";
 
   let description = [{

@@ -33,7 +33,7 @@ findDiagnostic(ArrayRef<DiagnosticRecord> Diagnostics, StringRef Name) {
     if (DiagName == Name)
       return Diag;
   }
-  return None;
+  return std::nullopt;
 }
 
 int FindDiagnosticID::run(unsigned int argc, char **argv,
@@ -47,7 +47,7 @@ int FindDiagnosticID::run(unsigned int argc, char **argv,
 
   std::vector<const char *> Args;
   Args.push_back("diagtool find-diagnostic-id");
-  for (const char *A : llvm::makeArrayRef(argv, argc))
+  for (const char *A : llvm::ArrayRef(argv, argc))
     Args.push_back(A);
 
   llvm::cl::HideUnrelatedOptions(FindDiagnosticIDOptions);

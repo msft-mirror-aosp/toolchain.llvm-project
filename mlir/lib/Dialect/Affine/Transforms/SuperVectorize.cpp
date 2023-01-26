@@ -23,7 +23,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Utils/VectorUtils.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
@@ -599,7 +599,7 @@ makePattern(const DenseSet<Operation *> &parallelLoops, int vectorRank,
                For(isVectorizableLoopPtrFactory(parallelLoops, d1),
                    For(isVectorizableLoopPtrFactory(parallelLoops, d2))));
   default: {
-    return llvm::None;
+    return std::nullopt;
   }
   }
 }
@@ -616,16 +616,12 @@ namespace {
 /// Base state for the vectorize pass.
 /// Command line arguments are preempted by non-empty pass arguments.
 struct Vectorize : public impl::AffineVectorizeBase<Vectorize> {
-  Vectorize() = default;
-  Vectorize(ArrayRef<int64_t> virtualVectorSize);
+  using Base::Base;
+
   void runOnOperation() override;
 };
 
 } // namespace
-
-Vectorize::Vectorize(ArrayRef<int64_t> virtualVectorSize) {
-  vectorSizes = virtualVectorSize;
-}
 
 static void vectorizeLoopIfProfitable(Operation *loop, unsigned depthInPattern,
                                       unsigned patternDepth,
@@ -751,10 +747,10 @@ struct VectorizationState {
   // Maps input scalar operations to their vector counterparts.
   DenseMap<Operation *, Operation *> opVectorReplacement;
   // Maps input scalar values to their vector counterparts.
-  BlockAndValueMapping valueVectorReplacement;
+  IRMapping valueVectorReplacement;
   // Maps input scalar values to their new scalar counterparts in the vector
   // loop nest.
-  BlockAndValueMapping valueScalarReplacement;
+  IRMapping valueScalarReplacement;
   // Maps results of reduction loops to their new scalar counterparts.
   DenseMap<Value, Value> loopResultScalarReplacement;
 
@@ -1717,14 +1713,6 @@ static void vectorizeLoops(Operation *parentOp, DenseSet<Operation *> &loops,
   LLVM_DEBUG(dbgs() << "\n");
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>>
-createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize) {
-  return std::make_unique<Vectorize>(virtualVectorSize);
-}
-std::unique_ptr<OperationPass<func::FuncOp>> createSuperVectorizePass() {
-  return std::make_unique<Vectorize>();
-}
-
 /// Applies vectorization to the current function by searching over a bunch of
 /// predetermined patterns.
 void Vectorize::runOnOperation() {
@@ -1870,14 +1858,6 @@ vectorizeAffineLoopNest(std::vector<SmallVector<AffineForOp, 2>> &loops,
   if (failed(verifyLoopNesting(loops)))
     return failure();
   return vectorizeLoopNest(loops, strategy);
-}
-
-std::unique_ptr<OperationPass<func::FuncOp>>
-createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize) {
-  return std::make_unique<Vectorize>(virtualVectorSize);
-}
-std::unique_ptr<OperationPass<func::FuncOp>> createSuperVectorizePass() {
-  return std::make_unique<Vectorize>();
 }
 
 } // namespace mlir

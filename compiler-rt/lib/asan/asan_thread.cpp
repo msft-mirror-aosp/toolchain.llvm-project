@@ -478,6 +478,17 @@ __asan::AsanThread *GetAsanThreadByOsIDLocked(tid_t os_id) {
 
 // --- Implementation of LSan-specific functions --- {{{1
 namespace __lsan {
+void LockThreadRegistry() { __asan::asanThreadRegistry().Lock(); }
+
+void UnlockThreadRegistry() { __asan::asanThreadRegistry().Unlock(); }
+
+static ThreadRegistry *GetAsanThreadRegistryLocked() {
+  __asan::asanThreadRegistry().CheckLocked();
+  return &__asan::asanThreadRegistry();
+}
+
+void EnsureMainThreadIDIsCorrect() { __asan::EnsureMainThreadIDIsCorrect(); }
+
 bool GetThreadRangesLocked(tid_t os_id, uptr *stack_begin, uptr *stack_end,
                            uptr *tls_begin, uptr *tls_end, uptr *cache_begin,
                            uptr *cache_end, DTLS **dtls) {
@@ -507,22 +518,50 @@ void ForEachExtraStackRange(tid_t os_id, RangeIteratorCallback callback,
   fake_stack->ForEachFakeFrame(callback, arg);
 }
 
-void LockThreadRegistry() {
-  __asan::asanThreadRegistry().Lock();
+void GetAdditionalThreadContextPtrsLocked(InternalMmapVector<uptr> *ptrs) {
+  GetAsanThreadRegistryLocked()->RunCallbackForEachThreadLocked(
+      [](ThreadContextBase *tctx, void *ptrs) {
+        // Look for the arg pointer of threads that have been created or are
+        // running. This is necessary to prevent false positive leaks due to the
+        // AsanThread holding the only live reference to a heap object.  This
+        // can happen because the `pthread_create()` interceptor doesn't wait
+        // for the child thread to start before returning and thus loosing the
+        // the only live reference to the heap object on the stack.
+
+        __asan::AsanThreadContext *atctx =
+            static_cast<__asan::AsanThreadContext *>(tctx);
+
+        // Note ThreadStatusRunning is required because there is a small window
+        // where the thread status switches to `ThreadStatusRunning` but the
+        // `arg` pointer still isn't on the stack yet.
+        if (atctx->status != ThreadStatusCreated &&
+            atctx->status != ThreadStatusRunning)
+          return;
+
+        uptr thread_arg = reinterpret_cast<uptr>(atctx->thread->get_arg());
+        if (!thread_arg)
+          return;
+
+        auto ptrsVec = reinterpret_cast<InternalMmapVector<uptr> *>(ptrs);
+        ptrsVec->push_back(thread_arg);
+      },
+      ptrs);
 }
 
-void UnlockThreadRegistry() {
-  __asan::asanThreadRegistry().Unlock();
+void GetRunningThreadsLocked(InternalMmapVector<tid_t> *threads) {
+  GetAsanThreadRegistryLocked()->RunCallbackForEachThreadLocked(
+      [](ThreadContextBase *tctx, void *threads) {
+        if (tctx->status == ThreadStatusRunning)
+          reinterpret_cast<InternalMmapVector<tid_t> *>(threads)->push_back(
+              tctx->os_id);
+      },
+      threads);
 }
 
-ThreadRegistry *GetThreadRegistryLocked() {
-  __asan::asanThreadRegistry().CheckLocked();
-  return &__asan::asanThreadRegistry();
+void FinishThreadLocked(u32 tid) {
+  GetAsanThreadRegistryLocked()->FinishThread(tid);
 }
 
-void EnsureMainThreadIDIsCorrect() {
-  __asan::EnsureMainThreadIDIsCorrect();
-}
 } // namespace __lsan
 
 // ---------------------- Interface ---------------- {{{1
