@@ -228,7 +228,7 @@ public:
   static bool AreTypesSame(CompilerType type1, CompilerType type2,
                            bool ignore_qualifiers = false);
 
-  /// Creates a CompilerType form the given QualType with the current
+  /// Creates a CompilerType from the given QualType with the current
   /// TypeSystemClang instance as the CompilerType's typesystem.
   /// \param qt The QualType for a type that belongs to the ASTContext of this
   ///           TypeSystemClang.
@@ -1066,6 +1066,10 @@ public:
   static void RequireCompleteType(CompilerType type);
 
   bool SetDeclIsForcefullyCompleted(const clang::TagDecl *td);
+
+  /// Return the template parameters (including surrounding <>) in string form.
+  std::string
+  PrintTemplateParams(const TemplateParameterInfos &template_param_infos);
 
 private:
   /// Returns the PrintingPolicy used when generating the internal type names.

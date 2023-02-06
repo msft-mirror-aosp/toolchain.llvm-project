@@ -1205,12 +1205,7 @@ unsigned RISCVInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   }
 
   if (MI.getParent() && MI.getParent()->getParent()) {
-    const auto MF = MI.getMF();
-    const auto &TM = static_cast<const RISCVTargetMachine &>(MF->getTarget());
-    const MCRegisterInfo &MRI = *TM.getMCRegisterInfo();
-    const MCSubtargetInfo &STI = *TM.getMCSubtargetInfo();
-    const RISCVSubtarget &ST = MF->getSubtarget<RISCVSubtarget>();
-    if (isCompressibleInst(MI, &ST, MRI, STI))
+    if (isCompressibleInst(MI, STI))
       return 2;
   }
   return get(Opcode).getSize();
@@ -2640,18 +2635,20 @@ bool RISCVInstrInfo::hasAllNBitUsers(const MachineInstr &OrigMI,
           break;
         Worklist.push_back(std::make_pair(UserMI, Bits));
         break;
-      case RISCV::ANDI:
-        if (Bits >=
-            (64 - countLeadingZeros((uint64_t)UserMI->getOperand(2).getImm())))
+      case RISCV::ANDI: {
+        uint64_t Imm = UserMI->getOperand(2).getImm();
+        if (Bits >= (unsigned)llvm::bit_width(Imm))
           break;
         Worklist.push_back(std::make_pair(UserMI, Bits));
         break;
-      case RISCV::ORI:
-        if (Bits >=
-            (64 - countLeadingOnes((uint64_t)UserMI->getOperand(2).getImm())))
+      }
+      case RISCV::ORI: {
+        uint64_t Imm = UserMI->getOperand(2).getImm();
+        if (Bits >= (unsigned)llvm::bit_width<uint64_t>(~Imm))
           break;
         Worklist.push_back(std::make_pair(UserMI, Bits));
         break;
+      }
 
       case RISCV::SLL:
       case RISCV::BSET:

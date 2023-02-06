@@ -88,13 +88,12 @@ void RTNAME(PointerAssociateLowerBounds)(Descriptor &pointer,
 void RTNAME(PointerAssociateRemapping)(Descriptor &pointer,
     const Descriptor &target, const Descriptor &bounds, const char *sourceFile,
     int sourceLine) {
-  int rank{pointer.rank()};
   pointer = target;
   pointer.raw().attribute = CFI_attribute_pointer;
   Terminator terminator{sourceFile, sourceLine};
   SubscriptValue byteStride{/*captured from first dimension*/};
   std::size_t boundElementBytes{bounds.ElementBytes()};
-  for (int j{0}; j < rank; ++j) {
+  for (int j{0}; j < bounds.rank(); ++j) {
     auto &dim{pointer.GetDimension(j)};
     dim.SetBounds(GetInt64(bounds.ZeroBasedIndexedElement<const char>(2 * j),
                       boundElementBytes, terminator),
@@ -168,8 +167,14 @@ int RTNAME(PointerDeallocatePolymorphic)(Descriptor &pointer,
       pointer, hasStat, errMsg, sourceFile, sourceLine)};
   if (stat == StatOk) {
     DescriptorAddendum *addendum{pointer.Addendum()};
-    INTERNAL_CHECK(addendum != nullptr);
-    addendum->set_derivedType(derivedType);
+    if (addendum) {
+      addendum->set_derivedType(derivedType);
+    } else {
+      // Unlimited polymorphic descriptors initialized with
+      // PointerNullifyIntrinsic do not have an addendum. Make sure the
+      // derivedType is null in that case.
+      INTERNAL_CHECK(!derivedType);
+    }
   }
   return stat;
 }

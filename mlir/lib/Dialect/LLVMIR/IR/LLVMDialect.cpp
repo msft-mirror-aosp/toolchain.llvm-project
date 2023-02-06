@@ -35,6 +35,7 @@
 #include "llvm/Support/SourceMgr.h"
 
 #include <numeric>
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::LLVM;
@@ -208,7 +209,7 @@ ParseResult AllocaOp::parse(OpAsmParser &parser, OperationState &result) {
       parser.getCurrentLocation(&trailingTypeLoc) || parser.parseType(type))
     return failure();
 
-  Optional<NamedAttribute> alignmentAttr =
+  std::optional<NamedAttribute> alignmentAttr =
       result.attributes.getNamed("alignment");
   if (alignmentAttr.has_value()) {
     auto alignmentInt = alignmentAttr->getValue().dyn_cast<IntegerAttr>();
@@ -781,8 +782,8 @@ void LoadOp::print(OpAsmPrinter &p) {
 // Extract the pointee type from the LLVM pointer type wrapped in MLIR. Return
 // the resulting type if any, null type if opaque pointers are used, and
 // std::nullopt if the given type is not the pointer type.
-static Optional<Type> getLoadStoreElementType(OpAsmParser &parser, Type type,
-                                              SMLoc trailingTypeLoc) {
+static std::optional<Type>
+getLoadStoreElementType(OpAsmParser &parser, Type type, SMLoc trailingTypeLoc) {
   auto llvmTy = type.dyn_cast<LLVM::LLVMPointerType>();
   if (!llvmTy) {
     parser.emitError(trailingTypeLoc, "expected LLVM pointer type");
@@ -807,7 +808,7 @@ ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
       parser.resolveOperand(addr, type, result.operands))
     return failure();
 
-  Optional<Type> elemTy =
+  std::optional<Type> elemTy =
       getLoadStoreElementType(parser, type, trailingTypeLoc);
   if (!elemTy)
     return failure();
@@ -876,7 +877,7 @@ ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
     if (parser.parseType(type))
       return failure();
   } else {
-    Optional<Type> maybeOperandType =
+    std::optional<Type> maybeOperandType =
         getLoadStoreElementType(parser, type, trailingTypeLoc);
     if (!maybeOperandType)
       return failure();
@@ -1198,6 +1199,10 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     if (!ptrType)
       return emitOpError("indirect call expects a pointer as callee: ")
              << ptrType;
+
+    if (ptrType.isOpaque())
+      return success();
+
     fnType = ptrType.getElementType();
   } else {
     Operation *callee =
@@ -1992,7 +1997,7 @@ void LLVMFuncOp::build(OpBuilder &builder, OperationState &result,
                        bool dsoLocal, CConv cconv,
                        ArrayRef<NamedAttribute> attrs,
                        ArrayRef<DictionaryAttr> argAttrs,
-                       Optional<uint64_t> functionEntryCount) {
+                       std::optional<uint64_t> functionEntryCount) {
   result.addRegion();
   result.addAttribute(SymbolTable::getSymbolAttrName(),
                       builder.getStringAttr(name));
@@ -2343,7 +2348,7 @@ ParseResult AtomicRMWOp::parse(OpAsmParser &parser, OperationState &result) {
 LogicalResult AtomicRMWOp::verify() {
   auto ptrType = getPtr().getType().cast<LLVM::LLVMPointerType>();
   auto valType = getVal().getType();
-  if (valType != ptrType.getElementType())
+  if (!ptrType.isOpaque() && valType != ptrType.getElementType())
     return emitOpError("expected LLVM IR element type for operand #0 to "
                        "match type for operand #1");
   auto resType = getRes().getType();
@@ -2425,7 +2430,9 @@ LogicalResult AtomicCmpXchgOp::verify() {
     return emitOpError("expected LLVM IR pointer type for operand #0");
   auto cmpType = getCmp().getType();
   auto valType = getVal().getType();
-  if (cmpType != ptrType.getElementType() || cmpType != valType)
+  if (cmpType != valType)
+    return emitOpError("expected both value operands to have the same type");
+  if (!ptrType.isOpaque() && cmpType != ptrType.getElementType())
     return emitOpError("expected LLVM IR element type for operand #0 to "
                        "match type for all other operands");
   auto intType = valType.dyn_cast<IntegerType>();
@@ -2845,6 +2852,22 @@ namespace {
 struct LLVMInlinerInterface : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;
 
+  bool isLegalToInline(Operation *call, Operation *callable,
+                       bool wouldBeCloned) const final {
+    if (!wouldBeCloned)
+      return false;
+    auto callOp = dyn_cast<LLVM::CallOp>(call);
+    auto funcOp = dyn_cast<LLVM::LLVMFuncOp>(callable);
+    if (!callOp || !funcOp)
+      return false;
+    return isLegalToInlineCallAttributes(callOp) &&
+           isLegalToInlineFuncAttributes(funcOp);
+  }
+
+  bool isLegalToInline(Region *, Region *, bool, IRMapping &) const final {
+    return true;
+  }
+
   /// Conservative allowlist-based inlining of operations supported so far.
   bool isLegalToInline(Operation *op, Region *, bool, IRMapping &) const final {
     if (isPure(op))
@@ -2862,7 +2885,84 @@ struct LLVMInlinerInterface : public DialectInlinerInterface {
             return false;
           return true;
         })
+        .Case<LLVM::CallOp>([](auto) { return true; })
         .Default([](auto) { return false; });
+  }
+
+  /// Handle the given inlined return by replacing it with a branch. This
+  /// overload is called when the inlined region has more than one block.
+  void handleTerminator(Operation *op, Block *newDest) const final {
+    // Only return needs to be handled here.
+    auto returnOp = dyn_cast<LLVM::ReturnOp>(op);
+    if (!returnOp)
+      return;
+
+    // Replace the return with a branch to the dest.
+    OpBuilder builder(op);
+    builder.create<LLVM::BrOp>(op->getLoc(), returnOp.getOperands(), newDest);
+    op->erase();
+  }
+
+  /// Handle the given inlined return by replacing the uses of the call with the
+  /// operands of the return. This overload is called when the inlined region
+  /// only contains one block.
+  void handleTerminator(Operation *op,
+                        ArrayRef<Value> valuesToRepl) const final {
+    // Return will be the only terminator present.
+    auto returnOp = cast<LLVM::ReturnOp>(op);
+
+    // Replace the values directly with the return operands.
+    assert(returnOp.getNumOperands() == valuesToRepl.size());
+    for (const auto &[dst, src] :
+         llvm::zip(valuesToRepl, returnOp.getOperands()))
+      dst.replaceAllUsesWith(src);
+  }
+
+private:
+  /// Returns true if all attributes of `callOp` are handled during inlining.
+  [[nodiscard]] static bool isLegalToInlineCallAttributes(LLVM::CallOp callOp) {
+    return all_of(callOp.getAttributeNames(), [&](StringRef attrName) {
+      return llvm::StringSwitch<bool>(attrName)
+          // TODO: Propagate and update branch weights.
+          .Case("branch_weights", !callOp.getBranchWeights())
+          .Case("callee", true)
+          .Case("fastmathFlags", true)
+          .Default(false);
+    });
+  }
+
+  /// Returns true if all attributes of `funcOp` are handled during inlining.
+  [[nodiscard]] static bool
+  isLegalToInlineFuncAttributes(LLVM::LLVMFuncOp funcOp) {
+    return all_of(funcOp.getAttributeNames(), [&](StringRef attrName) {
+      return llvm::StringSwitch<bool>(attrName)
+          .Case("CConv", true)
+          .Case("arg_attrs", ([&]() {
+                  if (!funcOp.getArgAttrs())
+                    return true;
+                  return llvm::all_of(funcOp.getArgAttrs().value(),
+                                      [&](Attribute) {
+                                        // TODO: Handle argument attributes.
+                                        return false;
+                                      });
+                })())
+          .Case("dso_local", true)
+          .Case("function_entry_count", true)
+          .Case("function_type", true)
+          // TODO: Once the garbage collector attribute is supported on
+          // LLVM::CallOp, make sure that the garbage collector matches.
+          .Case("garbageCollector", !funcOp.getGarbageCollector())
+          .Case("linkage", true)
+          .Case("memory", true)
+          .Case("passthrough", !funcOp.getPassthrough())
+          // Exception handling is not yet supported, so bail out if the
+          // personality is set.
+          .Case("personality", !funcOp.getPersonality())
+          // TODO: Handle result attributes.
+          .Case("res_attrs", !funcOp.getResAttrs())
+          .Case("sym_name", true)
+          .Default(false);
+    });
   }
 };
 } // end anonymous namespace
@@ -2931,7 +3031,7 @@ LogicalResult LLVMDialect::verifyOperationAttribute(Operation *op,
     if (!loopAttr)
       return op->emitOpError() << "expected '" << LLVMDialect::getLoopAttrName()
                                << "' to be a dictionary attribute";
-    Optional<NamedAttribute> parallelAccessGroup =
+    std::optional<NamedAttribute> parallelAccessGroup =
         loopAttr.getNamed(LLVMDialect::getParallelAccessAttrName());
     if (parallelAccessGroup) {
       auto accessGroups = parallelAccessGroup->getValue().dyn_cast<ArrayAttr>();
@@ -2960,23 +3060,12 @@ LogicalResult LLVMDialect::verifyOperationAttribute(Operation *op,
       }
     }
 
-    Optional<NamedAttribute> loopOptions =
+    std::optional<NamedAttribute> loopOptions =
         loopAttr.getNamed(LLVMDialect::getLoopOptionsAttrName());
     if (loopOptions && !loopOptions->getValue().isa<LoopOptionsAttr>())
       return op->emitOpError()
              << "expected '" << LLVMDialect::getLoopOptionsAttrName()
              << "' to be a `loopopts` attribute";
-  }
-
-  if (attr.getName() == LLVMDialect::getReadnoneAttrName()) {
-    const auto attrName = LLVMDialect::getReadnoneAttrName();
-    if (!isa<FunctionOpInterface>(op))
-      return op->emitOpError()
-             << "'" << attrName
-             << "' is permitted only on FunctionOpInterface operations";
-    if (!attr.getValue().isa<UnitAttr>())
-      return op->emitOpError()
-             << "expected '" << attrName << "' to be a unit attribute";
   }
 
   if (attr.getName() == LLVMDialect::getStructAttrsAttrName()) {
@@ -3031,14 +3120,116 @@ LogicalResult LLVMDialect::verifyStructAttr(Operation *op, Attribute attr,
   return success();
 }
 
-static LogicalResult verifyFuncOpInterfaceStructAttr(
-    Operation *op, Attribute attr,
-    const std::function<Type(FunctionOpInterface)> &getAnnotatedType) {
-  if (auto funcOp = dyn_cast<FunctionOpInterface>(op))
-    return LLVMDialect::verifyStructAttr(op, attr, getAnnotatedType(funcOp));
+static LogicalResult verifyFuncOpInterfaceStructAttr(Operation *op,
+                                                     Attribute attr,
+                                                     Type annotatedType) {
+  if (isa<FunctionOpInterface>(op))
+    return LLVMDialect::verifyStructAttr(op, attr, annotatedType);
   return op->emitError() << "expected '"
                          << LLVMDialect::getStructAttrsAttrName()
                          << "' to be used on function-like operations";
+}
+
+LogicalResult LLVMDialect::verifyParameterAttribute(Operation *op,
+                                                    Type paramType,
+                                                    NamedAttribute paramAttr) {
+  // LLVM attribute may be attached to a result of operation that has not been
+  // converted to LLVM dialect yet, so the result may have a type with unknown
+  // representation in LLVM dialect type space. In this case we cannot verify
+  // whether the attribute may be
+  bool verifyValueType = isCompatibleType(paramType);
+  StringAttr name = paramAttr.getName();
+
+  auto checkUnitAttrType = [&]() -> LogicalResult {
+    if (!paramAttr.getValue().isa<UnitAttr>())
+      return op->emitError() << name << " should be a unit attribute";
+    return success();
+  };
+  auto checkTypeAttrType = [&]() -> LogicalResult {
+    if (!paramAttr.getValue().isa<TypeAttr>())
+      return op->emitError() << name << " should be a type attribute";
+    return success();
+  };
+  auto checkIntegerAttrType = [&]() -> LogicalResult {
+    if (!paramAttr.getValue().isa<IntegerAttr>())
+      return op->emitError() << name << " should be an integer attribute";
+    return success();
+  };
+  auto checkPointerType = [&]() -> LogicalResult {
+    if (!paramType.isa<LLVMPointerType>())
+      return op->emitError()
+             << name << " attribute attached to non-pointer LLVM type";
+    return success();
+  };
+  auto checkIntegerType = [&]() -> LogicalResult {
+    if (!paramType.isa<IntegerType>())
+      return op->emitError()
+             << name << " attribute attached to non-integer LLVM type";
+    return success();
+  };
+  auto checkPointerTypeMatches = [&]() -> LogicalResult {
+    if (failed(checkPointerType()))
+      return failure();
+    auto ptrType = paramType.cast<LLVMPointerType>();
+    auto typeAttr = paramAttr.getValue().cast<TypeAttr>();
+
+    if (!ptrType.isOpaque() && ptrType.getElementType() != typeAttr.getValue())
+      return op->emitError()
+             << name
+             << " attribute attached to LLVM pointer argument of "
+                "different type";
+    return success();
+  };
+
+  // Note: The struct parameter attributes are not lowered to LLVM IR.
+  if (name == LLVMDialect::getStructAttrsAttrName())
+    return verifyFuncOpInterfaceStructAttr(op, paramAttr.getValue(), paramType);
+
+  // Check a unit attribute that is attached to a pointer value.
+  if (name == LLVMDialect::getNoAliasAttrName() ||
+      name == LLVMDialect::getReadonlyAttrName() ||
+      name == LLVMDialect::getNestAttrName()) {
+    if (failed(checkUnitAttrType()))
+      return failure();
+    if (verifyValueType && failed(checkPointerType()))
+      return failure();
+    return success();
+  }
+
+  // Check a type attribute that is attached to a pointer value.
+  if (name == LLVMDialect::getStructRetAttrName() ||
+      name == LLVMDialect::getByValAttrName() ||
+      name == LLVMDialect::getByRefAttrName() ||
+      name == LLVMDialect::getInAllocaAttrName()) {
+    if (failed(checkTypeAttrType()))
+      return failure();
+    if (verifyValueType && failed(checkPointerTypeMatches()))
+      return failure();
+    return success();
+  }
+
+  // Check a unit attribute that is attached to an integer value.
+  if (name == LLVMDialect::getSExtAttrName() ||
+      name == LLVMDialect::getZExtAttrName()) {
+    if (failed(checkUnitAttrType()))
+      return failure();
+    if (verifyValueType && failed(checkIntegerType()))
+      return failure();
+    return success();
+  }
+
+  // Check an integer attribute that is attached to a pointer value.
+  if (name == LLVMDialect::getAlignAttrName()) {
+    if (failed(checkIntegerAttrType()))
+      return failure();
+    if (verifyValueType && failed(checkPointerType()))
+      return failure();
+    return success();
+  }
+
+  if (name == LLVMDialect::getNoUndefAttrName())
+    return checkUnitAttrType();
+  return success();
 }
 
 /// Verify LLVMIR function argument attributes.
@@ -3046,108 +3237,40 @@ LogicalResult LLVMDialect::verifyRegionArgAttribute(Operation *op,
                                                     unsigned regionIdx,
                                                     unsigned argIdx,
                                                     NamedAttribute argAttr) {
-  // Check that llvm.noalias is a unit attribute.
-  if (argAttr.getName() == LLVMDialect::getNoAliasAttrName() &&
-      !argAttr.getValue().isa<UnitAttr>())
-    return op->emitError()
-           << "expected llvm.noalias argument attribute to be a unit attribute";
-  // Check that llvm.align is an integer attribute.
-  if (argAttr.getName() == LLVMDialect::getAlignAttrName() &&
-      !argAttr.getValue().isa<IntegerAttr>())
-    return op->emitError()
-           << "llvm.align argument attribute of non integer type";
-  if (argAttr.getName() == LLVMDialect::getStructAttrsAttrName()) {
-    return verifyFuncOpInterfaceStructAttr(
-        op, argAttr.getValue(), [argIdx](FunctionOpInterface funcOp) {
-          return funcOp.getArgumentTypes()[argIdx];
-        });
-  }
-  return success();
+  auto funcOp = dyn_cast<FunctionOpInterface>(op);
+  if (!funcOp)
+    return success();
+  Type argType = funcOp.getArgumentTypes()[argIdx];
+
+  return verifyParameterAttribute(op, argType, argAttr);
 }
 
 LogicalResult LLVMDialect::verifyRegionResultAttribute(Operation *op,
                                                        unsigned regionIdx,
                                                        unsigned resIdx,
                                                        NamedAttribute resAttr) {
-  StringAttr name = resAttr.getName();
-  if (name == LLVMDialect::getStructAttrsAttrName()) {
-    return verifyFuncOpInterfaceStructAttr(
-        op, resAttr.getValue(), [resIdx](FunctionOpInterface funcOp) {
-          return funcOp.getResultTypes()[resIdx];
-        });
-  }
-  if (auto funcOp = dyn_cast<FunctionOpInterface>(op)) {
-    mlir::Type resTy = funcOp.getResultTypes()[resIdx];
+  auto funcOp = dyn_cast<FunctionOpInterface>(op);
+  if (!funcOp)
+    return success();
+  Type resType = funcOp.getResultTypes()[resIdx];
 
-    // Check to see if this function has a void return with a result attribute
-    // to it. It isn't clear what semantics we would assign to that.
-    if (resTy.isa<LLVMVoidType>())
-      return op->emitError() << "cannot attach result attributes to functions "
-                                "with a void return";
+  // Check to see if this function has a void return with a result attribute
+  // to it. It isn't clear what semantics we would assign to that.
+  if (resType.isa<LLVMVoidType>())
+    return op->emitError() << "cannot attach result attributes to functions "
+                              "with a void return";
 
-    // LLVM attribute may be attached to a result of operation
-    // that has not been converted to LLVM dialect yet, so the result
-    // may have a type with unknown representation in LLVM dialect type
-    // space. In this case we cannot verify whether the attribute may be
-    // attached to a result of such type.
-    bool verifyValueType = isCompatibleType(resTy);
-    Attribute attrValue = resAttr.getValue();
-
-    // TODO: get rid of code duplication here and in verifyRegionArgAttribute().
-    if (name == LLVMDialect::getAlignAttrName()) {
-      if (!attrValue.isa<IntegerAttr>())
-        return op->emitError() << "expected llvm.align result attribute to be "
-                                  "an integer attribute";
-      if (verifyValueType && !resTy.isa<LLVMPointerType>())
-        return op->emitError()
-               << "llvm.align attribute attached to non-pointer result";
-      return success();
-    }
-    if (name == LLVMDialect::getNoAliasAttrName()) {
-      if (!attrValue.isa<UnitAttr>())
-        return op->emitError() << "expected llvm.noalias result attribute to "
-                                  "be a unit attribute";
-      if (verifyValueType && !resTy.isa<LLVMPointerType>())
-        return op->emitError()
-               << "llvm.noalias attribute attached to non-pointer result";
-      return success();
-    }
-    if (name == LLVMDialect::getReadonlyAttrName()) {
-      if (!attrValue.isa<UnitAttr>())
-        return op->emitError() << "expected llvm.readonly result attribute to "
-                                  "be a unit attribute";
-      if (verifyValueType && !resTy.isa<LLVMPointerType>())
-        return op->emitError()
-               << "llvm.readonly attribute attached to non-pointer result";
-      return success();
-    }
-    if (name == LLVMDialect::getNoUndefAttrName()) {
-      if (!attrValue.isa<UnitAttr>())
-        return op->emitError() << "expected llvm.noundef result attribute to "
-                                  "be a unit attribute";
-      return success();
-    }
-    if (name == LLVMDialect::getSExtAttrName()) {
-      if (!attrValue.isa<UnitAttr>())
-        return op->emitError() << "expected llvm.signext result attribute to "
-                                  "be a unit attribute";
-      if (verifyValueType && !resTy.isa<mlir::IntegerType>())
-        return op->emitError()
-               << "llvm.signext attribute attached to non-integer result";
-      return success();
-    }
-    if (name == LLVMDialect::getZExtAttrName()) {
-      if (!attrValue.isa<UnitAttr>())
-        return op->emitError() << "expected llvm.zeroext result attribute to "
-                                  "be a unit attribute";
-      if (verifyValueType && !resTy.isa<mlir::IntegerType>())
-        return op->emitError()
-               << "llvm.zeroext attribute attached to non-integer result";
-      return success();
-    }
-  }
-
-  return success();
+  // Check to see if this attribute is allowed as a result attribute. Only
+  // explicitly forbidden LLVM attributes will cause an error.
+  auto name = resAttr.getName();
+  if (name == LLVMDialect::getReadonlyAttrName() ||
+      name == LLVMDialect::getNestAttrName() ||
+      name == LLVMDialect::getStructRetAttrName() ||
+      name == LLVMDialect::getByValAttrName() ||
+      name == LLVMDialect::getByRefAttrName() ||
+      name == LLVMDialect::getInAllocaAttrName())
+    return op->emitError() << name << " is not a valid result attribute";
+  return verifyParameterAttribute(op, resType, resAttr);
 }
 
 //===----------------------------------------------------------------------===//

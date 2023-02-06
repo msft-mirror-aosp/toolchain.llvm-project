@@ -6,7 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-// Test that all public C++ headers define the verbose termination function.
+// Test that all public C++ headers define the verbose termination function, which
+// is required for users to be able to include any public header and then override
+// the function using a strong definition.
 
 // The system-provided <uchar.h> seems to be broken on AIX, which trips up this test.
 // XFAIL: LIBCXX-AIX-FIXME
@@ -199,7 +201,7 @@ int main(int, char**) { return 0; }
 #endif
 
 // RUN: %{build} -DTEST_26
-#if defined(TEST_26)
+#if defined(TEST_26) && (defined(__cpp_impl_coroutine) && __cpp_impl_coroutine >= 201902L) || (defined(__cpp_coroutines) && __cpp_coroutines >= 201703L)
 #   include <coroutine>
     using HandlerType = decltype(std::__libcpp_verbose_abort);
 #endif

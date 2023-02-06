@@ -3081,7 +3081,7 @@ void AMDGPULegalizerInfo::buildMultiply(
       } else {
         bool IsHighest = 2 * i >= Accum.size();
         Register SeparateOddOut[2];
-        auto LocalAccum = makeMutableArrayRef(SeparateOddOut)
+        auto LocalAccum = MutableArrayRef(SeparateOddOut)
                               .take_front(IsHighest ? 1 : 2);
         OddCarry = buildMadChain(LocalAccum, 2 * i - 1, OddCarryIn);
 
@@ -3356,7 +3356,7 @@ bool AMDGPULegalizerInfo::legalizeWorkitemIDIntrinsic(
     Register TmpReg = MRI.createGenericVirtualRegister(LLT::scalar(32));
     if (!loadInputValue(TmpReg, B, ArgType))
       return false;
-    B.buildAssertZExt(DstReg, TmpReg, 32 - countLeadingZeros(MaxID));
+    B.buildAssertZExt(DstReg, TmpReg, llvm::bit_width(MaxID));
   }
 
   MI.eraseFromParent();
@@ -4906,7 +4906,7 @@ bool AMDGPULegalizerInfo::legalizeImageIntrinsic(
     if (BaseOpcode->Gather4) {
       DMaskLanes = 4;
     } else if (DMask != 0) {
-      DMaskLanes = countPopulation(DMask);
+      DMaskLanes = llvm::popcount(DMask);
     } else if (!IsTFE && !BaseOpcode->Store) {
       // If dmask is 0, this is a no-op load. This can be eliminated.
       B.buildUndef(MI.getOperand(0));

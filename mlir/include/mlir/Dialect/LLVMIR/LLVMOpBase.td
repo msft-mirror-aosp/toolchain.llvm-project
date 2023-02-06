@@ -54,6 +54,7 @@ def LLVM_Dialect : Dialect {
     static StringRef getSExtAttrName() { return "llvm.signext"; }
     static StringRef getZExtAttrName() { return "llvm.zeroext"; }
     static StringRef getTBAAAttrName() { return "llvm.tbaa"; }
+    static StringRef getNestAttrName() { return "llvm.nest"; }
 
     /// Verifies if the attribute is a well-formed value for "llvm.struct_attrs"
     static LogicalResult verifyStructAttr(
@@ -75,8 +76,10 @@ def LLVM_Dialect : Dialect {
     /// Returns `true` if the given type is compatible with the LLVM dialect.
     static bool isCompatibleType(Type);
 
-    /// Name of the attribute mapped to LLVM's 'readnone' function attribute.
-    /// It is allowed on any FunctionOpInterface operations.
+    /// TODO Remove this once there is an alternative way of modeling memory
+    /// effects on FunctionOpInterface.
+    /// Name of the attribute that will cause the creation of a readnone memory
+    /// effect when lowering to the LLVMDialect.
     static StringRef getReadnoneAttrName() {
       return "llvm.readnone";
     }
@@ -85,6 +88,12 @@ def LLVM_Dialect : Dialect {
     void printType(Type, DialectAsmPrinter &p) const override;
 
   private:
+    /// Verifies a parameter attribute attached to a parameter of type
+    /// paramType.
+    LogicalResult verifyParameterAttribute(Operation *op,
+                                           Type paramType,
+                                           NamedAttribute paramAttr);
+
     /// Register all types.
     void registerTypes();
 

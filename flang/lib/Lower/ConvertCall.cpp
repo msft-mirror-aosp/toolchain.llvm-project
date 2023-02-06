@@ -637,7 +637,41 @@ genUserCall(PreparedActualArguments &loweredActuals,
       TODO(loc, "HLFIR PassBy::Box");
     } break;
     case PassBy::MutableBox: {
-      TODO(loc, "HLFIR PassBy::MutableBox");
+      if (Fortran::evaluate::UnwrapExpr<Fortran::evaluate::NullPointer>(
+              *expr)) {
+        // If expr is NULL(), the mutableBox created must be a deallocated
+        // pointer with the dummy argument characteristics (see table 16.5
+        // in Fortran 2018 standard).
+        // No length parameters are set for the created box because any non
+        // deferred type parameters of the dummy will be evaluated on the
+        // callee side, and it is illegal to use NULL without a MOLD if any
+        // dummy length parameters are assumed.
+        mlir::Type boxTy = fir::dyn_cast_ptrEleTy(argTy);
+        assert(boxTy && boxTy.isa<fir::BoxType>() && "must be a fir.box type");
+        mlir::Value boxStorage = builder.createTemporary(loc, boxTy);
+        mlir::Value nullBox = fir::factory::createUnallocatedBox(
+            builder, loc, boxTy, /*nonDeferredParams=*/{});
+        builder.create<fir::StoreOp>(loc, nullBox, boxStorage);
+        caller.placeInput(arg, boxStorage);
+        continue;
+      }
+      if (fir::isPointerType(argTy) &&
+          !Fortran::evaluate::IsObjectPointer(
+              *expr, callContext.converter.getFoldingContext())) {
+        // Passing a non POINTER actual argument to a POINTER dummy argument.
+        // Create a pointer of the dummy argument type and assign the actual
+        // argument to it.
+        TODO(loc, "Associate POINTER dummy to TARGET argument in HLFIR");
+        continue;
+      }
+      // Passing a POINTER to a POINTER, or an ALLOCATABLE to an ALLOCATABLE.
+      assert(actual.isMutableBox() && "actual must be a mutable box");
+      caller.placeInput(arg, actual);
+      if (fir::isAllocatableType(argTy) && arg.isIntentOut() &&
+          Fortran::semantics::IsBindCProcedure(
+              *callContext.procRef.proc().GetSymbol())) {
+        TODO(loc, "BIND(C) INTENT(OUT) allocatable deallocation in HLFIR");
+      }
     } break;
     }
   }
@@ -663,7 +697,7 @@ static hlfir::EntityWithAttributes genIntrinsicRefCore(
     PreparedActualArguments &loweredActuals,
     const Fortran::evaluate::SpecificIntrinsic &intrinsic,
     const Fortran::lower::IntrinsicArgumentLoweringRules *argLowering,
-    std::optional<mlir::Type> coreResultType, CallContext &callContext) {
+    CallContext &callContext) {
   llvm::SmallVector<fir::ExtendedValue> operands;
   auto &stmtCtx = callContext.stmtCtx;
   auto &converter = callContext.converter;
@@ -690,16 +724,10 @@ static hlfir::EntityWithAttributes genIntrinsicRefCore(
       operands.emplace_back(
           Fortran::lower::convertToValue(loc, converter, actual, stmtCtx));
       continue;
-    case Fortran::lower::LowerIntrinsicArgAs::Addr: {
-      const auto *argExpr = callContext.procRef.UnwrapArgExpr(arg.index());
-      bool isSimplyContiguous =
-          actual.isScalar() ||
-          (argExpr && Fortran::evaluate::IsSimplyContiguous(
-                          *argExpr, converter.getFoldingContext()));
-      operands.emplace_back(Fortran::lower::convertToAddress(
-          loc, converter, actual, isSimplyContiguous, stmtCtx));
+    case Fortran::lower::LowerIntrinsicArgAs::Addr:
+      operands.emplace_back(
+          Fortran::lower::convertToAddress(loc, converter, actual, stmtCtx));
       continue;
-    }
     case Fortran::lower::LowerIntrinsicArgAs::Box:
       operands.emplace_back(
           Fortran::lower::convertToBox(loc, converter, actual, stmtCtx));
@@ -710,12 +738,34 @@ static hlfir::EntityWithAttributes genIntrinsicRefCore(
     }
     llvm_unreachable("bad switch");
   }
+  fir::FirOpBuilder &builder = callContext.getBuilder();
+  // genIntrinsicCall needs the scalar type, even if this is a transformational
+  // procedure returning an array.
+  std::optional<mlir::Type> scalarResultType;
+  if (callContext.resultType)
+    scalarResultType = hlfir::getFortranElementType(*callContext.resultType);
   // Let the intrinsic library lower the intrinsic procedure call.
-  fir::ExtendedValue val = Fortran::lower::genIntrinsicCall(
-      callContext.getBuilder(), loc, intrinsic.name, coreResultType, operands,
-      stmtCtx);
-  return extendedValueToHlfirEntity(loc, callContext.getBuilder(), val,
-                                    ".tmp.intrinsic_result");
+  auto [resultExv, mustBeFreed] = Fortran::lower::genIntrinsicCall(
+      callContext.getBuilder(), loc, intrinsic.name, scalarResultType,
+      operands);
+  hlfir::EntityWithAttributes resultEntity = extendedValueToHlfirEntity(
+      loc, builder, resultExv, ".tmp.intrinsic_result");
+  // Move result into memory into an hlfir.expr since they are immutable from
+  // that point, and the result storage is some temp.
+  if (!fir::isa_trivial(resultEntity.getType())) {
+    hlfir::AsExprOp asExpr;
+    // Character/Derived MERGE lowering returns one of its argument address
+    // (this is the only intrinsic implemented in that way so far). The
+    // ownership of this address cannot be taken here since it may not be a
+    // temp.
+    if (intrinsic.name == "merge")
+      asExpr = builder.create<hlfir::AsExprOp>(loc, resultEntity);
+    else
+      asExpr = builder.create<hlfir::AsExprOp>(
+          loc, resultEntity, builder.createBool(loc, mustBeFreed));
+    resultEntity = hlfir::EntityWithAttributes{asExpr.getResult()};
+  }
+  return resultEntity;
 }
 
 namespace {
@@ -763,13 +813,13 @@ public:
       TODO(loc, "ordered elemental calls in HLFIR");
     // Push a new local scope so that any temps made inside the elemental
     // iterations are cleaned up inside the iterations.
-    callContext.stmtCtx.pushScope();
     if (!callContext.resultType) {
       // Subroutine case. Generate call inside loop nest.
       auto [innerLoop, oneBasedIndices] =
           hlfir::genLoopNest(loc, builder, shape);
       auto insPt = builder.saveInsertionPoint();
       builder.setInsertionPointToStart(innerLoop.getBody());
+      callContext.stmtCtx.pushScope();
       for (auto &preparedActual : loweredActuals)
         if (preparedActual)
           preparedActual->actual = hlfir::getElementAt(
@@ -785,21 +835,39 @@ public:
     // Get result length parameters.
     llvm::SmallVector<mlir::Value> typeParams;
     if (elementType.isa<fir::CharacterType>() ||
-        fir::isRecordWithTypeParameters(elementType))
-      TODO(loc, "compute elemental function result length parameters in HLFIR");
+        fir::isRecordWithTypeParameters(elementType)) {
+      auto charType = elementType.dyn_cast<fir::CharacterType>();
+      if (charType && charType.hasConstantLen())
+        typeParams.push_back(builder.createIntegerConstant(
+            loc, builder.getIndexType(), charType.getLen()));
+      else if (charType)
+        typeParams.push_back(impl().computeDynamicCharacterResultLength(
+            loweredActuals, callContext));
+      else
+        TODO(
+            loc,
+            "compute elemental PDT function result length parameters in HLFIR");
+    }
     auto genKernel = [&](mlir::Location l, fir::FirOpBuilder &b,
                          mlir::ValueRange oneBasedIndices) -> hlfir::Entity {
+      callContext.stmtCtx.pushScope();
       for (auto &preparedActual : loweredActuals)
         if (preparedActual)
           preparedActual->actual = hlfir::getElementAt(
               l, b, preparedActual->actual, oneBasedIndices);
       auto res = *impl().genElementalKernel(loweredActuals, callContext);
       callContext.stmtCtx.finalizeAndPop();
+      // Note that an hlfir.destroy is not emitted for the result since it
+      // is still used by the hlfir.yield_element that also marks its last
+      // use.
       return res;
     };
-    // TODO: deal with hlfir.elemental result destruction.
-    return hlfir::EntityWithAttributes{hlfir::genElementalOp(
-        loc, builder, elementType, shape, typeParams, genKernel)};
+    mlir::Value elemental = hlfir::genElementalOp(loc, builder, elementType,
+                                                  shape, typeParams, genKernel);
+    fir::FirOpBuilder *bldr = &builder;
+    callContext.stmtCtx.attachCleanup(
+        [=]() { bldr->create<hlfir::DestroyOp>(loc, elemental); });
+    return hlfir::EntityWithAttributes{elemental};
   }
 
 private:
@@ -836,6 +904,13 @@ public:
            arg.passBy == PassBy::BaseAddressValueAttribute;
   }
 
+  mlir::Value
+  computeDynamicCharacterResultLength(PreparedActualArguments &loweredActuals,
+                                      CallContext &callContext) {
+    TODO(callContext.loc,
+         "compute elemental function result length parameters in HLFIR");
+  }
+
 private:
   Fortran::lower::CallerInterface &caller;
   mlir::FunctionType callSiteType;
@@ -853,11 +928,8 @@ public:
   std::optional<hlfir::Entity>
   genElementalKernel(PreparedActualArguments &loweredActuals,
                      CallContext &callContext) {
-    std::optional<mlir::Type> coreResultType;
-    if (callContext.resultType.has_value())
-      coreResultType = hlfir::getFortranElementType(*callContext.resultType);
     return genIntrinsicRefCore(loweredActuals, intrinsic, argLowering,
-                               coreResultType, callContext);
+                               callContext);
   }
   // Elemental intrinsic functions cannot modify their arguments.
   bool argMayBeModifiedByCall(int) const { return !isFunction; }
@@ -865,6 +937,19 @@ public:
     // Elemental intrinsic functions never need the actual addresses
     // of their arguments.
     return isFunction;
+  }
+
+  mlir::Value
+  computeDynamicCharacterResultLength(PreparedActualArguments &loweredActuals,
+                                      CallContext &callContext) {
+    if (intrinsic.name == "adjustr" || intrinsic.name == "adjustl" ||
+        intrinsic.name == "merge")
+      return hlfir::genCharLength(callContext.loc, callContext.getBuilder(),
+                                  loweredActuals[0].value().actual);
+    // Character MIN/MAX is the min/max of the arguments length that are
+    // present.
+    TODO(callContext.loc,
+         "compute elemental character min/max function result length in HLFIR");
   }
 
 private:
@@ -917,8 +1002,14 @@ genIntrinsicRef(const Fortran::evaluate::SpecificIntrinsic &intrinsic,
         .genElementalCall(loweredActuals, /*isImpure=*/!isFunction, callContext)
         .value();
   }
-  return genIntrinsicRefCore(loweredActuals, intrinsic, argLowering,
-                             callContext.resultType, callContext);
+  hlfir::EntityWithAttributes result =
+      genIntrinsicRefCore(loweredActuals, intrinsic, argLowering, callContext);
+  if (result.getType().isa<hlfir::ExprType>()) {
+    fir::FirOpBuilder *bldr = &callContext.getBuilder();
+    callContext.stmtCtx.attachCleanup(
+        [=]() { bldr->create<hlfir::DestroyOp>(loc, result); });
+  }
+  return result;
 }
 
 /// Main entry point to lower procedure references, regardless of what they are.

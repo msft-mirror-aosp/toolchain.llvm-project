@@ -18,13 +18,14 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::sparse_tensor;
 
 /// If the tensor is a sparse constant, generates and returns the pair of
 /// the constants for the indices and the values.
-static Optional<std::pair<Value, Value>>
+static std::optional<std::pair<Value, Value>>
 genSplitSparseConstant(OpBuilder &builder, Location loc, Value tensor) {
   if (auto constOp = tensor.getDefiningOp<arith::ConstantOp>()) {
     if (auto attr = constOp.getValue().dyn_cast<SparseElementsAttr>()) {
@@ -564,7 +565,7 @@ Value sparse_tensor::reshapeValuesToLevels(
 
 Value sparse_tensor::genToPointers(OpBuilder &builder, Location loc,
                                    Value tensor, uint64_t d) {
-  RankedTensorType srcTp = tensor.getType().cast<RankedTensorType>();
+  RankedTensorType srcTp = getRankedTensorType(tensor);
   SparseTensorEncodingAttr encSrc = getSparseTensorEncoding(srcTp);
   Type ptrTp = get1DMemRefType(getPointerOverheadType(builder, encSrc),
                                /*withLayout=*/false);
@@ -574,7 +575,7 @@ Value sparse_tensor::genToPointers(OpBuilder &builder, Location loc,
 
 Value sparse_tensor::genToIndices(OpBuilder &builder, Location loc,
                                   Value tensor, uint64_t d, uint64_t cooStart) {
-  RankedTensorType srcTp = tensor.getType().cast<RankedTensorType>();
+  RankedTensorType srcTp = getRankedTensorType(tensor);
   SparseTensorEncodingAttr encSrc = getSparseTensorEncoding(srcTp);
   Type indTp = get1DMemRefType(getIndexOverheadType(builder, encSrc),
                                /*withLayout=*/d >= cooStart);
@@ -584,7 +585,7 @@ Value sparse_tensor::genToIndices(OpBuilder &builder, Location loc,
 
 Value sparse_tensor::genToValues(OpBuilder &builder, Location loc,
                                  Value tensor) {
-  RankedTensorType srcTp = tensor.getType().cast<RankedTensorType>();
+  RankedTensorType srcTp = getRankedTensorType(tensor);
   Type valTp = get1DMemRefType(srcTp.getElementType(),
                                /*withLayout=*/false);
   return builder.create<ToValuesOp>(loc, valTp, tensor);
@@ -592,7 +593,5 @@ Value sparse_tensor::genToValues(OpBuilder &builder, Location loc,
 
 Value sparse_tensor::genValMemSize(OpBuilder &builder, Location loc,
                                    Value tensor) {
-  SmallVector<Value> fields;
-  auto desc = getMutDescriptorFromTensorTuple(tensor, fields);
-  return desc.getValMemSize(builder, loc);
+  return getDescriptorFromTensorTuple(tensor).getValMemSize(builder, loc);
 }

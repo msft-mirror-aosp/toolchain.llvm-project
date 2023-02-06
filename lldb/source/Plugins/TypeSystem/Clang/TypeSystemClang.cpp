@@ -1431,6 +1431,24 @@ static TemplateParameterList *CreateTemplateParameterList(
   return template_param_list;
 }
 
+std::string TypeSystemClang::PrintTemplateParams(
+    const TemplateParameterInfos &template_param_infos) {
+  llvm::SmallVector<NamedDecl *, 8> ignore;
+  clang::TemplateParameterList *template_param_list =
+      CreateTemplateParameterList(getASTContext(), template_param_infos,
+                                  ignore);
+  llvm::SmallVector<clang::TemplateArgument, 2> args =
+      template_param_infos.args;
+  if (template_param_infos.hasParameterPack()) {
+    args.append(template_param_infos.packed_args->args);
+  }
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  clang::printTemplateArgumentList(os, args, GetTypePrintingPolicy(),
+                                   template_param_list);
+  return str;
+}
+
 clang::FunctionTemplateDecl *TypeSystemClang::CreateFunctionTemplateDecl(
     clang::DeclContext *decl_ctx, OptionalClangModuleID owning_module,
     clang::FunctionDecl *func_decl,
@@ -8970,7 +8988,7 @@ static bool DumpEnumValue(const clang::QualType &qual_type, Stream *s,
   for (auto *enumerator : enum_decl->enumerators()) {
     uint64_t val = enumerator->getInitVal().getSExtValue();
     val = llvm::SignExtend64(val, 8*byte_size);
-    if (llvm::countPopulation(val) != 1 && (val & ~covered_bits) != 0)
+    if (llvm::popcount(val) != 1 && (val & ~covered_bits) != 0)
       can_be_bitfield = false;
     covered_bits |= val;
     ++num_enumerators;
@@ -9006,9 +9024,10 @@ static bool DumpEnumValue(const clang::QualType &qual_type, Stream *s,
   // Sort in reverse order of the number of the population count,  so that in
   // `enum {A, B, ALL = A|B }` we visit ALL first. Use a stable sort so that
   // A | C where A is declared before C is displayed in this order.
-  std::stable_sort(values.begin(), values.end(), [](const auto &a, const auto &b) {
-        return llvm::countPopulation(a.first) > llvm::countPopulation(b.first);
-      });
+  std::stable_sort(values.begin(), values.end(),
+                   [](const auto &a, const auto &b) {
+                     return llvm::popcount(a.first) > llvm::popcount(b.first);
+                   });
 
   for (const auto &val : values) {
     if ((remaining_value & val.first) != val.first)

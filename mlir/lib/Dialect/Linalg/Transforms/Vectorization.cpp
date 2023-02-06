@@ -31,6 +31,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <type_traits>
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::linalg;
@@ -77,9 +78,9 @@ struct VectorizationState {
   /// masking. Returns the masked operation or the original operation if masking
   /// is not needed. If provided, the canonical mask for this operation is
   /// permuted using `maybeMaskingMap`.
-  Operation *maskOperation(RewriterBase &rewriter, Operation *opToMask,
-                           LinalgOp linalgOp,
-                           Optional<AffineMap> maybeMaskingMap = std::nullopt);
+  Operation *
+  maskOperation(RewriterBase &rewriter, Operation *opToMask, LinalgOp linalgOp,
+                std::optional<AffineMap> maybeMaskingMap = std::nullopt);
 
 private:
   /// Initializes the iteration space static sizes using the Linalg op
@@ -100,7 +101,7 @@ private:
   /// cached for future users.
   Value getOrCreateMaskFor(RewriterBase &rewriter, Operation *opToMask,
                            LinalgOp linalgOp,
-                           Optional<AffineMap> maybeMaskingMap);
+                           std::optional<AffineMap> maybeMaskingMap);
 
   // Holds the compile-time static sizes of the iteration space to vectorize.
   // Dynamic dimensions are represented using ShapedType::kDynamicSize.
@@ -199,7 +200,7 @@ VectorizationState::initState(RewriterBase &rewriter, LinalgOp linalgOp,
 /// future users.
 Value VectorizationState::getOrCreateMaskFor(
     RewriterBase &rewriter, Operation *opToMask, LinalgOp linalgOp,
-    Optional<AffineMap> maybeMaskingMap) {
+    std::optional<AffineMap> maybeMaskingMap) {
   // No mask is needed if the operation is not maskable.
   auto maskableOp = dyn_cast<vector::MaskableOpInterface>(opToMask);
   if (!maskableOp)
@@ -278,7 +279,7 @@ Value VectorizationState::getOrCreateMaskFor(
 Operation *
 VectorizationState::maskOperation(RewriterBase &rewriter, Operation *opToMask,
                                   LinalgOp linalgOp,
-                                  Optional<AffineMap> maybeMaskingMap) {
+                                  std::optional<AffineMap> maybeMaskingMap) {
   LDBG("Trying to mask: " << *opToMask << "\n");
 
   // Create or retrieve mask for this operation.
@@ -455,7 +456,7 @@ static Value buildVectorWrite(RewriterBase &rewriter, Value value,
 
   Operation *write;
   if (vectorType.getRank() > 0) {
-    AffineMap writeMap = reindexIndexingMap(opOperandMap);
+    AffineMap writeMap = inversePermutation(reindexIndexingMap(opOperandMap));
     SmallVector<Value> indices(linalgOp.getRank(outputOperand),
                                rewriter.create<arith::ConstantIndexOp>(loc, 0));
     value = broadcastIfNeeded(rewriter, value, vectorType.getShape());
@@ -1108,10 +1109,14 @@ LogicalResult mlir::linalg::vectorizeCopy(RewriterBase &rewriter,
   if (!srcType.hasStaticShape() || !dstType.hasStaticShape())
     return failure();
 
-  auto readType =
-      VectorType::get(srcType.getShape(), getElementTypeOrSelf(srcType));
-  auto writeType =
-      VectorType::get(dstType.getShape(), getElementTypeOrSelf(dstType));
+  auto srcElementType = getElementTypeOrSelf(srcType);
+  auto dstElementType = getElementTypeOrSelf(dstType);
+  if (!VectorType::isValidElementType(srcElementType) ||
+      !VectorType::isValidElementType(dstElementType))
+    return failure();
+
+  auto readType = VectorType::get(srcType.getShape(), srcElementType);
+  auto writeType = VectorType::get(dstType.getShape(), dstElementType);
 
   Location loc = copyOp->getLoc();
   Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
@@ -1172,6 +1177,8 @@ struct GenericPadOpVectorizationPattern : public GeneralizePadOpPattern {
                                         tensor::PadOp padOp, Value dest) {
     auto sourceType = padOp.getSourceType();
     auto resultType = padOp.getResultType();
+    if (!VectorType::isValidElementType(sourceType.getElementType()))
+      return failure();
 
     // Copy cannot be vectorized if pad value is non-constant and source shape
     // is dynamic. In case of a dynamic source shape, padding must be appended
