@@ -19,11 +19,11 @@
 #include "M68kMachineFunction.h"
 #include "M68kSubtarget.h"
 
-#include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h" // For IDs of passes that are preserved.
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/GlobalValue.h"
 
 using namespace llvm;
@@ -160,6 +160,16 @@ bool M68kExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
                                 MVT::i8);
   case M68k::MOVZXd32f16:
     return TII->ExpandMOVSZX_RM(MIB, false, TII->get(M68k::MOV16rf), MVT::i32,
+                                MVT::i16);
+
+  case M68k::MOVZXd16q8:
+    return TII->ExpandMOVSZX_RM(MIB, false, TII->get(M68k::MOV8dq), MVT::i16,
+                                MVT::i8);
+  case M68k::MOVZXd32q8:
+    return TII->ExpandMOVSZX_RM(MIB, false, TII->get(M68k::MOV8dq), MVT::i32,
+                                MVT::i8);
+  case M68k::MOVZXd32q16:
+    return TII->ExpandMOVSZX_RM(MIB, false, TII->get(M68k::MOV16dq), MVT::i32,
                                 MVT::i16);
 
   case M68k::MOV8cd:

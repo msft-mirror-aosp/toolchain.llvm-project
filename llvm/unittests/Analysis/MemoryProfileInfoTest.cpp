@@ -20,8 +20,8 @@
 using namespace llvm;
 using namespace llvm::memprof;
 
-extern cl::opt<float> MemProfAccessesPerByteColdThreshold;
-extern cl::opt<unsigned> MemProfMinLifetimeColdThreshold;
+extern cl::opt<float> MemProfLifetimeAccessDensityColdThreshold;
+extern cl::opt<unsigned> MemProfAveLifetimeColdThreshold;
 
 namespace {
 
@@ -60,30 +60,45 @@ protected:
 // Basic checks on the allocation type for values just above and below
 // the thresholds.
 TEST_F(MemoryProfileInfoTest, GetAllocType) {
-  // Long lived with more accesses per byte than threshold is not cold.
-  EXPECT_EQ(
-      getAllocType(/*MaxAccessCount=*/MemProfAccessesPerByteColdThreshold + 1,
-                   /*MinSize=*/1,
-                   /*MinLifetime=*/MemProfMinLifetimeColdThreshold * 1000 + 1),
-      AllocationType::NotCold);
-  // Long lived with less accesses per byte than threshold is cold.
-  EXPECT_EQ(
-      getAllocType(/*MaxAccessCount=*/MemProfAccessesPerByteColdThreshold - 1,
-                   /*MinSize=*/1,
-                   /*MinLifetime=*/MemProfMinLifetimeColdThreshold * 1000 + 1),
-      AllocationType::Cold);
-  // Short lived with more accesses per byte than threshold is not cold.
-  EXPECT_EQ(
-      getAllocType(/*MaxAccessCount=*/MemProfAccessesPerByteColdThreshold + 1,
-                   /*MinSize=*/1,
-                   /*MinLifetime=*/MemProfMinLifetimeColdThreshold * 1000 - 1),
-      AllocationType::NotCold);
-  // Short lived with less accesses per byte than threshold is not cold.
-  EXPECT_EQ(
-      getAllocType(/*MaxAccessCount=*/MemProfAccessesPerByteColdThreshold - 1,
-                   /*MinSize=*/1,
-                   /*MinLifetime=*/MemProfMinLifetimeColdThreshold * 1000 - 1),
-      AllocationType::NotCold);
+  const uint64_t AllocCount = 2;
+  // To be cold we require that
+  // ((float)TotalLifetimeAccessDensity) / AllocCount / 100 <
+  //    MemProfLifetimeAccessDensityColdThreshold
+  // so compute the TotalLifetimeAccessDensity right at the threshold.
+  const uint64_t TotalLifetimeAccessDensityThreshold =
+      (uint64_t)(MemProfLifetimeAccessDensityColdThreshold * AllocCount * 100);
+  // To be cold we require that
+  // ((float)TotalLifetime) / AllocCount >=
+  //    MemProfAveLifetimeColdThreshold * 1000
+  // so compute the TotalLifetime right at the threshold.
+  const uint64_t TotalLifetimeThreshold =
+      MemProfAveLifetimeColdThreshold * AllocCount * 1000;
+
+  // Long lived with more accesses per byte per sec than threshold is not cold.
+  EXPECT_EQ(getAllocType(TotalLifetimeAccessDensityThreshold + 1, AllocCount,
+                         TotalLifetimeThreshold + 1),
+            AllocationType::NotCold);
+  // Long lived with less accesses per byte per sec than threshold is cold.
+  EXPECT_EQ(getAllocType(TotalLifetimeAccessDensityThreshold - 1, AllocCount,
+                         TotalLifetimeThreshold + 1),
+            AllocationType::Cold);
+  // Short lived with more accesses per byte per sec than threshold is not cold.
+  EXPECT_EQ(getAllocType(TotalLifetimeAccessDensityThreshold + 1, AllocCount,
+                         TotalLifetimeThreshold - 1),
+            AllocationType::NotCold);
+  // Short lived with less accesses per byte per sec than threshold is not cold.
+  EXPECT_EQ(getAllocType(TotalLifetimeAccessDensityThreshold - 1, AllocCount,
+                         TotalLifetimeThreshold - 1),
+            AllocationType::NotCold);
+}
+
+// Test the hasSingleAllocType helper.
+TEST_F(MemoryProfileInfoTest, SingleAllocType) {
+  uint8_t NotCold = (uint8_t)AllocationType::NotCold;
+  uint8_t Cold = (uint8_t)AllocationType::Cold;
+  EXPECT_TRUE(hasSingleAllocType(NotCold));
+  EXPECT_TRUE(hasSingleAllocType(Cold));
+  EXPECT_FALSE(hasSingleAllocType(NotCold | Cold));
 }
 
 // Test buildCallstackMetadata helper.
@@ -401,6 +416,8 @@ declare noundef nonnull ptr @_Znam(i64 noundef)
     auto *MIBMD = cast<const MDNode>(MIBOp);
     MDNode *StackNode = getMIBStackNode(MIBMD);
     CallStack<MDNode, MDNode::op_iterator> StackContext(StackNode);
+    uint64_t ExpectedBack = First ? 4 : 5;
+    EXPECT_EQ(StackContext.back(), ExpectedBack);
     std::vector<uint64_t> StackIds;
     for (auto ContextIter = StackContext.beginAfterSharedPrefix(InstCallsite);
          ContextIter != StackContext.end(); ++ContextIter)
@@ -450,6 +467,8 @@ TEST_F(MemoryProfileInfoTest, CallStackTestSummary) {
     for (auto &MIB : AI.MIBs) {
       CallStack<MIBInfo, SmallVector<unsigned>::const_iterator> StackContext(
           &MIB);
+      uint64_t ExpectedBack = First ? 4 : 5;
+      EXPECT_EQ(Index->getStackIdAtIndex(StackContext.back()), ExpectedBack);
       std::vector<uint64_t> StackIds;
       for (auto StackIdIndex : StackContext)
         StackIds.push_back(Index->getStackIdAtIndex(StackIdIndex));

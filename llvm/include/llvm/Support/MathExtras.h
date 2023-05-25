@@ -24,14 +24,6 @@
 
 namespace llvm {
 
-/// The behavior an operation has on an input of 0.
-enum ZeroBehavior {
-  /// The returned value is undefined.
-  ZB_Undefined,
-  /// The returned value is numeric_limits<T>::max()
-  ZB_Max
-};
-
 /// Mathematical constants.
 namespace numbers {
 // TODO: Track C++20 std::numbers.
@@ -74,7 +66,9 @@ constexpr float ef          = 2.71828183F, // (0x1.5bf0a8P+1) https://oeis.org/A
 /// Only unsigned integral types are allowed.
 ///
 /// Returns std::numeric_limits<T>::digits on an input of 0.
-template <typename T> unsigned countTrailingZeros(T Val) {
+template <typename T>
+LLVM_DEPRECATED("Use llvm::countr_zero instead.", "llvm::countr_zero")
+unsigned countTrailingZeros(T Val) {
   static_assert(std::is_unsigned_v<T>,
                 "Only unsigned integral types are allowed.");
   return llvm::countr_zero(Val);
@@ -86,29 +80,18 @@ template <typename T> unsigned countTrailingZeros(T Val) {
 /// Only unsigned integral types are allowed.
 ///
 /// Returns std::numeric_limits<T>::digits on an input of 0.
-template <typename T> unsigned countLeadingZeros(T Val) {
+template <typename T>
+LLVM_DEPRECATED("Use llvm::countl_zero instead.", "llvm::countl_zero")
+unsigned countLeadingZeros(T Val) {
   static_assert(std::is_unsigned_v<T>,
                 "Only unsigned integral types are allowed.");
   return llvm::countl_zero(Val);
 }
 
-/// Get the index of the first set bit starting from the least
-///   significant bit.
-///
-/// Only unsigned integral types are allowed.
-///
-/// \param ZB the behavior on an input of 0.
-template <typename T> T findFirstSet(T Val, ZeroBehavior ZB = ZB_Max) {
-  if (ZB == ZB_Max && Val == 0)
-    return std::numeric_limits<T>::max();
-
-  return llvm::countr_zero(Val);
-}
-
 /// Create a bitmask with the N right-most bits set to 1, and all other
 /// bits set to 0.  Only unsigned types are allowed.
 template <typename T> T maskTrailingOnes(unsigned N) {
-  static_assert(std::is_unsigned<T>::value, "Invalid type!");
+  static_assert(std::is_unsigned_v<T>, "Invalid type!");
   const unsigned Bits = CHAR_BIT * sizeof(T);
   assert(N <= Bits && "Invalid bit index");
   return N == 0 ? 0 : (T(-1) >> (Bits - N));
@@ -130,21 +113,6 @@ template <typename T> T maskTrailingZeros(unsigned N) {
 /// bits set to 1.  Only unsigned types are allowed.
 template <typename T> T maskLeadingZeros(unsigned N) {
   return maskTrailingOnes<T>(CHAR_BIT * sizeof(T) - N);
-}
-
-/// Get the index of the last set bit starting from the least
-///   significant bit.
-///
-/// Only unsigned integral types are allowed.
-///
-/// \param ZB the behavior on an input of 0.
-template <typename T> T findLastSet(T Val, ZeroBehavior ZB = ZB_Max) {
-  if (ZB == ZB_Max && Val == 0)
-    return std::numeric_limits<T>::max();
-
-  // Use ^ instead of - because both gcc and llvm can remove the associated ^
-  // in the __builtin_clz intrinsic on x86.
-  return llvm::countl_zero(Val) ^ (std::numeric_limits<T>::digits - 1);
 }
 
 /// Macro compressed bit reversal table for 256 bits.
@@ -337,7 +305,9 @@ constexpr inline bool isPowerOf2_64(uint64_t Value) {
 /// Only unsigned integral types are allowed.
 ///
 /// Returns std::numeric_limits<T>::digits on an input of all ones.
-template <typename T> unsigned countLeadingOnes(T Value) {
+template <typename T>
+LLVM_DEPRECATED("Use llvm::countl_one instead.", "llvm::countl_one")
+unsigned countLeadingOnes(T Value) {
   static_assert(std::is_unsigned_v<T>,
                 "Only unsigned integral types are allowed.");
   return llvm::countl_one<T>(Value);
@@ -350,7 +320,9 @@ template <typename T> unsigned countLeadingOnes(T Value) {
 /// Only unsigned integral types are allowed.
 ///
 /// Returns std::numeric_limits<T>::digits on an input of all ones.
-template <typename T> unsigned countTrailingOnes(T Value) {
+template <typename T>
+LLVM_DEPRECATED("Use llvm::countr_one instead.", "llvm::countr_one")
+unsigned countTrailingOnes(T Value) {
   static_assert(std::is_unsigned_v<T>,
                 "Only unsigned integral types are allowed.");
   return llvm::countr_one<T>(Value);
@@ -360,6 +332,7 @@ template <typename T> unsigned countTrailingOnes(T Value) {
 /// Ex. countPopulation(0xF000F000) = 8
 /// Returns 0 if the word is zero.
 template <typename T>
+LLVM_DEPRECATED("Use llvm::popcount instead.", "llvm::popcount")
 inline unsigned countPopulation(T Value) {
   static_assert(std::is_unsigned_v<T>,
                 "Only unsigned integral types are allowed.");
@@ -430,12 +403,14 @@ inline unsigned Log2_64_Ceil(uint64_t Value) {
 }
 
 /// This function takes a 64-bit integer and returns the bit equivalent double.
+LLVM_DEPRECATED("use llvm::bit_cast instead", "llvm::bit_cast<double>")
 inline double BitsToDouble(uint64_t Bits) {
   static_assert(sizeof(uint64_t) == sizeof(double), "Unexpected type sizes");
   return llvm::bit_cast<double>(Bits);
 }
 
 /// This function takes a 32-bit integer and returns the bit equivalent float.
+LLVM_DEPRECATED("use llvm::bit_cast instead", "llvm::bit_cast<float>")
 inline float BitsToFloat(uint32_t Bits) {
   static_assert(sizeof(uint32_t) == sizeof(float), "Unexpected type sizes");
   return llvm::bit_cast<float>(Bits);
@@ -444,6 +419,7 @@ inline float BitsToFloat(uint32_t Bits) {
 /// This function takes a double and returns the bit equivalent 64-bit integer.
 /// Note that copying doubles around changes the bits of NaNs on some hosts,
 /// notably x86, so this routine cannot be used if these bits are needed.
+LLVM_DEPRECATED("use llvm::bit_cast instead", "llvm::bit_cast<uint64_t>")
 inline uint64_t DoubleToBits(double Double) {
   static_assert(sizeof(uint64_t) == sizeof(double), "Unexpected type sizes");
   return llvm::bit_cast<uint64_t>(Double);
@@ -452,6 +428,7 @@ inline uint64_t DoubleToBits(double Double) {
 /// This function takes a float and returns the bit equivalent 32-bit integer.
 /// Note that copying floats around changes the bits of NaNs on some hosts,
 /// notably x86, so this routine cannot be used if these bits are needed.
+LLVM_DEPRECATED("use llvm::bit_cast instead", "llvm::bit_cast<uint32_t>")
 inline uint32_t FloatToBits(float Float) {
   static_assert(sizeof(uint32_t) == sizeof(float), "Unexpected type sizes");
   return llvm::bit_cast<uint32_t>(Float);
@@ -482,6 +459,7 @@ constexpr inline uint64_t NextPowerOf2(uint64_t A) {
 
 /// Returns the power of two which is less than or equal to the given value.
 /// Essentially, it is a floor operation across the domain of powers of two.
+LLVM_DEPRECATED("use llvm::bit_floor instead", "llvm::bit_floor")
 inline uint64_t PowerOf2Floor(uint64_t A) {
   return llvm::bit_floor(A);
 }
@@ -593,7 +571,7 @@ inline int64_t SignExtend64(uint64_t X, unsigned B) {
 /// Subtract two unsigned integers, X and Y, of type T and return the absolute
 /// value of the result.
 template <typename T>
-std::enable_if_t<std::is_unsigned<T>::value, T> AbsoluteDifference(T X, T Y) {
+std::enable_if_t<std::is_unsigned_v<T>, T> AbsoluteDifference(T X, T Y) {
   return X > Y ? (X - Y) : (Y - X);
 }
 
@@ -601,7 +579,7 @@ std::enable_if_t<std::is_unsigned<T>::value, T> AbsoluteDifference(T X, T Y) {
 /// maximum representable value of T on overflow.  ResultOverflowed indicates if
 /// the result is larger than the maximum representable value of type T.
 template <typename T>
-std::enable_if_t<std::is_unsigned<T>::value, T>
+std::enable_if_t<std::is_unsigned_v<T>, T>
 SaturatingAdd(T X, T Y, bool *ResultOverflowed = nullptr) {
   bool Dummy;
   bool &Overflowed = ResultOverflowed ? *ResultOverflowed : Dummy;
@@ -630,7 +608,7 @@ std::enable_if_t<std::is_unsigned_v<T>, T> SaturatingAdd(T X, T Y, T Z,
 /// maximum representable value of T on overflow.  ResultOverflowed indicates if
 /// the result is larger than the maximum representable value of type T.
 template <typename T>
-std::enable_if_t<std::is_unsigned<T>::value, T>
+std::enable_if_t<std::is_unsigned_v<T>, T>
 SaturatingMultiply(T X, T Y, bool *ResultOverflowed = nullptr) {
   bool Dummy;
   bool &Overflowed = ResultOverflowed ? *ResultOverflowed : Dummy;
@@ -676,7 +654,7 @@ SaturatingMultiply(T X, T Y, bool *ResultOverflowed = nullptr) {
 /// overflow. ResultOverflowed indicates if the result is larger than the
 /// maximum representable value of type T.
 template <typename T>
-std::enable_if_t<std::is_unsigned<T>::value, T>
+std::enable_if_t<std::is_unsigned_v<T>, T>
 SaturatingMultiplyAdd(T X, T Y, T A, bool *ResultOverflowed = nullptr) {
   bool Dummy;
   bool &Overflowed = ResultOverflowed ? *ResultOverflowed : Dummy;
@@ -695,7 +673,7 @@ extern const float huge_valf;
 /// Add two signed integers, computing the two's complement truncated result,
 /// returning true if overflow occurred.
 template <typename T>
-std::enable_if_t<std::is_signed<T>::value, T> AddOverflow(T X, T Y, T &Result) {
+std::enable_if_t<std::is_signed_v<T>, T> AddOverflow(T X, T Y, T &Result) {
 #if __has_builtin(__builtin_add_overflow)
   return __builtin_add_overflow(X, Y, &Result);
 #else
@@ -721,7 +699,7 @@ std::enable_if_t<std::is_signed<T>::value, T> AddOverflow(T X, T Y, T &Result) {
 /// Subtract two signed integers, computing the two's complement truncated
 /// result, returning true if an overflow ocurred.
 template <typename T>
-std::enable_if_t<std::is_signed<T>::value, T> SubOverflow(T X, T Y, T &Result) {
+std::enable_if_t<std::is_signed_v<T>, T> SubOverflow(T X, T Y, T &Result) {
 #if __has_builtin(__builtin_sub_overflow)
   return __builtin_sub_overflow(X, Y, &Result);
 #else
@@ -747,7 +725,7 @@ std::enable_if_t<std::is_signed<T>::value, T> SubOverflow(T X, T Y, T &Result) {
 /// Multiply two signed integers, computing the two's complement truncated
 /// result, returning true if an overflow ocurred.
 template <typename T>
-std::enable_if_t<std::is_signed<T>::value, T> MulOverflow(T X, T Y, T &Result) {
+std::enable_if_t<std::is_signed_v<T>, T> MulOverflow(T X, T Y, T &Result) {
   // Perform the unsigned multiplication on absolute values.
   using U = std::make_unsigned_t<T>;
   const U UX = X < 0 ? (0 - static_cast<U>(X)) : static_cast<U>(X);

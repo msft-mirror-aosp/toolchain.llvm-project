@@ -32,7 +32,7 @@ if(NOT ANDROID)
     # Use LLVM utils and Clang from the same build tree.
     list(APPEND SANITIZER_COMMON_LIT_TEST_DEPS
       clang clang-resource-headers FileCheck count not llvm-config llvm-nm llvm-objdump
-      llvm-readelf llvm-readobj llvm-size llvm-symbolizer compiler-rt-headers sancov)
+      llvm-readelf llvm-readobj llvm-size llvm-symbolizer compiler-rt-headers sancov split-file)
     if (WIN32)
       list(APPEND SANITIZER_COMMON_LIT_TEST_DEPS KillTheDoctor)
     endif()
@@ -43,9 +43,7 @@ if(NOT ANDROID)
   endif()
 endif()
 
-if(COMPILER_RT_STANDALONE_BUILD)
-  umbrella_lit_testsuite_begin(check-compiler-rt)
-endif()
+umbrella_lit_testsuite_begin(check-compiler-rt)
 
 function(compiler_rt_test_runtime runtime)
   string(TOUPPER ${runtime} runtime_uppercase)
@@ -110,12 +108,12 @@ if(COMPILER_RT_CAN_EXECUTE_TESTS)
   add_subdirectory(shadowcallstack)
 endif()
 
-if(COMPILER_RT_STANDALONE_BUILD)
-  # Now that we've traversed all the directories and know all the lit testsuites,
-  # introduce a rule to run to run all of them.
-  add_custom_target(compiler-rt-test-depends DEPENDS ${LLVM_COMPILER_RT_LIT_DEPENDS})
-  umbrella_lit_testsuite_end(check-compiler-rt)
+# Now that we've traversed all the directories and know all the lit testsuites,
+# introduce a rule to run to run all of them.
+add_custom_target(compiler-rt-test-depends DEPENDS ${LLVM_COMPILER_RT_LIT_DEPENDS})
+umbrella_lit_testsuite_end(check-compiler-rt)
 
+if(COMPILER_RT_STANDALONE_BUILD)
   if(NOT TARGET check-all)
     add_custom_target(check-all)
   endif()

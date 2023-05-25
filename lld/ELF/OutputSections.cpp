@@ -217,7 +217,7 @@ void OutputSection::finalizeInputSections() {
       });
       if (i == mergeSections.end()) {
         MergeSyntheticSection *syn =
-            createMergeSynthetic(name, ms->type, ms->flags, ms->addralign);
+            createMergeSynthetic(s->name, ms->type, ms->flags, ms->addralign);
         mergeSections.push_back(syn);
         i = std::prev(mergeSections.end());
         syn->entsize = ms->entsize;
@@ -242,7 +242,7 @@ static void sortByOrder(MutableArrayRef<InputSection *> in,
                         llvm::function_ref<int(InputSectionBase *s)> order) {
   std::vector<std::pair<int, InputSection *>> v;
   for (InputSection *s : in)
-    v.push_back({order(s), s});
+    v.emplace_back(order(s), s);
   llvm::stable_sort(v, less_first());
 
   for (size_t i = 0; i < v.size(); ++i)
@@ -534,7 +534,7 @@ void OutputSection::writeTo(uint8_t *buf, parallel::TaskGroup &tg) {
     taskSize += sections[i]->getSize();
     bool done = ++i == numSections;
     if (done || taskSize >= taskSizeLimit) {
-      tg.execute([=] { fn(begin, i); });
+      tg.spawn([=] { fn(begin, i); });
       if (done)
         break;
       begin = i;

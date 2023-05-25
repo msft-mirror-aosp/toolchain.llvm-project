@@ -488,7 +488,7 @@ bool Writer::createThunks(OutputSection *os, int margin) {
       uint32_t &thunkSymbolIndex = insertion.first->second;
       if (insertion.second)
         thunkSymbolIndex = file->addRangeThunkSymbol(thunk);
-      relocReplacements.push_back({j, thunkSymbolIndex});
+      relocReplacements.emplace_back(j, thunkSymbolIndex);
     }
 
     // Get a writable copy of this section's relocations so they can be
@@ -531,8 +531,7 @@ bool Writer::verifyRanges(const std::vector<Chunk *> chunks) {
       continue;
 
     ArrayRef<coff_relocation> relocs = sc->getRelocs();
-    for (size_t j = 0, e = relocs.size(); j < e; ++j) {
-      const coff_relocation &rel = relocs[j];
+    for (const coff_relocation &rel : relocs) {
       Symbol *relocTarget = sc->file->getSymbol(rel.SymbolTableIndex);
 
       Defined *sym = dyn_cast_or_null<Defined>(relocTarget);
@@ -1034,13 +1033,13 @@ void Writer::createMiscChunks() {
     // allowing a debugger to match a PDB and an executable.  So we need it even
     // if we're ultimately not going to write CodeView data to the PDB.
     buildId = make<CVDebugRecordChunk>(ctx);
-    debugRecords.push_back({COFF::IMAGE_DEBUG_TYPE_CODEVIEW, buildId});
+    debugRecords.emplace_back(COFF::IMAGE_DEBUG_TYPE_CODEVIEW, buildId);
   }
 
   if (config->cetCompat) {
-    debugRecords.push_back({COFF::IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS,
-                            make<ExtendedDllCharacteristicsChunk>(
-                                IMAGE_DLL_CHARACTERISTICS_EX_CET_COMPAT)});
+    debugRecords.emplace_back(COFF::IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS,
+                              make<ExtendedDllCharacteristicsChunk>(
+                                  IMAGE_DLL_CHARACTERISTICS_EX_CET_COMPAT));
   }
 
   // Align and add each chunk referenced by the debug data directory.
@@ -1267,7 +1266,9 @@ void Writer::createSymbolAndStringTable() {
   // solution where discardable sections have long names preserved and
   // non-discardable sections have their names truncated, to ensure that any
   // section which is mapped at runtime also has its name mapped at runtime.
+  bool HasDwarfSection = false;
   for (OutputSection *sec : ctx.outputSections) {
+    HasDwarfSection |= sec->name.startswith(".debug_");
     if (sec->name.size() <= COFF::NameSize)
       continue;
     if ((sec->header.Characteristics & IMAGE_SCN_MEM_DISCARDABLE) == 0)
@@ -1280,7 +1281,7 @@ void Writer::createSymbolAndStringTable() {
     sec->setStringTableOff(addEntryToStringTable(sec->name));
   }
 
-  if (ctx.config.debugDwarf || ctx.config.debugSymtab) {
+  if (ctx.config.debugDwarf || ctx.config.debugSymtab || HasDwarfSection) {
     for (ObjFile *file : ctx.objFileInstances) {
       for (Symbol *b : file->getSymbols()) {
         auto *d = dyn_cast_or_null<Defined>(b);
@@ -1954,7 +1955,8 @@ void Writer::writeSections() {
     // Fill gaps between functions in .text with INT3 instructions
     // instead of leaving as NUL bytes (which can be interpreted as
     // ADD instructions).
-    if (sec->header.Characteristics & IMAGE_SCN_CNT_CODE)
+    if ((sec->header.Characteristics & IMAGE_SCN_CNT_CODE) &&
+        (ctx.config.machine == AMD64 || ctx.config.machine == I386))
       memset(secBuf, 0xCC, sec->getRawSize());
     parallelForEach(sec->chunks, [&](Chunk *c) {
       c->writeTo(secBuf + c->getRVA() - sec->getRVA());

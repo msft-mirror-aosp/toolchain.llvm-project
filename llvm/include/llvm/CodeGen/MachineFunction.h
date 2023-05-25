@@ -24,10 +24,10 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/iterator.h"
-#include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/ArrayRecycler.h"
 #include "llvm/Support/AtomicOrdering.h"
@@ -374,6 +374,7 @@ class LLVM_EXTERNAL_VISIBILITY MachineFunction {
   bool HasEHCatchret = false;
   bool HasEHScopes = false;
   bool HasEHFunclets = false;
+  bool IsOutlined = false;
 
   /// BBID to assign to the next basic block of this function.
   unsigned NextBBID = 0;
@@ -1115,6 +1116,9 @@ public:
 
   bool hasEHFunclets() const { return HasEHFunclets; }
   void setHasEHFunclets(bool V) { HasEHFunclets = V; }
+
+  bool isOutlined() const { return IsOutlined; }
+  void setIsOutlined(bool V) { IsOutlined = V; }
 
   /// Find or create an LandingPadInfo for the specified MachineBasicBlock.
   LandingPadInfo &getOrCreateLandingPadInfo(MachineBasicBlock *LandingPad);

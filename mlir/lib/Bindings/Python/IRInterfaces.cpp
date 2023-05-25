@@ -12,6 +12,7 @@
 #include "IRModule.h"
 #include "mlir-c/BuiltinAttributes.h"
 #include "mlir-c/Interfaces.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace py = pybind11;
 
@@ -183,20 +184,57 @@ public:
   }
 
   /// Given the arguments required to build an operation, attempts to infer its
-  /// return types. Throws value_error on faliure.
+  /// return types. Throws value_error on failure.
   std::vector<PyType>
-  inferReturnTypes(std::optional<std::vector<PyValue>> operands,
-                   std::optional<PyAttribute> attributes,
+  inferReturnTypes(std::optional<py::list> operandList,
+                   std::optional<PyAttribute> attributes, void *properties,
                    std::optional<std::vector<PyRegion>> regions,
                    DefaultingPyMlirContext context,
                    DefaultingPyLocation location) {
     llvm::SmallVector<MlirValue> mlirOperands;
     llvm::SmallVector<MlirRegion> mlirRegions;
 
-    if (operands) {
-      mlirOperands.reserve(operands->size());
-      for (PyValue &value : *operands) {
-        mlirOperands.push_back(value);
+    if (operandList && !operandList->empty()) {
+      // Note: as the list may contain other lists this may not be final size.
+      mlirOperands.reserve(operandList->size());
+      for (const auto& it : llvm::enumerate(*operandList)) {
+        PyValue* val;
+        try {
+          val = py::cast<PyValue *>(it.value());
+          if (!val)
+            throw py::cast_error();
+          mlirOperands.push_back(val->get());
+          continue;
+        } catch (py::cast_error &err) {
+          // Intentionally unhandled to try sequence below first.
+          (void)err;
+        }
+
+        try {
+          auto vals = py::cast<py::sequence>(it.value());
+          for (py::object v : vals) {
+            try {
+              val = py::cast<PyValue *>(v);
+              if (!val)
+                throw py::cast_error();
+              mlirOperands.push_back(val->get());
+            } catch (py::cast_error &err) {
+              throw py::value_error(
+                  (llvm::Twine("Operand ") + llvm::Twine(it.index()) +
+                   " must be a Value or Sequence of Values (" + err.what() +
+                   ")")
+                      .str());
+            }
+          }
+          continue;
+        } catch (py::cast_error &err) {
+          throw py::value_error(
+              (llvm::Twine("Operand ") + llvm::Twine(it.index()) +
+               " must be a Value or Sequence of Values (" + err.what() + ")")
+                  .str());
+        }
+
+        throw py::cast_error();
       }
     }
 
@@ -217,7 +255,7 @@ public:
 
     MlirLogicalResult result = mlirInferTypeOpInterfaceInferReturnTypes(
         opNameRef, pyContext.get(), location.resolve(), mlirOperands.size(),
-        mlirOperands.data(), attributeDict, mlirRegions.size(),
+        mlirOperands.data(), attributeDict, properties, mlirRegions.size(),
         mlirRegions.data(), &appendResultsCallback, &data);
 
     if (mlirLogicalResultIsFailure(result)) {
@@ -230,7 +268,8 @@ public:
   static void bindDerived(ClassTy &cls) {
     cls.def("inferReturnTypes", &PyInferTypeOpInterface::inferReturnTypes,
             py::arg("operands") = py::none(),
-            py::arg("attributes") = py::none(), py::arg("regions") = py::none(),
+            py::arg("attributes") = py::none(),
+            py::arg("properties") = py::none(), py::arg("regions") = py::none(),
             py::arg("context") = py::none(), py::arg("loc") = py::none(),
             inferReturnTypesDoc);
   }

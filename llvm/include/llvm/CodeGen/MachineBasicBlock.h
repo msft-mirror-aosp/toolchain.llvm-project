@@ -796,12 +796,12 @@ public:
   /// it. If an explicit branch to the fallthrough block is not allowed,
   /// set JumpToFallThrough to be false. Non-null return is a conservative
   /// answer.
-  MachineBasicBlock *getFallThrough(bool JumpToFallThrough = false);
+  MachineBasicBlock *getFallThrough(bool JumpToFallThrough = true);
 
   /// Return the fallthrough block if the block can implicitly
   /// transfer control to it's successor, whether by a branch or
   /// a fallthrough. Non-null return is a conservative answer.
-  MachineBasicBlock *getLogicalFallThrough() { return getFallThrough(true); }
+  MachineBasicBlock *getLogicalFallThrough() { return getFallThrough(false); }
 
   /// Return true if the block can implicitly transfer control to the
   /// block after it by falling off the end of it.  This should return
@@ -1260,6 +1260,12 @@ template <> struct GraphTraits<Inverse<const MachineBasicBlock*>> {
   static ChildIteratorType child_begin(NodeRef N) { return N->pred_begin(); }
   static ChildIteratorType child_end(NodeRef N) { return N->pred_end(); }
 };
+
+// These accessors are handy for sharing templated code between IR and MIR.
+inline auto successors(const MachineBasicBlock *BB) { return BB->successors(); }
+inline auto predecessors(const MachineBasicBlock *BB) {
+  return BB->predecessors();
+}
 
 /// MachineInstrSpan provides an interface to get an iteration range
 /// containing the instruction it was initialized with, along with all

@@ -692,6 +692,20 @@ void TypePrinter::printVectorBefore(const VectorType *T, raw_ostream &OS) {
     // Multiply by 8 for the number of bits.
     OS << ") * 8))) ";
     printBefore(T->getElementType(), OS);
+    break;
+  case VectorType::RVVFixedLengthDataVector:
+    // FIXME: We prefer to print the size directly here, but have no way
+    // to get the size of the type.
+    OS << "__attribute__((__riscv_rvv_vector_bits__(";
+
+    OS << T->getNumElements();
+
+    OS << " * sizeof(";
+    print(T->getElementType(), OS, StringRef());
+    // Multiply by 8 for the number of bits.
+    OS << ") * 8))) ";
+    printBefore(T->getElementType(), OS);
+    break;
   }
 }
 
@@ -757,6 +771,21 @@ void TypePrinter::printDependentVectorBefore(
     }
     OS << "))) ";
     printBefore(T->getElementType(), OS);
+    break;
+  case VectorType::RVVFixedLengthDataVector:
+    // FIXME: We prefer to print the size directly here, but have no way
+    // to get the size of the type.
+    OS << "__attribute__((__riscv_rvv_vector_bits__(";
+    if (T->getSizeExpr()) {
+      T->getSizeExpr()->printPretty(OS, nullptr, Policy);
+      OS << " * sizeof(";
+      print(T->getElementType(), OS, StringRef());
+      // Multiply by 8 for the number of bits.
+      OS << ") * 8";
+    }
+    OS << "))) ";
+    printBefore(T->getElementType(), OS);
+    break;
   }
 }
 
@@ -1649,6 +1678,9 @@ void TypePrinter::printAttributedBefore(const AttributedType *T,
     spaceBeforePlaceHolder(OS);
   }
 
+  if (T->isWebAssemblyFuncrefSpec())
+    OS << "__funcref";
+
   // Print nullability type specifiers.
   if (T->getImmediateNullability()) {
     if (T->getAttrKind() == attr::TypeNonNull)
@@ -1682,8 +1714,8 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
 
   // Some attributes are printed as qualifiers before the type, so we have
   // nothing left to do.
-  if (T->getAttrKind() == attr::ObjCKindOf ||
-      T->isMSTypeSpec() || T->getImmediateNullability())
+  if (T->getAttrKind() == attr::ObjCKindOf || T->isMSTypeSpec() ||
+      T->getImmediateNullability() || T->isWebAssemblyFuncrefSpec())
     return;
 
   // Don't print the inert __unsafe_unretained attribute at all.
@@ -1755,6 +1787,7 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
   case attr::AddressSpace:
   case attr::CmseNSCall:
   case attr::AnnotateType:
+  case attr::WebAssemblyFuncref:
     llvm_unreachable("This attribute should have been handled already");
 
   case attr::NSReturnsRetained:
@@ -2007,6 +2040,36 @@ static bool isSubstitutedType(ASTContext &Ctx, QualType T, QualType Pattern,
   return false;
 }
 
+/// Evaluates the expression template argument 'Pattern' and returns true
+/// if 'Arg' evaluates to the same result.
+static bool templateArgumentExpressionsEqual(ASTContext const &Ctx,
+                                             TemplateArgument const &Pattern,
+                                             TemplateArgument const &Arg) {
+  if (Pattern.getKind() != TemplateArgument::Expression)
+    return false;
+
+  // Can't evaluate value-dependent expressions so bail early
+  Expr const *pattern_expr = Pattern.getAsExpr();
+  if (pattern_expr->isValueDependent() ||
+      !pattern_expr->isIntegerConstantExpr(Ctx))
+    return false;
+
+  if (Arg.getKind() == TemplateArgument::Integral)
+    return llvm::APSInt::isSameValue(pattern_expr->EvaluateKnownConstInt(Ctx),
+                                     Arg.getAsIntegral());
+
+  if (Arg.getKind() == TemplateArgument::Expression) {
+    Expr const *args_expr = Arg.getAsExpr();
+    if (args_expr->isValueDependent() || !args_expr->isIntegerConstantExpr(Ctx))
+      return false;
+
+    return llvm::APSInt::isSameValue(args_expr->EvaluateKnownConstInt(Ctx),
+                                     pattern_expr->EvaluateKnownConstInt(Ctx));
+  }
+
+  return false;
+}
+
 static bool isSubstitutedTemplateArgument(ASTContext &Ctx, TemplateArgument Arg,
                                           TemplateArgument Pattern,
                                           ArrayRef<TemplateArgument> Args,
@@ -2025,15 +2088,8 @@ static bool isSubstitutedTemplateArgument(ASTContext &Ctx, TemplateArgument Arg,
     }
   }
 
-  if (Arg.getKind() == TemplateArgument::Integral &&
-      Pattern.getKind() == TemplateArgument::Expression) {
-    Expr const *expr = Pattern.getAsExpr();
-
-    if (!expr->isValueDependent() && expr->isIntegerConstantExpr(Ctx)) {
-      return llvm::APSInt::isSameValue(expr->EvaluateKnownConstInt(Ctx),
-                                       Arg.getAsIntegral());
-    }
-  }
+  if (templateArgumentExpressionsEqual(Ctx, Pattern, Arg))
+    return true;
 
   if (Arg.getKind() != Pattern.getKind())
     return false;
@@ -2086,14 +2142,10 @@ printTo(raw_ostream &OS, ArrayRef<TA> Args, const PrintingPolicy &Policy,
   if (TPL && Policy.SuppressDefaultTemplateArgs &&
       !Policy.PrintCanonicalTypes && !Args.empty() && !IsPack &&
       Args.size() <= TPL->size()) {
-    ASTContext &Ctx = TPL->getParam(0)->getASTContext();
     llvm::SmallVector<TemplateArgument, 8> OrigArgs;
     for (const TA &A : Args)
       OrigArgs.push_back(getArgument(A));
-    while (!Args.empty() &&
-           isSubstitutedDefaultArgument(Ctx, getArgument(Args.back()),
-                                        TPL->getParam(Args.size() - 1),
-                                        OrigArgs, TPL->getDepth()))
+    while (!Args.empty() && getArgument(Args.back()).getIsDefaulted())
       Args = Args.drop_back();
   }
 
@@ -2238,6 +2290,8 @@ std::string Qualifiers::getAddrSpaceAsString(LangAS AS) {
     return "__uptr __ptr32";
   case LangAS::ptr64:
     return "__ptr64";
+  case LangAS::wasm_funcref:
+    return "__funcref";
   case LangAS::hlsl_groupshared:
     return "groupshared";
   default:

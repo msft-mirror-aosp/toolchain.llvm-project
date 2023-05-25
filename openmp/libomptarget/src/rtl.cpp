@@ -43,6 +43,10 @@ PluginManager *PM;
 
 static char *ProfileTraceFile = nullptr;
 
+#ifdef OMPT_SUPPORT
+extern void InitOmptLibomp();
+#endif
+
 __attribute__((constructor(101))) void init() {
   DP("Init target library!\n");
 
@@ -64,6 +68,11 @@ __attribute__((constructor(101))) void init() {
   // TODO: add a configuration option for time granularity
   if (ProfileTraceFile)
     timeTraceProfilerInitialize(500 /* us */, "libomptarget");
+
+  #ifdef OMPT_SUPPORT
+    // Initialize OMPT first
+    InitOmptLibomp();
+  #endif
 
   PM->RTLs.loadRTLs();
   PM->registerDelayedLibraries();
@@ -246,6 +255,10 @@ bool RTLsTy::attemptLoadRTL(const std::string &RTLName, RTLInfoTy &RTL) {
       DynLibrary->getAddressOfSymbol("__tgt_rtl_data_lock");
   *((void **)&RTL.data_unlock) =
       DynLibrary->getAddressOfSymbol("__tgt_rtl_data_unlock");
+  *((void **)&RTL.data_notify_mapped) =
+      DynLibrary->getAddressOfSymbol("__tgt_rtl_data_notify_mapped");
+  *((void **)&RTL.data_notify_unmapped) =
+      DynLibrary->getAddressOfSymbol("__tgt_rtl_data_notify_unmapped");
 
   RTL.LibraryHandler = std::move(DynLibrary);
 

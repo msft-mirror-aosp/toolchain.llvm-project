@@ -22,6 +22,7 @@ add_llvm_unittest(SupportTests
   Chrono.cpp
   CommandLineTest.cpp
   CompressionTest.cpp
+  ConvertEBCDICTest.cpp
   ConvertUTFTest.cpp
   CRCTest.cpp
   CSKYAttributeParserTest.cpp
@@ -46,7 +47,6 @@ add_llvm_unittest(SupportTests
   HashBuilderTest.cpp
   IndexedAccessorTest.cpp
   InstructionCostTest.cpp
-  ItaniumManglingCanonicalizerTest.cpp
   JSONTest.cpp
   KnownBitsTest.cpp
   LEB128Test.cpp
@@ -63,12 +63,14 @@ add_llvm_unittest(SupportTests
   OptimizedStructLayoutTest.cpp
   ParallelTest.cpp
   Path.cpp
+  PerThreadBumpPtrAllocatorTest.cpp
   ProcessTest.cpp
   ProgramTest.cpp
   RegexTest.cpp
   ReverseIterationTest.cpp
   ReplaceFileTest.cpp
   RISCVAttributeParserTest.cpp
+  RISCVISAInfoTest.cpp
   ScaledNumberTest.cpp
   ScopedPrinterTest.cpp
   SHA256.cpp
@@ -76,7 +78,6 @@ add_llvm_unittest(SupportTests
   SpecialCaseListTest.cpp
   SuffixTreeTest.cpp
   SwapByteOrderTest.cpp
-  SymbolRemappingReaderTest.cpp
   TarWriterTest.cpp
   TaskQueueTest.cpp
   ThreadPool.cpp

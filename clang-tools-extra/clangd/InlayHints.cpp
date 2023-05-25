@@ -304,8 +304,8 @@ public:
       return true;
     }
 
-    if (D->getType()->getContainedAutoType()) {
-      if (!D->getType()->isDependentType()) {
+    if (auto *AT = D->getType()->getContainedAutoType()) {
+      if (AT->isDeduced() && !D->getType()->isDependentType()) {
         // Our current approach is to place the hint on the variable
         // and accordingly print the full type
         // (e.g. for `const auto& x = 42`, print `const int&`).
@@ -516,8 +516,8 @@ private:
   // at the end.
   bool isPrecededByParamNameComment(const Expr *E, StringRef ParamName) {
     auto &SM = AST.getSourceManager();
-    auto ExprStartLoc = SM.getTopMacroCallerLoc(E->getBeginLoc());
-    auto Decomposed = SM.getDecomposedLoc(ExprStartLoc);
+    auto FileLoc = SM.getFileLoc(E->getBeginLoc());
+    auto Decomposed = SM.getDecomposedLoc(FileLoc);
     if (Decomposed.first != MainFileID)
       return false;
 
@@ -688,7 +688,8 @@ private:
       return;
 
     std::string TypeName = T.getAsString(Policy);
-    if (TypeName.length() < TypeNameLimit)
+    if (Cfg.InlayHints.TypeNameLimit == 0 ||
+        TypeName.length() < Cfg.InlayHints.TypeNameLimit)
       addInlayHint(R, HintSide::Right, InlayHintKind::Type, Prefix, TypeName,
                    /*Suffix=*/"");
   }
@@ -714,8 +715,6 @@ private:
   // the policies are initialized for more details.)
   PrintingPolicy TypeHintPolicy;
   PrintingPolicy StructuredBindingPolicy;
-
-  static const size_t TypeNameLimit = 32;
 };
 
 } // namespace
