@@ -113,13 +113,14 @@ void UnixSignals::AddSignal(int signo, const char *name, bool default_suppress,
   ++m_version;
 }
 
-void UnixSignals::AddSignalCode(int signo, int code, const char *description,
+void UnixSignals::AddSignalCode(int signo, int code,
+                                const llvm::StringLiteral description,
                                 SignalCodePrintOption print_option) {
   collection::iterator signal = m_signals.find(signo);
   assert(signal != m_signals.end() &&
          "Tried to add code to signal that does not exist.");
   signal->second.m_codes.insert(
-      std::pair{code, SignalCode{ConstString(description), print_option}});
+      std::pair{code, SignalCode{description, print_option}});
   ++m_version;
 }
 
@@ -130,12 +131,11 @@ void UnixSignals::RemoveSignal(int signo) {
   ++m_version;
 }
 
-const char *UnixSignals::GetSignalAsCString(int signo) const {
-  collection::const_iterator pos = m_signals.find(signo);
+llvm::StringRef UnixSignals::GetSignalAsStringRef(int32_t signo) const {
+  const auto pos = m_signals.find(signo);
   if (pos == m_signals.end())
-    return nullptr;
-  else
-    return pos->second.m_name.GetCString();
+    return {};
+  return pos->second.m_name.GetStringRef();
 }
 
 std::string
@@ -150,13 +150,13 @@ UnixSignals::GetSignalDescription(int32_t signo, std::optional<int32_t> code,
     str = pos->second.m_name.GetCString();
 
     if (code) {
-      std::map<int, SignalCode>::const_iterator cpos =
+      std::map<int32_t, SignalCode>::const_iterator cpos =
           pos->second.m_codes.find(*code);
       if (cpos != pos->second.m_codes.end()) {
         const SignalCode &sc = cpos->second;
         str += ": ";
         if (sc.m_print_option != SignalCodePrintOption::Bounds)
-          str += sc.m_description.GetCString();
+          str += sc.m_description.str();
 
         std::stringstream strm;
         switch (sc.m_print_option) {
@@ -178,7 +178,7 @@ UnixSignals::GetSignalDescription(int32_t signo, std::optional<int32_t> code,
             strm << ", upper bound: 0x" << std::hex << *upper;
             strm << ")";
           } else
-            strm << sc.m_description.GetCString();
+            strm << sc.m_description.str();
 
           break;
         }
@@ -194,10 +194,8 @@ bool UnixSignals::SignalIsValid(int32_t signo) const {
   return m_signals.find(signo) != m_signals.end();
 }
 
-ConstString UnixSignals::GetShortName(ConstString name) const {
-  if (name)
-    return ConstString(name.GetStringRef().substr(3)); // Remove "SIG" from name
-  return name;
+llvm::StringRef UnixSignals::GetShortName(llvm::StringRef name) const {
+  return name.substr(3); // Remove "SIG" from name
 }
 
 int32_t UnixSignals::GetSignalNumberFromName(const char *name) const {
@@ -239,19 +237,17 @@ int32_t UnixSignals::GetNextSignalNumber(int32_t current_signal) const {
   }
 }
 
-const char *UnixSignals::GetSignalInfo(int32_t signo, bool &should_suppress,
-                                       bool &should_stop,
-                                       bool &should_notify) const {
-  collection::const_iterator pos = m_signals.find(signo);
+bool UnixSignals::GetSignalInfo(int32_t signo, bool &should_suppress,
+                                bool &should_stop, bool &should_notify) const {
+  const auto pos = m_signals.find(signo);
   if (pos == m_signals.end())
-    return nullptr;
-  else {
-    const Signal &signal = pos->second;
-    should_suppress = signal.m_suppress;
-    should_stop = signal.m_stop;
-    should_notify = signal.m_notify;
-    return signal.m_name.AsCString("");
-  }
+    return false;
+
+  const Signal &signal = pos->second;
+  should_suppress = signal.m_suppress;
+  should_stop = signal.m_stop;
+  should_notify = signal.m_notify;
+  return true;
 }
 
 bool UnixSignals::GetShouldSuppress(int signo) const {

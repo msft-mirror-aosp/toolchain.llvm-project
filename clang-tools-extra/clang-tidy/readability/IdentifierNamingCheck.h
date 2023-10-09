@@ -11,6 +11,7 @@
 
 #include "../utils/RenamerClangTidyCheck.h"
 #include <optional>
+#include <string>
 namespace clang::tidy {
 namespace readability {
 
@@ -43,7 +44,8 @@ public:
     CT_UpperCase,
     CT_CamelCase,
     CT_CamelSnakeCase,
-    CT_CamelSnakeBack
+    CT_CamelSnakeBack,
+    CT_LeadingUpperSnakeCase
   };
 
   enum HungarianPrefixType {
@@ -202,7 +204,6 @@ private:
   mutable llvm::StringMap<FileStyle> NamingStylesCache;
   FileStyle *MainFileStyle;
   ClangTidyContext *Context;
-  const StringRef CheckName;
   const bool GetConfigPerFile;
   const bool IgnoreFailedSplit;
   HungarianNotation HungarianNotation;

@@ -204,7 +204,7 @@ public:
     auto &os = getStream() << " -> ";
 
     bool wrapped = !llvm::hasSingleElement(types) ||
-                   (*types.begin()).template isa<FunctionType>();
+                   llvm::isa<FunctionType>((*types.begin()));
     if (wrapped)
       os << '(';
     llvm::interleaveComma(types, *this);
@@ -715,18 +715,20 @@ public:
   //===--------------------------------------------------------------------===//
 
   /// This class represents a StringSwitch like class that is useful for parsing
-  /// expected keywords. On construction, it invokes `parseKeyword` and
-  /// processes each of the provided cases statements until a match is hit. The
-  /// provided `ResultT` must be assignable from `failure()`.
+  /// expected keywords. On construction, unless a non-empty keyword is
+  /// provided, it invokes `parseKeyword` and processes each of the provided
+  /// cases statements until a match is hit. The provided `ResultT` must be
+  /// assignable from `failure()`.
   template <typename ResultT = ParseResult>
   class KeywordSwitch {
   public:
-    KeywordSwitch(AsmParser &parser)
+    KeywordSwitch(AsmParser &parser, StringRef *keyword = nullptr)
         : parser(parser), loc(parser.getCurrentLocation()) {
-      if (failed(parser.parseKeywordOrCompletion(&keyword)))
+      if (keyword && !keyword->empty())
+        this->keyword = *keyword;
+      else if (failed(parser.parseKeywordOrCompletion(&this->keyword)))
         result = failure();
     }
-
     /// Case that uses the provided value when true.
     KeywordSwitch &Case(StringLiteral str, ResultT value) {
       return Case(str, [&](StringRef, SMLoc) { return std::move(value); });
@@ -778,7 +780,7 @@ public:
     /// The parsed keyword itself.
     StringRef keyword;
 
-    /// The result of the switch statement or none if currently unknown.
+    /// The result of the switch statement or std::nullopt if currently unknown.
     std::optional<ResultT> result;
   };
 
@@ -865,7 +867,7 @@ public:
       return failure();
 
     // Check for the right kind of attribute.
-    if (!(result = attr.dyn_cast<AttrType>()))
+    if (!(result = llvm::dyn_cast<AttrType>(attr)))
       return emitError(loc, "invalid kind of attribute specified");
 
     return success();
@@ -899,7 +901,7 @@ public:
       return failure();
 
     // Check for the right kind of attribute.
-    result = attr.dyn_cast<AttrType>();
+    result = llvm::dyn_cast<AttrType>(attr);
     if (!result)
       return emitError(loc, "invalid kind of attribute specified");
 
@@ -936,7 +938,7 @@ public:
       return failure();
 
     // Check for the right kind of attribute.
-    result = attr.dyn_cast<AttrType>();
+    result = llvm::dyn_cast<AttrType>(attr);
     if (!result)
       return emitError(loc, "invalid kind of attribute specified");
 
@@ -970,7 +972,7 @@ public:
       return failure();
 
     // Check for the right kind of attribute.
-    result = attr.dyn_cast<AttrType>();
+    result = llvm::dyn_cast<AttrType>(attr);
     if (!result)
       return emitError(loc, "invalid kind of attribute specified");
     return success();
@@ -1032,8 +1034,14 @@ public:
   /// Parse an affine map instance into 'map'.
   virtual ParseResult parseAffineMap(AffineMap &map) = 0;
 
+  /// Parse an affine expr instance into 'expr' using the already computed
+  /// mapping from symbols to affine expressions in 'symbolSet'.
+  virtual ParseResult
+  parseAffineExpr(ArrayRef<std::pair<StringRef, AffineExpr>> symbolSet,
+                  AffineExpr &expr) = 0;
+
   /// Parse an integer set instance into 'set'.
-  virtual ParseResult printIntegerSet(IntegerSet &set) = 0;
+  virtual ParseResult parseIntegerSet(IntegerSet &set) = 0;
 
   //===--------------------------------------------------------------------===//
   // Identifier Parsing
@@ -1126,7 +1134,7 @@ public:
       return failure();
 
     // Check for the right kind of type.
-    result = type.dyn_cast<TypeT>();
+    result = llvm::dyn_cast<TypeT>(type);
     if (!result)
       return emitError(loc, "invalid kind of type specified");
 
@@ -1158,7 +1166,7 @@ public:
       return failure();
 
     // Check for the right kind of Type.
-    result = type.dyn_cast<TypeT>();
+    result = llvm::dyn_cast<TypeT>(type);
     if (!result)
       return emitError(loc, "invalid kind of Type specified");
     return success();
@@ -1198,7 +1206,7 @@ public:
       return failure();
 
     // Check for the right kind of type.
-    result = type.dyn_cast<TypeType>();
+    result = llvm::dyn_cast<TypeType>(type);
     if (!result)
       return emitError(loc, "invalid kind of type specified");
 
@@ -1439,13 +1447,13 @@ public:
   std::enable_if_t<!std::is_convertible<Types, Type>::value, ParseResult>
   resolveOperands(Operands &&operands, Types &&types, SMLoc loc,
                   SmallVectorImpl<Value> &result) {
-    size_t operandSize = std::distance(operands.begin(), operands.end());
-    size_t typeSize = std::distance(types.begin(), types.end());
+    size_t operandSize = llvm::range_size(operands);
+    size_t typeSize = llvm::range_size(types);
     if (operandSize != typeSize)
       return emitError(loc)
              << operandSize << " operands present, but expected " << typeSize;
 
-    for (auto [operand, type] : llvm::zip(operands, types))
+    for (auto [operand, type] : llvm::zip_equal(operands, types))
       if (resolveOperand(operand, type, result))
         return failure();
     return success();

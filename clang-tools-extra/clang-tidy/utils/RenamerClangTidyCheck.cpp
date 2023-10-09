@@ -31,13 +31,13 @@ struct DenseMapInfo<clang::tidy::RenamerClangTidyCheck::NamingCheckId> {
   using NamingCheckId = clang::tidy::RenamerClangTidyCheck::NamingCheckId;
 
   static inline NamingCheckId getEmptyKey() {
-    return NamingCheckId(DenseMapInfo<clang::SourceLocation>::getEmptyKey(),
-                         "EMPTY");
+    return {DenseMapInfo<clang::SourceLocation>::getEmptyKey(),
+                         "EMPTY"};
   }
 
   static inline NamingCheckId getTombstoneKey() {
-    return NamingCheckId(DenseMapInfo<clang::SourceLocation>::getTombstoneKey(),
-                         "TOMBSTONE");
+    return {DenseMapInfo<clang::SourceLocation>::getTombstoneKey(),
+                         "TOMBSTONE"};
   }
 
   static unsigned getHashValue(NamingCheckId Val) {
@@ -448,14 +448,18 @@ void RenamerClangTidyCheck::addUsage(
 
 void RenamerClangTidyCheck::addUsage(const NamedDecl *Decl, SourceRange Range,
                                      const SourceManager *SourceMgr) {
+  // Don't keep track for non-identifier names.
+  auto *II = Decl->getIdentifier();
+  if (!II)
+    return;
   if (const auto *Method = dyn_cast<CXXMethodDecl>(Decl)) {
     if (const CXXMethodDecl *Overridden = getOverrideMethod(Method))
       Decl = Overridden;
   }
   Decl = cast<NamedDecl>(Decl->getCanonicalDecl());
-  return addUsage(RenamerClangTidyCheck::NamingCheckId(Decl->getLocation(),
-                                                       Decl->getName()),
-                  Range, SourceMgr);
+  return addUsage(
+      RenamerClangTidyCheck::NamingCheckId(Decl->getLocation(), II->getName()),
+      Range, SourceMgr);
 }
 
 void RenamerClangTidyCheck::checkNamedDecl(const NamedDecl *Decl,

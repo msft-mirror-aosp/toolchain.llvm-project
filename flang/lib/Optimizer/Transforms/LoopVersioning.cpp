@@ -40,7 +40,7 @@
 ///       could be part of the cost analysis above.
 //===----------------------------------------------------------------------===//
 
-#include "flang/ISO_Fortran_binding.h"
+#include "flang/ISO_Fortran_binding_wrapper.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Builder/Runtime/Inquiry.h"
@@ -73,7 +73,6 @@ namespace {
 
 class LoopVersioningPass
     : public fir::impl::LoopVersioningBase<LoopVersioningPass> {
-
 public:
   void runOnOperation() override;
 };
@@ -95,6 +94,31 @@ static fir::SequenceType getAsSequenceType(mlir::Value *v) {
   return argTy.dyn_cast<fir::SequenceType>();
 }
 
+/// if a value comes from a fir.declare, follow it to the original source,
+/// otherwise return the value
+static mlir::Value unwrapFirDeclare(mlir::Value val) {
+  // fir.declare is for source code variables. We don't have declares of
+  // declares
+  if (fir::DeclareOp declare = val.getDefiningOp<fir::DeclareOp>())
+    return declare.getMemref();
+  return val;
+}
+
+/// if a value comes from a fir.rebox, follow the rebox to the original source,
+/// of the value, otherwise return the value
+static mlir::Value unwrapReboxOp(mlir::Value val) {
+  // don't support reboxes of reboxes
+  if (fir::ReboxOp rebox = val.getDefiningOp<fir::ReboxOp>())
+    val = rebox.getBox();
+  return val;
+}
+
+/// normalize a value (removing fir.declare and fir.rebox) so that we can
+/// more conveniently spot values which came from function arguments
+static mlir::Value normaliseVal(mlir::Value val) {
+  return unwrapFirDeclare(unwrapReboxOp(val));
+}
+
 void LoopVersioningPass::runOnOperation() {
   LLVM_DEBUG(llvm::dbgs() << "=== Begin " DEBUG_TYPE " ===\n");
   mlir::func::FuncOp func = getOperation();
@@ -103,8 +127,9 @@ void LoopVersioningPass::runOnOperation() {
   /// A structure to hold an argument, the size of the argument and dimension
   /// information.
   struct ArgInfo {
-    mlir::Value *arg;
+    mlir::Value arg;
     size_t size;
+    unsigned rank;
     fir::BoxDimsOp dims[CFI_MAX_RANK];
   };
 
@@ -114,13 +139,19 @@ void LoopVersioningPass::runOnOperation() {
   mlir::Block::BlockArgListType args = func.getArguments();
   mlir::ModuleOp module = func->getParentOfType<mlir::ModuleOp>();
   fir::KindMapping kindMap = fir::getKindMapping(module);
-  mlir::SmallVector<ArgInfo> argsOfInterest;
+  mlir::SmallVector<ArgInfo, 4> argsOfInterest;
   for (auto &arg : args) {
+    // Optional arguments must be checked for IsPresent before
+    // looking for the bounds. They are unsupported for the time being.
+    if (func.getArgAttrOfType<mlir::UnitAttr>(arg.getArgNumber(),
+                                              fir::getOptionalAttrName())) {
+      LLVM_DEBUG(llvm::dbgs() << "OPTIONAL is not supported\n");
+      continue;
+    }
+
     if (auto seqTy = getAsSequenceType(&arg)) {
       unsigned rank = seqTy.getDimension();
-      // Currently limited to 1D or 2D arrays as that seems to give good
-      // improvement without excessive increase in code-size, etc.
-      if (rank > 0 && rank < 3 &&
+      if (rank > 0 &&
           seqTy.getShape()[0] == fir::SequenceType::getUnknownExtent()) {
         size_t typeSize = 0;
         mlir::Type elementType = fir::unwrapSeqOrBoxedSeqType(arg.getType());
@@ -130,12 +161,9 @@ void LoopVersioningPass::runOnOperation() {
         else if (auto cty = elementType.dyn_cast<fir::ComplexType>())
           typeSize = 2 * cty.getEleType(kindMap).getIntOrFloatBitWidth() / 8;
         if (typeSize)
-          argsOfInterest.push_back({&arg, typeSize, {}});
+          argsOfInterest.push_back({arg, typeSize, rank, {}});
         else
           LLVM_DEBUG(llvm::dbgs() << "Type not supported\n");
-
-      } else {
-        LLVM_DEBUG(llvm::dbgs() << "Too many dimensions\n");
       }
     }
   }
@@ -145,23 +173,25 @@ void LoopVersioningPass::runOnOperation() {
 
   struct OpsWithArgs {
     mlir::Operation *op;
-    mlir::SmallVector<ArgInfo> argsAndDims;
+    mlir::SmallVector<ArgInfo, 4> argsAndDims;
   };
   // Now see if those arguments are used inside any loop.
   mlir::SmallVector<OpsWithArgs, 4> loopsOfInterest;
 
   func.walk([&](fir::DoLoopOp loop) {
     mlir::Block &body = *loop.getBody();
-    mlir::SmallVector<ArgInfo> argsInLoop;
+    mlir::SmallVector<ArgInfo, 4> argsInLoop;
     body.walk([&](fir::CoordinateOp op) {
       // The current operation could be inside another loop than
       // the one we're currently processing. Skip it, we'll get
       // to it later.
       if (op->getParentOfType<fir::DoLoopOp>() != loop)
         return;
-      const mlir::Value &operand = op->getOperand(0);
+      mlir::Value operand = op->getOperand(0);
       for (auto a : argsOfInterest) {
-        if (*a.arg == operand) {
+        if (a.arg == normaliseVal(operand)) {
+          // use the reboxed value, not the block arg when re-creating the loop:
+          a.arg = operand;
           // Only add if it's not already in the list.
           if (std::find_if(argsInLoop.begin(), argsInLoop.end(), [&](auto it) {
                 return it.arg == a.arg;
@@ -183,7 +213,7 @@ void LoopVersioningPass::runOnOperation() {
     return;
 
   // If we get here, there are loops to process.
-  fir::FirOpBuilder builder{module, kindMap};
+  fir::FirOpBuilder builder{module, std::move(kindMap)};
   mlir::Location loc = builder.getUnknownLoc();
   mlir::IndexType idxTy = builder.getIndexType();
 
@@ -199,16 +229,16 @@ void LoopVersioningPass::runOnOperation() {
     mlir::Value allCompares = nullptr;
     // Ensure all of the arrays are unit-stride.
     for (auto &arg : op.argsAndDims) {
-
-      fir::SequenceType seqTy = getAsSequenceType(arg.arg);
-      unsigned rank = seqTy.getDimension();
-
-      // We only care about lowest order dimension.
-      for (unsigned i = 0; i < rank; i++) {
+      // Fetch all the dimensions of the array, except the last dimension.
+      // Always fetch the first dimension, however, so set ndims = 1 if
+      // we have one dim
+      unsigned ndims = arg.rank;
+      for (unsigned i = 0; i < ndims; i++) {
         mlir::Value dimIdx = builder.createIntegerConstant(loc, idxTy, i);
         arg.dims[i] = builder.create<fir::BoxDimsOp>(loc, idxTy, idxTy, idxTy,
-                                                     *arg.arg, dimIdx);
+                                                     arg.arg, dimIdx);
       }
+      // We only care about lowest order dimension, here.
       mlir::Value elemSize =
           builder.createIntegerConstant(loc, idxTy, arg.size);
       mlir::Value cmp = builder.create<mlir::arith::CmpIOp>(
@@ -233,11 +263,11 @@ void LoopVersioningPass::runOnOperation() {
     for (auto &arg : op.argsAndDims) {
       fir::SequenceType::Shape newShape;
       newShape.push_back(fir::SequenceType::getUnknownExtent());
-      auto elementType = fir::unwrapSeqOrBoxedSeqType(arg.arg->getType());
+      auto elementType = fir::unwrapSeqOrBoxedSeqType(arg.arg.getType());
       mlir::Type arrTy = fir::SequenceType::get(newShape, elementType);
       mlir::Type boxArrTy = fir::BoxType::get(arrTy);
       mlir::Type refArrTy = builder.getRefType(arrTy);
-      auto carg = builder.create<fir::ConvertOp>(loc, boxArrTy, *arg.arg);
+      auto carg = builder.create<fir::ConvertOp>(loc, boxArrTy, arg.arg);
       auto caddr = builder.create<fir::BoxAddrOp>(loc, refArrTy, carg);
       auto insPt = builder.saveInsertionPoint();
       // Use caddr instead of arg.
@@ -245,25 +275,44 @@ void LoopVersioningPass::runOnOperation() {
         // Reduce the multi-dimensioned index to a single index.
         // This is required becase fir arrays do not support multiple dimensions
         // with unknown dimensions at compile time.
-        if (coop->getOperand(0) == *arg.arg &&
-            coop->getOperands().size() >= 2) {
+        // We then calculate the multidimensional array like this:
+        // arr(x, y, z) bedcomes arr(z * stride(2) + y * stride(1) + x)
+        // where stride is the distance between elements in the dimensions
+        // 0, 1 and 2 or x, y and z.
+        if (coop->getOperand(0) == arg.arg && coop->getOperands().size() >= 2) {
           builder.setInsertionPoint(coop);
-          mlir::Value totalIndex = builder.createIntegerConstant(loc, idxTy, 0);
-          // Operand(1) = array; Operand(2) = index1; Operand(3) = index2
-          for (unsigned i = coop->getOperands().size() - 1; i > 1; i--) {
+          mlir::Value totalIndex;
+          for (unsigned i = arg.rank - 1; i > 0; i--) {
+            // Operand(1) = array; Operand(2) = index1; Operand(3) = index2
             mlir::Value curIndex =
-                builder.createConvert(loc, idxTy, coop->getOperand(i));
-            // First arg is Operand2, so dims[i-2] is 0-based i-1!
+                builder.createConvert(loc, idxTy, coop->getOperand(i + 1));
+            // Multiply by the stride of this array. Later we'll divide by the
+            // element size.
             mlir::Value scale =
-                builder.createConvert(loc, idxTy, arg.dims[i - 2].getResult(1));
-            totalIndex = builder.create<mlir::arith::AddIOp>(
-                loc, totalIndex,
-                builder.create<mlir::arith::MulIOp>(loc, scale, curIndex));
+                builder.createConvert(loc, idxTy, arg.dims[i].getResult(2));
+            curIndex =
+                builder.create<mlir::arith::MulIOp>(loc, scale, curIndex);
+            totalIndex = (totalIndex) ? builder.create<mlir::arith::AddIOp>(
+                                            loc, curIndex, totalIndex)
+                                      : curIndex;
           }
-          totalIndex = builder.create<mlir::arith::AddIOp>(
-              loc, totalIndex,
-              builder.createConvert(loc, idxTy, coop->getOperand(1)));
-
+          // This is the lowest dimension - which doesn't need scaling
+          mlir::Value finalIndex =
+              builder.createConvert(loc, idxTy, coop->getOperand(1));
+          if (totalIndex) {
+            assert(llvm::isPowerOf2_32(arg.size) &&
+                   "Expected power of two here");
+            unsigned bits = llvm::Log2_32(arg.size);
+            mlir::Value elemShift =
+                builder.createIntegerConstant(loc, idxTy, bits);
+            totalIndex = builder.create<mlir::arith::AddIOp>(
+                loc,
+                builder.create<mlir::arith::ShRSIOp>(loc, totalIndex,
+                                                     elemShift),
+                finalIndex);
+          } else {
+            totalIndex = finalIndex;
+          }
           auto newOp = builder.create<fir::CoordinateOp>(
               loc, builder.getRefType(elementType), caddr,
               mlir::ValueRange{totalIndex});

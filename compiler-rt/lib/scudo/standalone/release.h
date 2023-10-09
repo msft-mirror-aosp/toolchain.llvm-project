@@ -80,6 +80,21 @@ private:
   MapPlatformData *Data = nullptr;
 };
 
+class FragmentationRecorder {
+public:
+  FragmentationRecorder() = default;
+
+  uptr getReleasedPagesCount() const { return ReleasedPagesCount; }
+
+  void releasePageRangeToOS(uptr From, uptr To) {
+    DCHECK_EQ((To - From) % getPageSizeCached(), 0U);
+    ReleasedPagesCount += (To - From) / getPageSizeCached();
+  }
+
+private:
+  uptr ReleasedPagesCount = 0;
+};
+
 // A buffer pool which holds a fixed number of static buffers for fast buffer
 // allocation. If the request size is greater than `StaticBufferSize`, it'll
 // delegate the allocation to map().
@@ -235,7 +250,6 @@ public:
         PackingRatioLog;
     BufferSize = SizePerRegion * sizeof(*Buffer) * Regions;
     Buffer = Buffers.getBuffer(BufferSize);
-    DCHECK_NE(Buffer, nullptr);
   }
 
   bool isAllocated() const { return !!Buffer; }
@@ -423,25 +437,27 @@ struct PageReleaseContext {
     return PageMap.isAllocated();
   }
 
-  void ensurePageMapAllocated() {
+  bool ensurePageMapAllocated() {
     if (PageMap.isAllocated())
-      return;
+      return true;
     PageMap.reset(NumberOfRegions, PagesCount, FullPagesBlockCountMax);
-    DCHECK(PageMap.isAllocated());
+    // TODO: Log some message when we fail on PageMap allocation.
+    return PageMap.isAllocated();
   }
 
   // Mark all the blocks in the given range [From, to). Instead of visiting all
   // the blocks, we will just mark the page as all counted. Note the `From` and
   // `To` has to be page aligned but with one exception, if `To` is equal to the
   // RegionSize, it's not necessary to be aligned with page size.
-  void markRangeAsAllCounted(uptr From, uptr To, uptr Base,
+  bool markRangeAsAllCounted(uptr From, uptr To, uptr Base,
                              const uptr RegionIndex, const uptr RegionSize) {
     DCHECK_LT(From, To);
     DCHECK_LE(To, Base + RegionSize);
     DCHECK_EQ(From % PageSize, 0U);
     DCHECK_LE(To - From, RegionSize);
 
-    ensurePageMapAllocated();
+    if (!ensurePageMapAllocated())
+      return false;
 
     uptr FromInRegion = From - Base;
     uptr ToInRegion = To - Base;
@@ -449,7 +465,7 @@ struct PageReleaseContext {
 
     // The straddling block sits across entire range.
     if (FirstBlockInRange >= ToInRegion)
-      return;
+      return true;
 
     // First block may not sit at the first pape in the range, move
     // `FromInRegion` to the first block page.
@@ -516,14 +532,17 @@ struct PageReleaseContext {
       PageMap.setAsAllCountedRange(RegionIndex, getPageIndex(FromInRegion),
                                    getPageIndex(ToInRegion - 1));
     }
+
+    return true;
   }
 
   template <class TransferBatchT, typename DecompactPtrT>
-  void markFreeBlocksInRegion(const IntrusiveList<TransferBatchT> &FreeList,
+  bool markFreeBlocksInRegion(const IntrusiveList<TransferBatchT> &FreeList,
                               DecompactPtrT DecompactPtr, const uptr Base,
                               const uptr RegionIndex, const uptr RegionSize,
                               bool MayContainLastBlockInRegion) {
-    ensurePageMapAllocated();
+    if (!ensurePageMapAllocated())
+      return false;
 
     if (MayContainLastBlockInRegion) {
       const uptr LastBlockInRegion =
@@ -582,9 +601,12 @@ struct PageReleaseContext {
         }
       }
     }
+
+    return true;
   }
 
   uptr getPageIndex(uptr P) { return (P >> PageSizeLog) - ReleasePageOffset; }
+  uptr getReleaseOffset() { return ReleasePageOffset << PageSizeLog; }
 
   uptr BlockSize;
   uptr NumberOfRegions;

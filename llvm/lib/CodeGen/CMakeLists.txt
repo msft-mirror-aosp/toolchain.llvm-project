@@ -93,6 +93,7 @@ add_llvm_component_library(LLVMCodeGen
   InterleavedLoadCombinePass.cpp
   IntrinsicLowering.cpp
   JMCInstrumenter.cpp
+  KCFI.cpp
   LatencyPriorityQueue.cpp
   LazyMachineBlockFrequencyInfo.cpp
   LexicalScopes.cpp
@@ -199,6 +200,7 @@ add_llvm_component_library(LLVMCodeGen
   RegisterCoalescer.cpp
   RegisterPressure.cpp
   RegisterScavenging.cpp
+  GCEmptyBasicBlocks.cpp
   RemoveRedundantDebugValues.cpp
   RenameIndependentSubregs.cpp
   MachineStableHash.cpp

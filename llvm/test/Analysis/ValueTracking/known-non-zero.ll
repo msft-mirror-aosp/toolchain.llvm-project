@@ -1096,3 +1096,67 @@ define i1 @smax_nonzero_pos_arg_fail_nonstrict_pos(i8 %xx, i8 %yy, i8 %ind) {
   %r = icmp eq i8 %z, 0
   ret i1 %r
 }
+
+define i1 @mul_nonzero_contains_nonzero_mul(i8 %x, i8 %y) {
+; CHECK-LABEL: @mul_nonzero_contains_nonzero_mul(
+; CHECK-NEXT:    ret i1 true
+;
+  %xx = or i8 %x, 16
+  %yy = or i8 %y, 8
+  %xy = mul i8 %xx, %yy
+  %nz = icmp ne i8 %xy, 0
+  ret i1 %nz
+}
+
+define i1 @src_mul_maybe_zero_no_nonzero_mul(i8 %x, i8 %y) {
+; CHECK-LABEL: @src_mul_maybe_zero_no_nonzero_mul(
+; CHECK-NEXT:    [[XX:%.*]] = or i8 [[X:%.*]], 96
+; CHECK-NEXT:    [[YY:%.*]] = or i8 [[Y:%.*]], 8
+; CHECK-NEXT:    [[XY:%.*]] = mul i8 [[XX]], [[YY]]
+; CHECK-NEXT:    [[NZ:%.*]] = icmp ne i8 [[XY]], 0
+; CHECK-NEXT:    ret i1 [[NZ]]
+;
+  %xx = or i8 %x, 96
+  %yy = or i8 %y, 8
+  %xy = mul i8 %xx, %yy
+  %nz = icmp ne i8 %xy, 0
+  ret i1 %nz
+}
+
+define i1 @sdiv_known_non_zero(i8 %x, i8 %y) {
+; CHECK-LABEL: @sdiv_known_non_zero(
+; CHECK-NEXT:    ret i1 true
+;
+  %xx0 = or i8 %x, 135
+  %xx = and i8 %xx0, -2
+  %xy = sdiv i8 %xx, -2
+  %nz = icmp ne i8 %xy, 0
+  ret i1 %nz
+}
+
+define i1 @sdiv_known_non_zero2(i8 %x, i8 %y) {
+; CHECK-LABEL: @sdiv_known_non_zero2(
+; CHECK-NEXT:    ret i1 true
+;
+  %xx0 = or i8 %x, 15
+  %xx = and i8 %xx0, -4
+  %yy = and i8 %y, 3
+  %xy = sdiv i8 %xx, %yy
+  %nz = icmp ne i8 %xy, 0
+  ret i1 %nz
+}
+
+define i1 @sdiv_known_non_zero_fail(i8 %x, i8 %y) {
+; CHECK-LABEL: @sdiv_known_non_zero_fail(
+; CHECK-NEXT:    [[XX:%.*]] = or i8 [[X:%.*]], 15
+; CHECK-NEXT:    [[YY:%.*]] = and i8 [[Y:%.*]], 3
+; CHECK-NEXT:    [[XY:%.*]] = sdiv i8 [[XX]], [[YY]]
+; CHECK-NEXT:    [[NZ:%.*]] = icmp ne i8 [[XY]], 0
+; CHECK-NEXT:    ret i1 [[NZ]]
+;
+  %xx = or i8 %x, 15
+  %yy = and i8 %y, 3
+  %xy = sdiv i8 %xx, %yy
+  %nz = icmp ne i8 %xy, 0
+  ret i1 %nz
+}

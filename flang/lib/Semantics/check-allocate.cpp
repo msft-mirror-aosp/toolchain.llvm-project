@@ -31,20 +31,22 @@ struct AllocateCheckerInfo {
   bool gotTypeSpec{false};
   bool gotSource{false};
   bool gotMold{false};
+  bool gotStream{false};
+  bool gotPinned{false};
 };
 
 class AllocationCheckerHelper {
 public:
   AllocationCheckerHelper(
       const parser::Allocation &alloc, AllocateCheckerInfo &info)
-      : allocateInfo_{info}, allocateObject_{std::get<parser::AllocateObject>(
-                                 alloc.t)},
+      : allocateInfo_{info},
+        allocateObject_{std::get<parser::AllocateObject>(alloc.t)},
         name_{parser::GetLastName(allocateObject_)},
-        symbol_{name_.symbol ? &name_.symbol->GetUltimate() : nullptr},
+        original_{name_.symbol ? &name_.symbol->GetUltimate() : nullptr},
+        symbol_{original_ ? &ResolveAssociations(*original_) : nullptr},
         type_{symbol_ ? symbol_->GetType() : nullptr},
-        allocateShapeSpecRank_{ShapeSpecRank(alloc)}, rank_{symbol_
-                                                              ? symbol_->Rank()
-                                                              : 0},
+        allocateShapeSpecRank_{ShapeSpecRank(alloc)},
+        rank_{original_ ? original_->Rank() : 0},
         allocateCoarraySpecRank_{CoarraySpecRank(alloc)},
         corank_{symbol_ ? symbol_->Corank() : 0} {}
 
@@ -89,7 +91,8 @@ private:
   AllocateCheckerInfo &allocateInfo_;
   const parser::AllocateObject &allocateObject_;
   const parser::Name &name_;
-  const Symbol *symbol_{nullptr};
+  const Symbol *original_{nullptr}; // no USE or host association
+  const Symbol *symbol_{nullptr}; // no USE, host, or construct association
   const DeclTypeSpec *type_{nullptr};
   const int allocateShapeSpecRank_;
   const int rank_{0};
@@ -141,7 +144,10 @@ static std::optional<AllocateCheckerInfo> CheckAllocateOptions(
                         }
                         info.gotStat = true;
                       },
-                      [&](const parser::MsgVariable &) {
+                      [&](const parser::MsgVariable &var) {
+                        WarnOnDeferredLengthCharacterScalar(context,
+                            GetExpr(context, var),
+                            var.v.thing.thing.GetSource(), "ERRMSG=");
                         if (info.gotMsg) { // C943
                           context.Say(
                               "ERRMSG may not be duplicated in a ALLOCATE statement"_err_en_US);
@@ -178,6 +184,22 @@ static std::optional<AllocateCheckerInfo> CheckAllocateOptions(
               }
               parserSourceExpr = &mold.v.value();
               info.gotMold = true;
+            },
+            [&](const parser::AllocOpt::Stream &stream) { // CUDA
+              if (info.gotStream) {
+                context.Say(
+                    "STREAM may not be duplicated in a ALLOCATE statement"_err_en_US);
+                stopCheckingAllocate = true;
+              }
+              info.gotStream = true;
+            },
+            [&](const parser::AllocOpt::Pinned &pinned) { // CUDA
+              if (info.gotPinned) {
+                context.Say(
+                    "PINNED may not be duplicated in a ALLOCATE statement"_err_en_US);
+                stopCheckingAllocate = true;
+              }
+              info.gotPinned = true;
             },
         },
         allocOpt.u);
@@ -537,17 +559,17 @@ bool AllocationCheckerHelper::RunChecks(SemanticsContext &context) {
         }
       }
     } else {
-      // first part of C942
+      // explicit shape-spec-list
       if (allocateShapeSpecRank_ != rank_) {
         context
             .Say(name_.source,
                 "The number of shape specifications, when they appear, must match the rank of allocatable object"_err_en_US)
-            .Attach(symbol_->name(), "Declared here with rank %d"_en_US, rank_);
+            .Attach(
+                original_->name(), "Declared here with rank %d"_en_US, rank_);
         return false;
       }
     }
-  } else {
-    // C940
+  } else { // allocating a scalar object
     if (hasAllocateShapeSpecList()) {
       context.Say(name_.source,
           "Shape specifications must not appear when allocatable object is scalar"_err_en_US);
@@ -567,12 +589,13 @@ bool AllocationCheckerHelper::RunChecks(SemanticsContext &context) {
     return false;
   }
   context.CheckIndexVarRedefine(name_);
+  const Scope &subpScope{
+      GetProgramUnitContaining(context.FindScope(name_.source))};
   if (allocateObject_.typedExpr && allocateObject_.typedExpr->v) {
-    if (auto whyNot{
-            WhyNotDefinable(name_.source, context.FindScope(name_.source),
-                {DefinabilityFlag::PointerDefinition,
-                    DefinabilityFlag::AcceptAllocatable},
-                *allocateObject_.typedExpr->v)}) {
+    if (auto whyNot{WhyNotDefinable(name_.source, subpScope,
+            {DefinabilityFlag::PointerDefinition,
+                DefinabilityFlag::AcceptAllocatable},
+            *allocateObject_.typedExpr->v)}) {
       context
           .Say(name_.source,
               "Name in ALLOCATE statement is not definable"_err_en_US)

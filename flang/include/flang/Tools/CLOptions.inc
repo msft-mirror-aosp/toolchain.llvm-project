@@ -242,6 +242,12 @@ inline void createHLFIRToFIRPassPipeline(
     addCanonicalizerPassWithoutRegionSimplification(pm);
     pm.addPass(hlfir::createSimplifyHLFIRIntrinsicsPass());
   }
+  pm.addPass(hlfir::createInlineElementalsPass());
+  if (optLevel.isOptimizingForSpeed()) {
+    addCanonicalizerPassWithoutRegionSimplification(pm);
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(hlfir::createOptimizedBufferizationPass());
+  }
   pm.addPass(hlfir::createLowerHLFIROrderedAssignmentsPass());
   pm.addPass(hlfir::createLowerHLFIRIntrinsicsPass());
   pm.addPass(hlfir::createBufferizeHLFIRPass());

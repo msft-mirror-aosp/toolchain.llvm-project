@@ -416,42 +416,22 @@ ReturnInst *FoldReturnIntoUncondBranch(ReturnInst *RI, BasicBlock *BB,
 /// UnreachableInst, otherwise it branches to Tail.
 /// Returns the NewBasicBlock's terminator.
 ///
-/// Updates DT and LI if given.
-///
-/// FIXME: deprecated, switch to the DomTreeUpdater-based one.
-Instruction *SplitBlockAndInsertIfThen(Value *Cond, Instruction *SplitBefore,
-                                       bool Unreachable, MDNode *BranchWeights,
-                                       DominatorTree *DT,
-                                       LoopInfo *LI = nullptr,
-                                       BasicBlock *ThenBlock = nullptr);
-
-/// Split the containing block at the specified instruction - everything before
-/// SplitBefore stays in the old basic block, and the rest of the instructions
-/// in the BB are moved to a new block. The two blocks are connected by a
-/// conditional branch (with value of Cmp being the condition).
-/// Before:
-///   Head
-///   SplitBefore
-///   Tail
-/// After:
-///   Head
-///   if (Cond)
-///     ThenBlock
-///   SplitBefore
-///   Tail
-///
-/// If \p ThenBlock is not specified, a new block will be created for it.
-/// If \p Unreachable is true, the newly created block will end with
-/// UnreachableInst, otherwise it branches to Tail.
-/// Returns the NewBasicBlock's terminator.
-///
-/// Updates DT and LI if given.
+/// Updates DTU and LI if given.
 Instruction *SplitBlockAndInsertIfThen(Value *Cond, Instruction *SplitBefore,
                                        bool Unreachable,
                                        MDNode *BranchWeights = nullptr,
                                        DomTreeUpdater *DTU = nullptr,
                                        LoopInfo *LI = nullptr,
                                        BasicBlock *ThenBlock = nullptr);
+
+/// Similar to SplitBlockAndInsertIfThen, but the inserted block is on the false
+/// path of the branch.
+Instruction *SplitBlockAndInsertIfElse(Value *Cond, Instruction *SplitBefore,
+                                       bool Unreachable,
+                                       MDNode *BranchWeights = nullptr,
+                                       DomTreeUpdater *DTU = nullptr,
+                                       LoopInfo *LI = nullptr,
+                                       BasicBlock *ElseBlock = nullptr);
 
 /// SplitBlockAndInsertIfThenElse is similar to SplitBlockAndInsertIfThen,
 /// but also creates the ElseBlock.
@@ -473,7 +453,44 @@ void SplitBlockAndInsertIfThenElse(Value *Cond, Instruction *SplitBefore,
                                    Instruction **ThenTerm,
                                    Instruction **ElseTerm,
                                    MDNode *BranchWeights = nullptr,
-                                   DomTreeUpdater *DTU = nullptr);
+                                   DomTreeUpdater *DTU = nullptr,
+                                   LoopInfo *LI = nullptr);
+
+/// Split the containing block at the specified instruction - everything before
+/// SplitBefore stays in the old basic block, and the rest of the instructions
+/// in the BB are moved to a new block. The two blocks are connected by a
+/// conditional branch (with value of Cmp being the condition).
+/// Before:
+///   Head
+///   SplitBefore
+///   Tail
+/// After:
+///   Head
+///   if (Cond)
+///     TrueBlock
+///   else
+////    FalseBlock
+///   SplitBefore
+///   Tail
+///
+/// If \p ThenBlock is null, the resulting CFG won't contain the TrueBlock. If
+/// \p ThenBlock is non-null and points to non-null BasicBlock pointer, that
+/// block will be inserted as the TrueBlock. Otherwise a new block will be
+/// created. Likewise for the \p ElseBlock parameter.
+/// If \p UnreachableThen or \p UnreachableElse is true, the corresponding newly
+/// created blocks will end with UnreachableInst, otherwise with branches to
+/// Tail. The function will not modify existing basic blocks passed to it. The
+/// caller must ensure that Tail is reachable from Head.
+/// Returns the newly created blocks in \p ThenBlock and \p ElseBlock.
+/// Updates DTU and LI if given.
+void SplitBlockAndInsertIfThenElse(Value *Cond, Instruction *SplitBefore,
+                                   BasicBlock **ThenBlock,
+                                   BasicBlock **ElseBlock,
+                                   bool UnreachableThen = false,
+                                   bool UnreachableElse = false,
+                                   MDNode *BranchWeights = nullptr,
+                                   DomTreeUpdater *DTU = nullptr,
+                                   LoopInfo *LI = nullptr);
 
 /// Insert a for (int i = 0; i < End; i++) loop structure (with the exception
 /// that \p End is assumed > 0, and thus not checked on entry) at \p

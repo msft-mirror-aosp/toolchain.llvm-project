@@ -54,9 +54,12 @@ public:
   const Scope *ancestor() const; // for submodule; nullptr for module
   const Scope *parent() const; // for submodule; nullptr for module
   void set_scope(const Scope *);
+  bool isDefaultPrivate() const { return isDefaultPrivate_; }
+  void set_isDefaultPrivate(bool yes = true) { isDefaultPrivate_ = yes; }
 
 private:
   bool isSubmodule_;
+  bool isDefaultPrivate_{false};
   const Scope *scope_{nullptr};
 };
 
@@ -77,6 +80,35 @@ public:
 private:
   std::optional<std::string> bindName_;
   bool isExplicitBindName_{false};
+};
+
+class OpenACCRoutineInfo {
+public:
+  bool isSeq() const { return isSeq_; }
+  void set_isSeq(bool value = true) { isSeq_ = value; }
+  bool isVector() const { return isVector_; }
+  void set_isVector(bool value = true) { isVector_ = value; }
+  bool isWorker() const { return isWorker_; }
+  void set_isWorker(bool value = true) { isWorker_ = value; }
+  bool isGang() const { return isGang_; }
+  void set_isGang(bool value = true) { isGang_ = value; }
+  unsigned gangDim() const { return gangDim_; }
+  void set_gangDim(unsigned value) { gangDim_ = value; }
+  bool isNohost() const { return isNohost_; }
+  void set_isNohost(bool value = true) { isNohost_ = value; }
+  const std::string *bindName() const {
+    return bindName_ ? &*bindName_ : nullptr;
+  }
+  void set_bindName(std::string &&name) { bindName_ = std::move(name); }
+
+private:
+  bool isSeq_{false};
+  bool isVector_{false};
+  bool isWorker_{false};
+  bool isGang_{false};
+  unsigned gangDim_{0};
+  bool isNohost_{false};
+  std::optional<std::string> bindName_;
 };
 
 // A subroutine or function definition, or a subprogram interface defined
@@ -114,6 +146,32 @@ public:
   }
   bool defaultIgnoreTKR() const { return defaultIgnoreTKR_; }
   void set_defaultIgnoreTKR(bool yes) { defaultIgnoreTKR_ = yes; }
+  std::optional<common::CUDASubprogramAttrs> cudaSubprogramAttrs() const {
+    return cudaSubprogramAttrs_;
+  }
+  void set_cudaSubprogramAttrs(common::CUDASubprogramAttrs csas) {
+    cudaSubprogramAttrs_ = csas;
+  }
+  std::vector<std::int64_t> &cudaLaunchBounds() { return cudaLaunchBounds_; }
+  const std::vector<std::int64_t> &cudaLaunchBounds() const {
+    return cudaLaunchBounds_;
+  }
+  void set_cudaLaunchBounds(std::vector<std::int64_t> &&x) {
+    cudaLaunchBounds_ = std::move(x);
+  }
+  std::vector<std::int64_t> &cudaClusterDims() { return cudaClusterDims_; }
+  const std::vector<std::int64_t> &cudaClusterDims() const {
+    return cudaClusterDims_;
+  }
+  void set_cudaClusterDims(std::vector<std::int64_t> &&x) {
+    cudaClusterDims_ = std::move(x);
+  }
+  const std::vector<OpenACCRoutineInfo> &openACCRoutineInfos() const {
+    return openACCRoutineInfos_;
+  }
+  void add_openACCRoutineInfo(OpenACCRoutineInfo info) {
+    openACCRoutineInfos_.push_back(info);
+  }
 
 private:
   bool isInterface_{false}; // true if this represents an interface-body
@@ -127,6 +185,12 @@ private:
   // appeared in an ancestor (sub)module.
   Symbol *moduleInterface_{nullptr};
   bool defaultIgnoreTKR_{false};
+  // CUDA ATTRIBUTES(...) from subroutine/function prefix
+  std::optional<common::CUDASubprogramAttrs> cudaSubprogramAttrs_;
+  // CUDA LAUNCH_BOUNDS(...) & CLUSTER_DIMS(...) from prefix
+  std::vector<std::int64_t> cudaLaunchBounds_, cudaClusterDims_;
+  // OpenACC routine information
+  std::vector<OpenACCRoutineInfo> openACCRoutineInfos_;
 
   friend llvm::raw_ostream &operator<<(
       llvm::raw_ostream &, const SubprogramDetails &);
@@ -173,7 +237,8 @@ private:
       llvm::raw_ostream &, const EntityDetails &);
 };
 
-// Symbol is associated with a name or expression in a SELECT TYPE or ASSOCIATE.
+// Symbol is associated with a name or expression in an ASSOCIATE,
+// SELECT TYPE, or SELECT RANK construct.
 class AssocEntityDetails : public EntityDetails {
 public:
   AssocEntityDetails() {}
@@ -188,7 +253,7 @@ public:
 
 private:
   MaybeExpr expr_;
-  std::optional<int> rank_;
+  std::optional<int> rank_; // for SELECT RANK
 };
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const AssocEntityDetails &);
 
@@ -229,6 +294,12 @@ public:
   bool CanBeDeferredShape() const { return shape_.CanBeDeferredShape(); }
   bool IsAssumedSize() const { return isDummy() && shape_.CanBeAssumedSize(); }
   bool IsAssumedRank() const { return isDummy() && shape_.IsAssumedRank(); }
+  std::optional<common::CUDADataAttr> cudaDataAttr() const {
+    return cudaDataAttr_;
+  }
+  void set_cudaDataAttr(std::optional<common::CUDADataAttr> attr) {
+    cudaDataAttr_ = attr;
+  }
 
 private:
   MaybeExpr init_;
@@ -237,6 +308,7 @@ private:
   ArraySpec coshape_;
   common::IgnoreTKRSet ignoreTKR_;
   const Symbol *commonBlock_{nullptr}; // common block this object is in
+  std::optional<common::CUDADataAttr> cudaDataAttr_;
   friend llvm::raw_ostream &operator<<(
       llvm::raw_ostream &, const ObjectEntityDetails &);
 };
@@ -276,10 +348,13 @@ public:
   std::optional<const Symbol *> init() const { return init_; }
   void set_init(const Symbol &symbol) { init_ = &symbol; }
   void set_init(std::nullptr_t) { init_ = nullptr; }
+  bool isCUDAKernel() const { return isCUDAKernel_; }
+  void set_isCUDAKernel(bool yes = true) { isCUDAKernel_ = yes; }
 
 private:
   const Symbol *procInterface_{nullptr};
   std::optional<const Symbol *> init_;
+  bool isCUDAKernel_{false};
   friend llvm::raw_ostream &operator<<(
       llvm::raw_ostream &, const ProcEntityDetails &);
 };
@@ -344,9 +419,13 @@ public:
   explicit ProcBindingDetails(const Symbol &symbol) : symbol_{symbol} {}
   const Symbol &symbol() const { return symbol_; }
   void ReplaceSymbol(const Symbol &symbol) { symbol_ = symbol; }
+  int numPrivatesNotOverridden() const { return numPrivatesNotOverridden_; }
+  void set_numPrivatesNotOverridden(int n) { numPrivatesNotOverridden_ = n; }
 
 private:
   SymbolRef symbol_; // procedure bound to; may be forward
+  // Homonymous private bindings in ancestor types from other modules
+  int numPrivatesNotOverridden_{0};
 };
 
 class NamelistDetails {
@@ -553,14 +632,19 @@ public:
       // OpenACC data-sharing attribute
       AccPrivate, AccFirstPrivate, AccShared,
       // OpenACC data-mapping attribute
-      AccCopyIn, AccCopyOut, AccCreate, AccDelete, AccPresent,
+      AccCopy, AccCopyIn, AccCopyInReadOnly, AccCopyOut, AccCreate, AccDelete,
+      AccPresent, AccLink, AccDeviceResident, AccDevicePtr,
+      // OpenACC declare
+      AccDeclare,
+      // OpenACC data-movement attribute
+      AccDevice, AccHost, AccSelf,
       // OpenACC miscellaneous flags
       AccCommonBlock, AccThreadPrivate, AccReduction, AccNone, AccPreDetermined,
       // OpenMP data-sharing attribute
       OmpShared, OmpPrivate, OmpLinear, OmpFirstPrivate, OmpLastPrivate,
       // OpenMP data-mapping attribute
       OmpMapTo, OmpMapFrom, OmpMapAlloc, OmpMapRelease, OmpMapDelete,
-      OmpUseDevicePtr,
+      OmpUseDevicePtr, OmpUseDeviceAddr,
       // OpenMP data-copying attribute
       OmpCopyIn, OmpCopyPrivate,
       // OpenMP miscellaneous flags
@@ -660,6 +744,9 @@ public:
             [](const auto &) { return false; },
         },
         details_);
+  }
+  bool HasLocalLocality() const {
+    return test(Flag::LocalityLocal) || test(Flag::LocalityLocalInit);
   }
 
   bool operator==(const Symbol &that) const { return this == &that; }

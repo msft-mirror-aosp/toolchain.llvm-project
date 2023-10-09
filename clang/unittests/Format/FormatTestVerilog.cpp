@@ -517,6 +517,15 @@ TEST_F(FormatTestVerilog, Headers) {
                "    (input var x `a, //\n"
                "                 b);\n"
                "endmodule");
+  // A line comment shouldn't disrupt the indentation of the port list.
+  verifyFormat("extern module x\n"
+               "    (//\n"
+               "     output y);");
+  verifyFormat("extern module x\n"
+               "    #(//\n"
+               "      parameter x)\n"
+               "    (//\n"
+               "     output y);");
   // With a concatenation in the names.
   auto Style = getDefaultStyle();
   Style.ColumnLimit = 40;
@@ -798,7 +807,8 @@ TEST_F(FormatTestVerilog, If) {
                "  if (x)\n"
                "    x = x;",
                Style);
-  Style.SpacesInConditionalStatement = true;
+  Style.SpacesInParens = FormatStyle::SIPO_Custom;
+  Style.SpacesInParensOptions.InConditionalStatements = true;
   verifyFormat("if ( x )\n"
                "  x = x;\n"
                "else if ( x )\n"
@@ -894,7 +904,8 @@ TEST_F(FormatTestVerilog, Loop) {
   verifyFormat("repeat (x) begin\n"
                "end");
   auto Style = getDefaultStyle();
-  Style.SpacesInConditionalStatement = true;
+  Style.SpacesInParens = FormatStyle::SIPO_Custom;
+  Style.SpacesInParensOptions.InConditionalStatements = true;
   verifyFormat("foreach ( x[x] )\n"
                "  x = x;",
                Style);
@@ -1163,6 +1174,15 @@ TEST_F(FormatTestVerilog, StructLiteral) {
   verifyFormat("c = '{a : 0, b : 0.0, default : 0};", Style);
   verifyFormat("c = ab'{a : 0, b : 0.0};", Style);
   verifyFormat("c = ab'{cd : cd'{1, 1.0}, ef : ef'{2, 2.0}};", Style);
+
+  // It should be indented correctly when the line has to break.
+  verifyFormat("c = //\n"
+               "    '{default: 0};");
+  Style = getDefaultStyle();
+  Style.ContinuationIndentWidth = 2;
+  verifyFormat("c = //\n"
+               "  '{default: 0};",
+               Style);
 }
 
 TEST_F(FormatTestVerilog, StructuredProcedure) {

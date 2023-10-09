@@ -17,10 +17,13 @@
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/FileSpecList.h"
 #include "lldb/Utility/Status.h"
+#include "lldb/Utility/StringList.h"
+#include "lldb/Utility/UUID.h"
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-private-enumerations.h"
 #include "lldb/lldb-private-interfaces.h"
 #include "llvm/Support/JSON.h"
+#include <mutex>
 
 namespace lldb_private {
 
@@ -68,6 +71,10 @@ public:
 
   virtual ~OptionValue() = default;
 
+  OptionValue(const OptionValue &other);
+  
+  OptionValue& operator=(const OptionValue &other);
+
   // Subclasses should override these functions
   virtual Type GetType() const = 0;
 
@@ -112,7 +119,7 @@ public:
   virtual lldb::OptionValueSP GetSubValue(const ExecutionContext *exe_ctx,
                                           llvm::StringRef name,
                                           Status &error) const {
-    error.SetErrorStringWithFormat("'%s' is not a value subvalue", name.str().c_str());
+    error.SetErrorStringWithFormatv("'{0}' is not a valid subvalue", name);
     return lldb::OptionValueSP();
   }
 
@@ -122,7 +129,7 @@ public:
 
   virtual bool IsAggregateValue() const { return false; }
 
-  virtual ConstString GetName() const { return ConstString(); }
+  virtual llvm::StringRef GetName() const { return llvm::StringRef(); }
 
   virtual bool DumpQualifiedName(Stream &strm) const;
 
@@ -185,132 +192,63 @@ public:
                                     Status &error);
 
   OptionValueArch *GetAsArch();
-
   const OptionValueArch *GetAsArch() const;
 
   OptionValueArray *GetAsArray();
-
   const OptionValueArray *GetAsArray() const;
 
   OptionValueArgs *GetAsArgs();
-
   const OptionValueArgs *GetAsArgs() const;
 
   OptionValueBoolean *GetAsBoolean();
-
-  OptionValueChar *GetAsChar();
-
   const OptionValueBoolean *GetAsBoolean() const;
 
+  OptionValueChar *GetAsChar();
   const OptionValueChar *GetAsChar() const;
 
   OptionValueDictionary *GetAsDictionary();
-
   const OptionValueDictionary *GetAsDictionary() const;
 
   OptionValueEnumeration *GetAsEnumeration();
-
   const OptionValueEnumeration *GetAsEnumeration() const;
 
   OptionValueFileSpec *GetAsFileSpec();
-
   const OptionValueFileSpec *GetAsFileSpec() const;
 
   OptionValueFileSpecList *GetAsFileSpecList();
-
   const OptionValueFileSpecList *GetAsFileSpecList() const;
 
   OptionValueFormat *GetAsFormat();
-
   const OptionValueFormat *GetAsFormat() const;
 
   OptionValueLanguage *GetAsLanguage();
-
   const OptionValueLanguage *GetAsLanguage() const;
 
   OptionValuePathMappings *GetAsPathMappings();
-
   const OptionValuePathMappings *GetAsPathMappings() const;
 
   OptionValueProperties *GetAsProperties();
-
   const OptionValueProperties *GetAsProperties() const;
 
   OptionValueRegex *GetAsRegex();
-
   const OptionValueRegex *GetAsRegex() const;
 
   OptionValueSInt64 *GetAsSInt64();
-
   const OptionValueSInt64 *GetAsSInt64() const;
 
   OptionValueString *GetAsString();
-
   const OptionValueString *GetAsString() const;
 
   OptionValueUInt64 *GetAsUInt64();
-
   const OptionValueUInt64 *GetAsUInt64() const;
 
   OptionValueUUID *GetAsUUID();
-
   const OptionValueUUID *GetAsUUID() const;
 
   OptionValueFormatEntity *GetAsFormatEntity();
-
   const OptionValueFormatEntity *GetAsFormatEntity() const;
 
-  std::optional<bool> GetBooleanValue() const;
-
-  bool SetBooleanValue(bool new_value);
-
-  std::optional<char> GetCharValue() const;
-
-  char SetCharValue(char new_value);
-
-  std::optional<int64_t> GetEnumerationValue() const;
-
-  bool SetEnumerationValue(int64_t value);
-
-  std::optional<FileSpec> GetFileSpecValue() const;
-
-  bool SetFileSpecValue(FileSpec file_spec);
-
   bool AppendFileSpecValue(FileSpec file_spec);
-
-  std::optional<FileSpecList> GetFileSpecListValue() const;
-
-  std::optional<lldb::Format> GetFormatValue() const;
-
-  bool SetFormatValue(lldb::Format new_value);
-
-  std::optional<lldb::LanguageType> GetLanguageValue() const;
-
-  bool SetLanguageValue(lldb::LanguageType new_language);
-
-  const FormatEntity::Entry *GetFormatEntity() const;
-
-  const RegularExpression *GetRegexValue() const;
-
-  std::optional<int64_t> GetSInt64Value() const;
-
-  bool SetSInt64Value(int64_t new_value);
-
-  std::optional<llvm::StringRef> GetStringValue() const;
-
-  bool SetStringValue(llvm::StringRef new_value);
-
-  std::optional<uint64_t> GetUInt64Value() const;
-
-  bool SetUInt64Value(uint64_t new_value);
-
-  UUID GetUUIDValue() const;
-
-  bool SetUUIDValue(const UUID &uuid);
-
-  std::optional<ArchSpec> GetArchSpecValue() const;
-
-  bool SetArchSpecValue(ArchSpec arch_spec);
 
   bool OptionWasSet() const { return m_value_was_set; }
 
@@ -373,9 +311,19 @@ public:
 
   bool SetValueAs(bool v) { return SetBooleanValue(v); }
 
+  bool SetValueAs(char v) { return SetCharValue(v); }
+
+  bool SetValueAs(uint64_t v) { return SetUInt64Value(v); }
+
+  bool SetValueAs(int64_t v) { return SetSInt64Value(v); }
+
+  bool SetValueAs(UUID v) { return SetUUIDValue(v); }
+
   bool SetValueAs(llvm::StringRef v) { return SetStringValue(v); }
 
   bool SetValueAs(lldb::LanguageType v) { return SetLanguageValue(v); }
+
+  bool SetValueAs(lldb::Format v) { return SetFormatValue(v); }
 
   bool SetValueAs(FileSpec v) { return SetFileSpecValue(v); }
 
@@ -401,6 +349,46 @@ protected:
                                 // set from the command line or as a setting,
                                 // versus if we just have the default value that
                                 // was already populated in the option value.
+private:
+  std::optional<ArchSpec> GetArchSpecValue() const;
+  bool SetArchSpecValue(ArchSpec arch_spec);
+
+  std::optional<bool> GetBooleanValue() const;
+  bool SetBooleanValue(bool new_value);
+
+  std::optional<char> GetCharValue() const;
+  bool SetCharValue(char new_value);
+
+  std::optional<int64_t> GetEnumerationValue() const;
+  bool SetEnumerationValue(int64_t value);
+
+  std::optional<FileSpec> GetFileSpecValue() const;
+  bool SetFileSpecValue(FileSpec file_spec);
+
+  std::optional<FileSpecList> GetFileSpecListValue() const;
+
+  std::optional<int64_t> GetSInt64Value() const;
+  bool SetSInt64Value(int64_t new_value);
+
+  std::optional<uint64_t> GetUInt64Value() const;
+  bool SetUInt64Value(uint64_t new_value);
+
+  std::optional<lldb::Format> GetFormatValue() const;
+  bool SetFormatValue(lldb::Format new_value);
+
+  std::optional<lldb::LanguageType> GetLanguageValue() const;
+  bool SetLanguageValue(lldb::LanguageType new_language);
+
+  std::optional<llvm::StringRef> GetStringValue() const;
+  bool SetStringValue(llvm::StringRef new_value);
+
+  std::optional<UUID> GetUUIDValue() const;
+  bool SetUUIDValue(const UUID &uuid);
+
+  const FormatEntity::Entry *GetFormatEntity() const;
+  const RegularExpression *GetRegexValue() const;
+  
+  mutable std::mutex m_mutex;
 };
 
 } // namespace lldb_private

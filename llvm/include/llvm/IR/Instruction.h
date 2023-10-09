@@ -175,9 +175,7 @@ public:
   bool isShift() const { return isShift(getOpcode()); }
   bool isCast() const { return isCast(getOpcode()); }
   bool isFuncletPad() const { return isFuncletPad(getOpcode()); }
-  bool isExceptionalTerminator() const {
-    return isExceptionalTerminator(getOpcode());
-  }
+  bool isSpecialTerminator() const { return isSpecialTerminator(getOpcode()); }
 
   /// It checks if this instruction is the only user of at least one of
   /// its operands.
@@ -235,14 +233,16 @@ public:
     return Opcode >= FuncletPadOpsBegin && Opcode < FuncletPadOpsEnd;
   }
 
-  /// Returns true if the Opcode is a terminator related to exception handling.
-  static inline bool isExceptionalTerminator(unsigned Opcode) {
+  /// Returns true if the Opcode is a "special" terminator that does more than
+  /// branch to a successor (e.g. have a side effect or return a value).
+  static inline bool isSpecialTerminator(unsigned Opcode) {
     switch (Opcode) {
     case Instruction::CatchSwitch:
     case Instruction::CatchRet:
     case Instruction::CleanupRet:
     case Instruction::Invoke:
     case Instruction::Resume:
+    case Instruction::CallBr:
       return true;
     default:
       return false;
@@ -339,12 +339,19 @@ public:
   /// If this instruction already has !annotation metadata, append \p Annotation
   /// to the existing node.
   void addAnnotationMetadata(StringRef Annotation);
-
+  /// Adds an !annotation metadata node with an array of \p Annotations
+  /// as a tuple to this instruction. If this instruction already has
+  /// !annotation metadata, append the tuple to
+  /// the existing node.
+  void addAnnotationMetadata(SmallVector<StringRef> Annotations);
   /// Returns the AA metadata for this instruction.
   AAMDNodes getAAMetadata() const;
 
   /// Sets the AA metadata on this instruction from the AAMDNodes structure.
   void setAAMetadata(const AAMDNodes &N);
+
+  /// Sets the nosanitize metadata on this instruction.
+  void setNoSanitizeMetadata();
 
   /// Retrieve total raw weight values of a branch.
   /// Returns true on success with profile total weights filled in.
@@ -517,7 +524,7 @@ public:
   ///     applications, thus the N-way merging should be in code path.
   /// The DebugLoc attached to this instruction will be overwritten by the
   /// merged DebugLoc.
-  void applyMergedLocation(const DILocation *LocA, const DILocation *LocB);
+  void applyMergedLocation(DILocation *LocA, DILocation *LocB);
 
   /// Updates the debug location given that the instruction has been hoisted
   /// from a block to a predecessor of that block.
@@ -639,6 +646,9 @@ public:
 
   /// Return true if this instruction has a volatile memory access.
   bool isVolatile() const LLVM_READONLY;
+
+  /// Return the type this instruction accesses in memory, if any.
+  Type *getAccessType() const LLVM_READONLY;
 
   /// Return true if this instruction may throw an exception.
   ///

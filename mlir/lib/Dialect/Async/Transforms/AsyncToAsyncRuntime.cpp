@@ -161,7 +161,7 @@ static CoroMachinery setupCoroMachinery(func::FuncOp func) {
 
   // We treat TokenType as state update marker to represent side-effects of
   // async computations
-  bool isStateful = func.getCallableResults().front().isa<TokenType>();
+  bool isStateful = isa<TokenType>(func.getCallableResults().front());
 
   std::optional<Value> retToken;
   if (isStateful)
@@ -535,7 +535,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     // We can only await on one the `AwaitableType` (for `await` it can be
     // a `token` or a `value`, for `await_all` it must be a `group`).
-    if (!op.getOperand().getType().template isa<AwaitableType>())
+    if (!isa<AwaitableType>(op.getOperand().getType()))
       return rewriter.notifyMatchFailure(op, "unsupported awaitable type");
 
     // Check if await operation is inside the coroutine function.
@@ -646,7 +646,7 @@ public:
   getReplacementValue(AwaitOp op, Value operand,
                       ConversionPatternRewriter &rewriter) const override {
     // Load from the async value storage.
-    auto valueType = operand.getType().cast<ValueType>().getValueType();
+    auto valueType = cast<ValueType>(operand.getType()).getValueType();
     return rewriter.create<RuntimeLoadOp>(op->getLoc(), valueType, operand);
   }
 };
@@ -812,7 +812,7 @@ void AsyncToAsyncRuntimePass::runOnOperation() {
   runtimeTarget.addDynamicallyLegalOp<cf::AssertOp>(
       [&](cf::AssertOp op) -> bool {
         auto func = op->getParentOfType<func::FuncOp>();
-        return coros->find(func) == coros->end();
+        return !coros->contains(func);
       });
 
   if (failed(applyPartialConversion(module, runtimeTarget,
@@ -842,7 +842,7 @@ void mlir::populateAsyncFuncToAsyncRuntimeConversionPatterns(
       [coros](Operation *op) {
         auto exec = op->getParentOfType<ExecuteOp>();
         auto func = op->getParentOfType<func::FuncOp>();
-        return exec || coros->find(func) == coros->end();
+        return exec || !coros->contains(func);
       });
 }
 

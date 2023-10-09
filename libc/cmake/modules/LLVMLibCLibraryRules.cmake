@@ -75,7 +75,9 @@ function(add_entrypoint_library target_name)
   set(all_deps "")
   foreach(dep IN LISTS fq_deps_list)
     get_target_property(dep_type ${dep} "TARGET_TYPE")
-    if(NOT ((${dep_type} STREQUAL ${ENTRYPOINT_OBJ_TARGET_TYPE}) OR (${dep_type} STREQUAL ${ENTRYPOINT_EXT_TARGET_TYPE})))
+    if(NOT ((${dep_type} STREQUAL ${ENTRYPOINT_OBJ_TARGET_TYPE}) OR
+            (${dep_type} STREQUAL ${ENTRYPOINT_EXT_TARGET_TYPE}) OR
+            (${dep_type} STREQUAL ${ENTRYPOINT_OBJ_VENDOR_TARGET_TYPE})))
       message(FATAL_ERROR "Dependency '${dep}' of 'add_entrypoint_collection' is "
                           "not an 'add_entrypoint_object' or 'add_entrypoint_external' target.")
     endif()
@@ -108,7 +110,7 @@ function(add_entrypoint_library target_name)
     STATIC
     ${objects}
   )
-  set_target_properties(${target_name}  PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+  set_target_properties(${target_name} PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${LIBC_LIBRARY_DIR})
 endfunction(add_entrypoint_library)
 
 # Rule to build a shared library of redirector objects.
@@ -135,7 +137,7 @@ function(add_redirector_library target_name)
     SHARED
     ${obj_files}
   )
-  set_target_properties(${target_name}  PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+  set_target_properties(${target_name}  PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${LIBC_LIBRARY_DIR})
   target_link_libraries(${target_name}  -nostdlib -lc -lm)
   set_target_properties(${target_name}  PROPERTIES LINKER_LANGUAGE "C")
 endfunction(add_redirector_library)

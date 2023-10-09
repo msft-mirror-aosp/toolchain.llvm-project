@@ -11,9 +11,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/IRDL/IRDLVerifiers.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Block.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/ExtensibleDialect.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Region.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
+#include "llvm/Support/FormatVariadic.h"
 
 using namespace mlir;
 using namespace mlir::irdl;
@@ -67,7 +74,7 @@ LogicalResult DynParametricAttrConstraint::verify(
     ConstraintVerifier &context) const {
 
   // Check that the base is the expected one.
-  auto dynAttr = attr.dyn_cast<DynamicAttr>();
+  auto dynAttr = dyn_cast<DynamicAttr>(attr);
   if (!dynAttr || dynAttr.getAttrDef() != attrDef) {
     if (emitError) {
       StringRef dialectName = attrDef->getDialect()->getNamespace();
@@ -102,7 +109,7 @@ LogicalResult DynParametricTypeConstraint::verify(
     function_ref<InFlightDiagnostic()> emitError, Attribute attr,
     ConstraintVerifier &context) const {
   // Check that the base is a TypeAttr.
-  auto typeAttr = attr.dyn_cast<TypeAttr>();
+  auto typeAttr = dyn_cast<TypeAttr>(attr);
   if (!typeAttr) {
     if (emitError)
       return emitError() << "expected type, got attribute '" << attr;
@@ -110,7 +117,7 @@ LogicalResult DynParametricTypeConstraint::verify(
   }
 
   // Check that the type base is the expected one.
-  auto dynType = typeAttr.getValue().dyn_cast<DynamicType>();
+  auto dynType = dyn_cast<DynamicType>(typeAttr.getValue());
   if (!dynType || dynType.getTypeDef() != typeDef) {
     if (emitError) {
       StringRef dialectName = typeDef->getDialect()->getNamespace();
@@ -173,5 +180,47 @@ LogicalResult
 AnyAttributeConstraint::verify(function_ref<InFlightDiagnostic()> emitError,
                                Attribute attr,
                                ConstraintVerifier &context) const {
+  return success();
+}
+
+LogicalResult RegionConstraint::verify(mlir::Region &region,
+                                       ConstraintVerifier &constraintContext) {
+  const auto emitError = [parentOp = region.getParentOp()](mlir::Location loc) {
+    return [loc, parentOp] {
+      InFlightDiagnostic diag = mlir::emitError(loc);
+      // If we already have been given location of the parent operation, which
+      // might happen when the region location is passed, we do not want to
+      // produce the note on the same location
+      if (loc != parentOp->getLoc())
+        diag.attachNote(parentOp->getLoc()).append("see the operation");
+      return diag;
+    };
+  };
+
+  if (blockCount.has_value() && *blockCount != region.getBlocks().size()) {
+    return emitError(region.getLoc())()
+           << "expected region " << region.getRegionNumber() << " to have "
+           << *blockCount << " block(s) but got " << region.getBlocks().size();
+  }
+
+  if (argumentConstraints.has_value()) {
+    auto actualArgs = region.getArguments();
+    if (actualArgs.size() != argumentConstraints->size()) {
+      const mlir::Location firstArgLoc =
+          actualArgs.empty() ? region.getLoc() : actualArgs.front().getLoc();
+      return emitError(firstArgLoc)()
+             << "expected region " << region.getRegionNumber() << " to have "
+             << argumentConstraints->size() << " arguments but got "
+             << actualArgs.size();
+    }
+
+    for (auto [arg, constraint] : llvm::zip(actualArgs, *argumentConstraints)) {
+      mlir::Attribute type = TypeAttr::get(arg.getType());
+      if (failed(constraintContext.verify(emitError(arg.getLoc()), type,
+                                          constraint))) {
+        return failure();
+      }
+    }
+  }
   return success();
 }

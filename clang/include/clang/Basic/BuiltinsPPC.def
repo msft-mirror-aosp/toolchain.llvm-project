@@ -35,6 +35,18 @@
 #define UNALIASED_CUSTOM_BUILTIN(ID, TYPES, ACCUMULATE, FEATURE)               \
   CUSTOM_BUILTIN(ID, ID, TYPES, ACCUMULATE, FEATURE)
 
+// GCC predefined macros to rename builtins, undef them to keep original names.
+#if defined(__GNUC__) && !defined(__clang__)
+#undef __builtin_vsx_xvnmaddadp
+#undef __builtin_vsx_xvnmaddasp
+#undef __builtin_vsx_xvmsubasp
+#undef __builtin_vsx_xvmsubadp
+#undef __builtin_vsx_xvmaddadp
+#undef __builtin_vsx_xvnmsubasp
+#undef __builtin_vsx_xvnmsubadp
+#undef __builtin_vsx_xvmaddasp
+#endif
+
 // XL Compatibility built-ins
 BUILTIN(__builtin_ppc_popcntb, "ULiULi", "")
 BUILTIN(__builtin_ppc_poppar4, "iUi", "")

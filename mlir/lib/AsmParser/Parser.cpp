@@ -25,6 +25,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/SourceMgr.h"
 #include <algorithm>
@@ -1333,7 +1334,7 @@ ParseResult OperationParser::parseGenericOperationAfterOpName(
     auto type = parseType();
     if (!type)
       return failure();
-    auto fnType = type.dyn_cast<FunctionType>();
+    auto fnType = dyn_cast<FunctionType>(type);
     if (!fnType)
       return mlir::emitError(typeLoc, "expected function type");
 
@@ -2019,6 +2020,8 @@ ParseResult OperationParser::parseLocationAlias(LocationAttr &loc) {
            << "expected location, but found dialect attribute: '#" << identifier
            << "'";
   }
+  if (state.asmState)
+    state.asmState->addAttrAliasUses(identifier, tok.getLocRange());
 
   // If this alias can be resolved, do it now.
   Attribute attr = state.symbols.attributeAliasDefinitions.lookup(identifier);
@@ -2059,7 +2062,7 @@ OperationParser::parseTrailingLocationSpecifier(OpOrArgument opOrArgument) {
   if (parseToken(Token::r_paren, "expected ')' in location"))
     return failure();
 
-  if (auto *op = opOrArgument.dyn_cast<Operation *>())
+  if (auto *op = llvm::dyn_cast_if_present<Operation *>(opOrArgument))
     op->setLoc(directLoc);
   else
     opOrArgument.get<BlockArgument>().setLoc(directLoc);
@@ -2352,7 +2355,7 @@ ParseResult OperationParser::codeCompleteSSAUse() {
         if (!forwardRefPlaceholders.count(result))
           detailOS << result.getOwner()->getName() << ": ";
       } else {
-        detailOS << "arg #" << frontValue.cast<BlockArgument>().getArgNumber()
+        detailOS << "arg #" << cast<BlockArgument>(frontValue).getArgNumber()
                  << ": ";
       }
 
@@ -2482,6 +2485,13 @@ public:
     }
     llvm::support::ulittle32_t align;
     memcpy(&align, blobData->data(), sizeof(uint32_t));
+    if (align && !llvm::isPowerOf2_32(align)) {
+      return p.emitError(value.getLoc(),
+                         "expected hex string blob for key '" + key +
+                             "' to encode alignment in first 4 bytes, but got "
+                             "non-power-of-2 value: " +
+                             Twine(align));
+    }
 
     // Get the data portion of the blob.
     StringRef data = StringRef(*blobData).drop_front(sizeof(uint32_t));
@@ -2519,6 +2529,7 @@ ParseResult TopLevelOperationParser::parseAttributeAliasDef() {
     return emitError("attribute names with a '.' are reserved for "
                      "dialect-defined names");
 
+  SMRange location = getToken().getLocRange();
   consumeToken(Token::hash_identifier);
 
   // Parse the '='.
@@ -2530,6 +2541,9 @@ ParseResult TopLevelOperationParser::parseAttributeAliasDef() {
   if (!attr)
     return failure();
 
+  // Register this alias with the parser state.
+  if (state.asmState)
+    state.asmState->addAttrAliasDefinition(aliasName, location, attr);
   state.symbols.attributeAliasDefinitions[aliasName] = attr;
   return success();
 }
@@ -2546,6 +2560,8 @@ ParseResult TopLevelOperationParser::parseTypeAliasDef() {
   if (aliasName.contains('.'))
     return emitError("type names with a '.' are reserved for "
                      "dialect-defined names");
+
+  SMRange location = getToken().getLocRange();
   consumeToken(Token::exclamation_identifier);
 
   // Parse the '='.
@@ -2558,6 +2574,8 @@ ParseResult TopLevelOperationParser::parseTypeAliasDef() {
     return failure();
 
   // Register this alias with the parser state.
+  if (state.asmState)
+    state.asmState->addTypeAliasDefinition(aliasName, location, aliasedType);
   state.symbols.typeAliasDefinitions.try_emplace(aliasName, aliasedType);
   return success();
 }

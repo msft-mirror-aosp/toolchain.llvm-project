@@ -11,7 +11,9 @@ add_mlir_library(MLIRTransforms
   Mem2Reg.cpp
   OpStats.cpp
   PrintIR.cpp
+  RemoveDeadValues.cpp
   SCCP.cpp
+  SROA.cpp
   StripDebugInfo.cpp
   SymbolDCE.cpp
   SymbolPrivatize.cpp
@@ -28,7 +30,7 @@ add_mlir_library(MLIRTransforms
   MLIRAnalysis
   MLIRCopyOpInterface
   MLIRLoopLikeInterface
-  MLIRMem2RegInterfaces
+  MLIRMemorySlotInterfaces
   MLIRPass
   MLIRRuntimeVerifiableOpInterface
   MLIRSideEffectInterfaces

@@ -327,6 +327,8 @@ public:
                      SmallVectorImpl<MachineOperand> &Cond,
                      bool AllowModify) const override;
 
+  int getJumpTableIndex(const MachineInstr &MI) const override;
+
   std::optional<ExtAddrMode>
   getAddrModeFromMemoryOp(const MachineInstr &MemI,
                           const TargetRegisterInfo *TRI) const override;
@@ -454,6 +456,9 @@ public:
   bool shouldScheduleLoadsNear(SDNode *Load1, SDNode *Load2, int64_t Offset1,
                                int64_t Offset2,
                                unsigned NumLoads) const override;
+
+  void insertNoop(MachineBasicBlock &MBB,
+                  MachineBasicBlock::iterator MI) const override;
 
   MCInst getNop() const override;
 

@@ -354,6 +354,12 @@ public:
   /// option id.
   void ClaimAllArgs(OptSpecifier Id0) const;
 
+  template <typename... OptSpecifiers>
+  void claimAllArgs(OptSpecifiers... Ids) const {
+    for (Arg *A : filtered(Ids...))
+      A->claim();
+  }
+
   /// ClaimAllArgs - Claim all arguments.
   ///
   void ClaimAllArgs() const;
@@ -413,6 +419,8 @@ public:
         NumInputArgStrings(RHS.NumInputArgStrings) {}
 
   InputArgList &operator=(InputArgList &&RHS) {
+    if (this == &RHS)
+      return *this;
     releaseMemory();
     ArgList::operator=(std::move(RHS));
     ArgStrings = std::move(RHS.ArgStrings);

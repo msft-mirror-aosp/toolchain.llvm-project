@@ -29,6 +29,7 @@ namespace llvm {
 class GISelChangeObserver;
 class APFloat;
 class APInt;
+class ConstantFP;
 class GPtrAdd;
 class GStore;
 class GZExtLoad;
@@ -302,6 +303,8 @@ public:
   void applyShiftOfShiftedLogic(MachineInstr &MI,
                                 ShiftOfShiftedLogic &MatchInfo);
 
+  bool matchCommuteShift(MachineInstr &MI, BuildFnTy &MatchInfo);
+
   /// Transform a multiply by a power-of-2 value to a left shift.
   bool matchCombineMulToShl(MachineInstr &MI, unsigned &ShiftVal);
   void applyCombineMulToShl(MachineInstr &MI, unsigned &ShiftVal);
@@ -350,10 +353,7 @@ public:
   void applyCombineUnmergeZExtToZExt(MachineInstr &MI);
 
   /// Transform fp_instr(cst) to constant result of the fp operation.
-  bool matchCombineConstantFoldFpUnary(MachineInstr &MI,
-                                       std::optional<APFloat> &Cst);
-  void applyCombineConstantFoldFpUnary(MachineInstr &MI,
-                                       std::optional<APFloat> &Cst);
+  void applyCombineConstantFoldFpUnary(MachineInstr &MI, const ConstantFP *Cst);
 
   /// Transform IntToPtr(PtrToInt(x)) to x if cast is in the same address space.
   bool matchCombineI2PToP2I(MachineInstr &MI, Register &Reg);
@@ -385,12 +385,6 @@ public:
                             std::tuple<Register, unsigned> &MatchInfo);
   void applyCombineExtOfExt(MachineInstr &MI,
                             std::tuple<Register, unsigned> &MatchInfo);
-
-  /// Transform fabs(fabs(x)) to fabs(x).
-  void applyCombineFAbsOfFAbs(MachineInstr &MI, Register &Src);
-
-  /// Transform fabs(fneg(x)) to fabs(x).
-  bool matchCombineFAbsOfFNeg(MachineInstr &MI, BuildFnTy &MatchInfo);
 
   /// Transform trunc ([asz]ext x) to x or ([asz]ext x) or (trunc x).
   bool matchCombineTruncOfExt(MachineInstr &MI,
@@ -438,22 +432,22 @@ public:
   bool matchConstantSelectCmp(MachineInstr &MI, unsigned &OpIdx);
 
   /// Replace an instruction with a G_FCONSTANT with value \p C.
-  bool replaceInstWithFConstant(MachineInstr &MI, double C);
+  void replaceInstWithFConstant(MachineInstr &MI, double C);
 
   /// Replace an instruction with a G_CONSTANT with value \p C.
-  bool replaceInstWithConstant(MachineInstr &MI, int64_t C);
+  void replaceInstWithConstant(MachineInstr &MI, int64_t C);
 
   /// Replace an instruction with a G_CONSTANT with value \p C.
-  bool replaceInstWithConstant(MachineInstr &MI, APInt C);
+  void replaceInstWithConstant(MachineInstr &MI, APInt C);
 
   /// Replace an instruction with a G_IMPLICIT_DEF.
-  bool replaceInstWithUndef(MachineInstr &MI);
+  void replaceInstWithUndef(MachineInstr &MI);
 
   /// Delete \p MI and replace all of its uses with its \p OpIdx-th operand.
-  bool replaceSingleDefInstWithOperand(MachineInstr &MI, unsigned OpIdx);
+  void replaceSingleDefInstWithOperand(MachineInstr &MI, unsigned OpIdx);
 
   /// Delete \p MI and replace all of its uses with \p Replacement.
-  bool replaceSingleDefInstWithReg(MachineInstr &MI, Register Replacement);
+  void replaceSingleDefInstWithReg(MachineInstr &MI, Register Replacement);
 
   /// Return true if \p MOP1 and \p MOP2 are register operands are defined by
   /// equivalent instructions.
@@ -479,7 +473,7 @@ public:
   bool matchOperandIsKnownToBeAPowerOfTwo(MachineInstr &MI, unsigned OpIdx);
 
   /// Erase \p MI
-  bool eraseInst(MachineInstr &MI);
+  void eraseInst(MachineInstr &MI);
 
   /// Return true if MI is a G_ADD which can be simplified to a G_SUB.
   bool matchSimplifyAddToSub(MachineInstr &MI,
@@ -550,7 +544,7 @@ public:
   /// binop (select cond, K0, K1), K2 ->
   ///   select cond, (binop K0, K2), (binop K1, K2)
   bool matchFoldBinOpIntoSelect(MachineInstr &MI, unsigned &SelectOpNo);
-  bool applyFoldBinOpIntoSelect(MachineInstr &MI, const unsigned &SelectOpNo);
+  void applyFoldBinOpIntoSelect(MachineInstr &MI, const unsigned &SelectOpNo);
 
   bool matchCombineInsertVecElts(MachineInstr &MI,
                                  SmallVectorImpl<Register> &MatchInfo);
@@ -631,8 +625,17 @@ public:
   /// addressing mode usage.
   bool matchReassocPtrAdd(MachineInstr &MI, BuildFnTy &MatchInfo);
 
+  /// Try to reassociate to reassociate operands of a commutative binop.
+  bool tryReassocBinOp(unsigned Opc, Register DstReg, Register Op0,
+                       Register Op1, BuildFnTy &MatchInfo);
+  /// Reassociate commutative binary operations like G_ADD.
+  bool matchReassocCommBinOp(MachineInstr &MI, BuildFnTy &MatchInfo);
+
   /// Do constant folding when opportunities are exposed after MIR building.
-  bool matchConstantFold(MachineInstr &MI, APInt &MatchInfo);
+  bool matchConstantFoldCastOp(MachineInstr &MI, APInt &MatchInfo);
+
+  /// Do constant folding when opportunities are exposed after MIR building.
+  bool matchConstantFoldBinOp(MachineInstr &MI, APInt &MatchInfo);
 
   /// \returns true if it is possible to narrow the width of a scalar binop
   /// feeding a G_AND instruction \p MI.
