@@ -87,9 +87,7 @@ static InstructionListType createIncMemory(const MCSymbol *Target,
 
 class X86MCPlusBuilder : public MCPlusBuilder {
 public:
-  X86MCPlusBuilder(const MCInstrAnalysis *Analysis, const MCInstrInfo *Info,
-                   const MCRegisterInfo *RegInfo)
-      : MCPlusBuilder(Analysis, Info, RegInfo) {}
+  using MCPlusBuilder::MCPlusBuilder;
 
   std::unique_ptr<MCSymbolizer>
   createTargetSymbolizer(BinaryFunction &Function,
@@ -350,7 +348,7 @@ public:
     }
   }
 
-  bool isLoad(const MCInst &Inst) const override {
+  bool mayLoad(const MCInst &Inst) const override {
     if (isPop(Inst))
       return true;
 
@@ -363,7 +361,7 @@ public:
     return MCII.mayLoad();
   }
 
-  bool isStore(const MCInst &Inst) const override {
+  bool mayStore(const MCInst &Inst) const override {
     if (isPush(Inst))
       return true;
 
@@ -403,6 +401,7 @@ public:
     case ELF::R_X86_64_PC8:
     case ELF::R_X86_64_PC32:
     case ELF::R_X86_64_PC64:
+    case ELF::R_X86_64_GOTPC64:
     case ELF::R_X86_64_GOTPCRELX:
     case ELF::R_X86_64_REX_GOTPCRELX:
       return true;
@@ -1755,7 +1754,7 @@ public:
     // - Non-stack loads are prohibited (generally unsafe)
     // - Stack loads are OK if AllowStackMemOp is true
     // - Stack loads with RBP are OK if AllowBasePtrStackMemOp is true
-    if (isLoad(Inst)) {
+    if (mayLoad(Inst)) {
       // If stack memory operands are not allowed, no loads are allowed
       if (!AllowStackMemOp)
         return false;
@@ -2190,7 +2189,7 @@ public:
       MCInst &CurInst = *Itr++;
       const MCInstrDesc &Desc = Info->get(CurInst.getOpcode());
       if (Desc.hasDefOfPhysReg(CurInst, MethodRegNum, *RegInfo)) {
-        if (!isLoad(CurInst))
+        if (!mayLoad(CurInst))
           return false;
         if (std::optional<X86MemOperand> MO =
                 evaluateX86MemoryOperand(CurInst)) {
@@ -3578,8 +3577,9 @@ namespace bolt {
 
 MCPlusBuilder *createX86MCPlusBuilder(const MCInstrAnalysis *Analysis,
                                       const MCInstrInfo *Info,
-                                      const MCRegisterInfo *RegInfo) {
-  return new X86MCPlusBuilder(Analysis, Info, RegInfo);
+                                      const MCRegisterInfo *RegInfo,
+                                      const MCSubtargetInfo *STI) {
+  return new X86MCPlusBuilder(Analysis, Info, RegInfo, STI);
 }
 
 } // namespace bolt

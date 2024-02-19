@@ -35,8 +35,7 @@ class XtensaAsmParser : public MCTargetAsmParser {
 
   SMLoc getLoc() const { return getParser().getTok().getLoc(); }
 
-  bool parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
-                     SMLoc &EndLoc) override;
+  bool parseRegister(MCRegister &Reg, SMLoc &StartLoc, SMLoc &EndLoc) override;
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
   bool MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
@@ -58,9 +57,9 @@ class XtensaAsmParser : public MCTargetAsmParser {
                     bool SR = false);
   bool ParseInstructionWithSR(ParseInstructionInfo &Info, StringRef Name,
                               SMLoc NameLoc, OperandVector &Operands);
-  OperandMatchResultTy tryParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
-                                        SMLoc &EndLoc) override {
-    return MatchOperand_NoMatch;
+  ParseStatus tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
+                               SMLoc &EndLoc) override {
+    return ParseStatus::NoMatch;
   }
   ParseStatus parsePCRelTarget(OperandVector &Operands);
 
@@ -453,12 +452,12 @@ ParseStatus XtensaAsmParser::parsePCRelTarget(OperandVector &Operands) {
   return ParseStatus::Success;
 }
 
-bool XtensaAsmParser::parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+bool XtensaAsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
                                     SMLoc &EndLoc) {
   const AsmToken &Tok = getParser().getTok();
   StartLoc = Tok.getLoc();
   EndLoc = Tok.getEndLoc();
-  RegNo = 0;
+  Reg = Xtensa::NoRegister;
   StringRef Name = getLexer().getTok().getIdentifier();
 
   if (!MatchRegisterName(Name) && !MatchRegisterAltName(Name)) {
@@ -599,8 +598,8 @@ bool XtensaAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic,
 bool XtensaAsmParser::ParseInstructionWithSR(ParseInstructionInfo &Info,
                                              StringRef Name, SMLoc NameLoc,
                                              OperandVector &Operands) {
-  if ((Name.startswith("wsr.") || Name.startswith("rsr.") ||
-       Name.startswith("xsr.")) &&
+  if ((Name.starts_with("wsr.") || Name.starts_with("rsr.") ||
+       Name.starts_with("xsr.")) &&
       (Name.size() > 4)) {
     // Parse case when instruction name is concatenated with SR register
     // name, like "wsr.sar a1"
@@ -656,8 +655,8 @@ bool XtensaAsmParser::ParseInstructionWithSR(ParseInstructionInfo &Info,
 bool XtensaAsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
-  if (Name.startswith("wsr") || Name.startswith("rsr") ||
-      Name.startswith("xsr")) {
+  if (Name.starts_with("wsr") || Name.starts_with("rsr") ||
+      Name.starts_with("xsr")) {
     return ParseInstructionWithSR(Info, Name, NameLoc, Operands);
   }
 

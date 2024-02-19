@@ -16,6 +16,7 @@
 #define LLVM_CLANG_BASIC_CODEGENOPTIONS_H
 
 #include "llvm/Frontend/Debug/Options.h"
+#include "llvm/Frontend/Driver/CodeGenOptions.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Target/TargetOptions.h"
@@ -69,16 +70,24 @@ public:
   /// The format used for serializing remarks (default: YAML)
   std::string OptRecordFormat;
 
+  /// Options to add to the linker for the object file
+  std::vector<std::string> DependentLibs;
+
   // The RemarkKind enum class and OptRemark struct are identical to what Clang
   // has
   // TODO: Share with clang instead of re-implementing here
   enum class RemarkKind {
-    RK_Missing,  // Remark argument not present on the command line.
-    RK_Enabled,  // Remark enabled via '-Rgroup', i.e. -Rpass, -Rpass-missed,
-                 // -Rpass-analysis
-    RK_Disabled, // Remark disabled via '-Rno-group', i.e. -Rno-pass,
-                 // -Rno-pass-missed, -Rno-pass-analysis.
+    RK_Missing,     // Remark argument not present on the command line.
+    RK_Enabled,     // Remark enabled via '-Rgroup', i.e. -Rpass, -Rpass-missed,
+                    // -Rpass-analysis
+    RK_Disabled,    // Remark disabled via '-Rno-group', i.e. -Rno-pass,
+                    // -Rno-pass-missed, -Rno-pass-analysis.
+    RK_WithPattern, // Remark pattern specified via '-Rgroup=regexp'.
   };
+
+  /// \brief Code object version for AMDGPU.
+  llvm::CodeObjectVersionKind CodeObjectVersion =
+      llvm::CodeObjectVersionKind::COV_4;
 
   /// Optimization remark with an optional regular expression pattern.
   struct OptRemark {

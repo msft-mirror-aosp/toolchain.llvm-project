@@ -209,7 +209,7 @@ struct RcOptions {
   bool Preprocess = true;
   bool PrintCmdAndExit = false;
   std::string Triple;
-  std::vector<std::string> PreprocessCmd;
+  std::optional<std::string> Preprocessor;
   std::vector<std::string> PreprocessArgs;
 
   std::string InputFile;
@@ -229,7 +229,7 @@ struct RcOptions {
 void preprocess(StringRef Src, StringRef Dst, const RcOptions &Opts,
                 const char *Argv0) {
   std::string Clang;
-  if (Opts.PrintCmdAndExit || !Opts.PreprocessCmd.empty()) {
+  if (Opts.PrintCmdAndExit || Opts.Preprocessor) {
     Clang = "clang";
   } else {
     ErrorOr<std::string> ClangOrErr = findClang(Argv0, Opts.Triple);
@@ -248,16 +248,22 @@ void preprocess(StringRef Src, StringRef Dst, const RcOptions &Opts,
   SmallVector<StringRef, 8> Args = {
       Clang, "--driver-mode=gcc", "-target", Opts.Triple, "-E",
       "-xc", "-DRC_INVOKED"};
-  if (!Opts.PreprocessCmd.empty()) {
+  std::string PreprocessorExecutable;
+  if (Opts.Preprocessor) {
     Args.clear();
-    for (const auto &S : Opts.PreprocessCmd)
-      Args.push_back(S);
+    Args.push_back(*Opts.Preprocessor);
+    if (!sys::fs::can_execute(Args[0])) {
+      if (auto P = sys::findProgramByName(Args[0])) {
+        PreprocessorExecutable = *P;
+        Args[0] = PreprocessorExecutable;
+      }
+    }
   }
+  for (const auto &S : Opts.PreprocessArgs)
+    Args.push_back(S);
   Args.push_back(Src);
   Args.push_back("-o");
   Args.push_back(Dst);
-  for (const auto &S : Opts.PreprocessArgs)
-    Args.push_back(S);
   if (Opts.PrintCmdAndExit || Opts.BeVerbose) {
     for (const auto &A : Args) {
       outs() << " ";
@@ -269,9 +275,15 @@ void preprocess(StringRef Src, StringRef Dst, const RcOptions &Opts,
   }
   // The llvm Support classes don't handle reading from stdout of a child
   // process; otherwise we could avoid using a temp file.
-  int Res = sys::ExecuteAndWait(Args[0], Args);
+  std::string ErrMsg;
+  int Res =
+      sys::ExecuteAndWait(Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
+                          /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
   if (Res) {
-    fatalError("llvm-rc: Preprocessing failed.");
+    if (!ErrMsg.empty())
+      fatalError("llvm-rc: Preprocessing failed: " + ErrMsg);
+    else
+      fatalError("llvm-rc: Preprocessing failed.");
   }
 }
 
@@ -327,36 +339,6 @@ std::string unescape(StringRef S) {
     Out.push_back(S[I]);
   }
   return Out;
-}
-
-std::vector<std::string> unescapeSplit(StringRef S) {
-  std::vector<std::string> OutArgs;
-  std::string Out;
-  bool InQuote = false;
-  for (int I = 0, E = S.size(); I < E; I++) {
-    if (S[I] == '\\') {
-      if (I + 1 < E)
-        Out.push_back(S[++I]);
-      else
-        fatalError("Unterminated escape");
-      continue;
-    }
-    if (S[I] == '"') {
-      InQuote = !InQuote;
-      continue;
-    }
-    if (S[I] == ' ' && !InQuote) {
-      OutArgs.push_back(Out);
-      Out.clear();
-      continue;
-    }
-    Out.push_back(S[I]);
-  }
-  if (InQuote)
-    fatalError("Unterminated quote");
-  if (!Out.empty())
-    OutArgs.push_back(Out);
-  return OutArgs;
 }
 
 RcOptions parseWindresOptions(ArrayRef<const char *> ArgsArr,
@@ -461,7 +443,14 @@ RcOptions parseWindresOptions(ArrayRef<const char *> ArgsArr,
     // done this double escaping) probably is confined to cases like these
     // quoted string defines, and those happen to work the same across unix
     // and windows.
-    std::string Unescaped = unescape(Arg->getValue());
+    //
+    // If GNU windres is executed with --use-temp-file, it doesn't use
+    // popen() to invoke the preprocessor, but uses another function which
+    // actually preserves tricky characters better. To mimic this behaviour,
+    // don't unescape arguments here.
+    std::string Value = Arg->getValue();
+    if (!InputArgs.hasArg(WINDRES_use_temp_file))
+      Value = unescape(Value);
     switch (Arg->getOption().getID()) {
     case WINDRES_include_dir:
       // Technically, these are handled the same way as e.g. defines, but
@@ -475,20 +464,19 @@ RcOptions parseWindresOptions(ArrayRef<const char *> ArgsArr,
       break;
     case WINDRES_define:
       Opts.PreprocessArgs.push_back("-D");
-      Opts.PreprocessArgs.push_back(Unescaped);
+      Opts.PreprocessArgs.push_back(Value);
       break;
     case WINDRES_undef:
       Opts.PreprocessArgs.push_back("-U");
-      Opts.PreprocessArgs.push_back(Unescaped);
+      Opts.PreprocessArgs.push_back(Value);
       break;
     case WINDRES_preprocessor_arg:
-      Opts.PreprocessArgs.push_back(Unescaped);
+      Opts.PreprocessArgs.push_back(Value);
       break;
     }
   }
   if (InputArgs.hasArg(WINDRES_preprocessor))
-    Opts.PreprocessCmd =
-        unescapeSplit(InputArgs.getLastArgValue(WINDRES_preprocessor));
+    Opts.Preprocessor = InputArgs.getLastArgValue(WINDRES_preprocessor);
 
   Opts.Params.CodePage = CpWin1252; // Different default
   if (InputArgs.hasArg(WINDRES_codepage)) {

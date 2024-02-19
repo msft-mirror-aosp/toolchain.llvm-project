@@ -550,12 +550,16 @@ public:
   bool ReadHeaderSearchOptions(const HeaderSearchOptions &HSOpts,
                                StringRef SpecificModuleCachePath,
                                bool Complain) override {
-    // Preserve previously set header search paths.
+    // llvm::SaveAndRestore doesn't support bit field.
+    auto ForceCheckCXX20ModulesInputFiles =
+        this->HSOpts.ForceCheckCXX20ModulesInputFiles;
     llvm::SaveAndRestore X(this->HSOpts.UserEntries);
     llvm::SaveAndRestore Y(this->HSOpts.SystemHeaderPrefixes);
     llvm::SaveAndRestore Z(this->HSOpts.VFSOverlayFiles);
 
     this->HSOpts = HSOpts;
+    this->HSOpts.ForceCheckCXX20ModulesInputFiles =
+        ForceCheckCXX20ModulesInputFiles;
 
     return false;
   }
@@ -786,10 +790,9 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
     const std::string &Filename, const PCHContainerReader &PCHContainerRdr,
     WhatToLoad ToLoad, IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
     const FileSystemOptions &FileSystemOpts,
-    std::shared_ptr<HeaderSearchOptions> HSOpts, bool UseDebugInfo,
-    bool OnlyLocalDecls, CaptureDiagsKind CaptureDiagnostics,
-    bool AllowASTWithCompilerErrors, bool UserFilesAreVolatile,
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
+    std::shared_ptr<HeaderSearchOptions> HSOpts, bool OnlyLocalDecls,
+    CaptureDiagsKind CaptureDiagnostics, bool AllowASTWithCompilerErrors,
+    bool UserFilesAreVolatile, IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
   std::unique_ptr<ASTUnit> AST(new ASTUnit(true));
 
   // Recover resources if we crash before exiting this method.
@@ -879,7 +882,7 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
   PP.setCounterValue(Counter);
 
   Module *M = HeaderInfo.lookupModule(AST->getLangOpts().CurrentModule);
-  if (M && AST->getLangOpts().isCompilingModule() && M->isModulePurview())
+  if (M && AST->getLangOpts().isCompilingModule() && M->isNamedModule())
     AST->Ctx->setCurrentNamedModule(M);
 
   // Create an AST consumer, even though it isn't used.
@@ -1335,7 +1338,7 @@ ASTUnit::getMainBufferWithPrecompiledPreamble(
     return nullptr;
 
   PreambleBounds Bounds = ComputePreambleBounds(
-      *PreambleInvocationIn.getLangOpts(), *MainFileBuffer, MaxLines);
+      PreambleInvocationIn.getLangOpts(), *MainFileBuffer, MaxLines);
   if (!Bounds.Size)
     return nullptr;
 
@@ -1493,8 +1496,8 @@ StringRef ASTUnit::getMainFileName() const {
   }
 
   if (SourceMgr) {
-    if (const FileEntry *
-          FE = SourceMgr->getFileEntryForID(SourceMgr->getMainFileID()))
+    if (OptionalFileEntryRef FE =
+            SourceMgr->getFileEntryRefForID(SourceMgr->getMainFileID()))
       return FE->getName();
   }
 
@@ -2198,7 +2201,7 @@ void ASTUnit::CodeComplete(
   FrontendOpts.CodeCompletionAt.Column = Column;
 
   // Set the language options appropriately.
-  LangOpts = *CCInvocation->getLangOpts();
+  LangOpts = CCInvocation->getLangOpts();
 
   // Spell-checking and warnings are wasteful during code-completion.
   LangOpts.SpellChecking = false;
@@ -2337,12 +2340,9 @@ bool ASTUnit::Save(StringRef File) {
   return false;
 }
 
-static bool serializeUnit(ASTWriter &Writer,
-                          SmallVectorImpl<char> &Buffer,
-                          Sema &S,
-                          bool hasErrors,
-                          raw_ostream &OS) {
-  Writer.WriteAST(S, std::string(), nullptr, "", hasErrors);
+static bool serializeUnit(ASTWriter &Writer, SmallVectorImpl<char> &Buffer,
+                          Sema &S, raw_ostream &OS) {
+  Writer.WriteAST(S, std::string(), nullptr, "");
 
   // Write the generated bitstream to "Out".
   if (!Buffer.empty())
@@ -2352,18 +2352,14 @@ static bool serializeUnit(ASTWriter &Writer,
 }
 
 bool ASTUnit::serialize(raw_ostream &OS) {
-  // For serialization we are lenient if the errors were only warn-as-error kind.
-  bool hasErrors = getDiagnostics().hasUncompilableErrorOccurred();
-
   if (WriterData)
-    return serializeUnit(WriterData->Writer, WriterData->Buffer,
-                         getSema(), hasErrors, OS);
+    return serializeUnit(WriterData->Writer, WriterData->Buffer, getSema(), OS);
 
   SmallString<128> Buffer;
   llvm::BitstreamWriter Stream(Buffer);
   InMemoryModuleCache ModuleCache;
   ASTWriter Writer(Stream, Buffer, ModuleCache, {});
-  return serializeUnit(Writer, Buffer, getSema(), hasErrors, OS);
+  return serializeUnit(Writer, Buffer, getSema(), OS);
 }
 
 using SLocRemap = ContinuousRangeMap<unsigned, int, 2>;

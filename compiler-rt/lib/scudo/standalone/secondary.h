@@ -155,28 +155,24 @@ public:
 
   void getStats(ScopedString *Str) {
     ScopedLock L(Mutex);
-    u32 Integral = 0;
-    u32 Fractional = 0;
-    if (CallsToRetrieve != 0) {
-      Integral = SuccessfulRetrieves * 100 / CallsToRetrieve;
-      Fractional = (((SuccessfulRetrieves * 100) % CallsToRetrieve) * 100 +
-                    CallsToRetrieve / 2) /
-                   CallsToRetrieve;
-    }
+    uptr Integral;
+    uptr Fractional;
+    computePercentage(SuccessfulRetrieves, CallsToRetrieve, &Integral,
+                      &Fractional);
     Str->append("Stats: MapAllocatorCache: EntriesCount: %d, "
                 "MaxEntriesCount: %u, MaxEntrySize: %zu\n",
                 EntriesCount, atomic_load_relaxed(&MaxEntriesCount),
                 atomic_load_relaxed(&MaxEntrySize));
     Str->append("Stats: CacheRetrievalStats: SuccessRate: %u/%u "
-                "(%u.%02u%%)\n",
+                "(%zu.%02zu%%)\n",
                 SuccessfulRetrieves, CallsToRetrieve, Integral, Fractional);
     for (CachedBlock Entry : Entries) {
       if (!Entry.isValid())
         continue;
       Str->append("StartBlockAddress: 0x%zx, EndBlockAddress: 0x%zx, "
-                  "BlockSize: %zu\n",
+                  "BlockSize: %zu %s\n",
                   Entry.CommitBase, Entry.CommitBase + Entry.CommitSize,
-                  Entry.CommitSize);
+                  Entry.CommitSize, Entry.Time == 0 ? "[R]" : "");
     }
   }
 
@@ -223,7 +219,7 @@ public:
                                          MAP_NOACCESS);
       }
     } else if (Interval == 0) {
-      Entry.MemMap.releasePagesToOS(Entry.CommitBase, Entry.CommitSize);
+      Entry.MemMap.releaseAndZeroPagesToOS(Entry.CommitBase, Entry.CommitSize);
       Entry.Time = 0;
     }
     do {
@@ -441,7 +437,7 @@ private:
         OldestTime = Entry.Time;
       return;
     }
-    Entry.MemMap.releasePagesToOS(Entry.CommitBase, Entry.CommitSize);
+    Entry.MemMap.releaseAndZeroPagesToOS(Entry.CommitBase, Entry.CommitSize);
     Entry.Time = 0;
   }
 
@@ -594,7 +590,7 @@ void *MapAllocator<Config>::allocate(const Options &Options, uptr Size,
         ScopedLock L(Mutex);
         InUseBlocks.push_back(H);
         AllocatedBytes += H->CommitSize;
-        FragmentedBytes += reinterpret_cast<uptr>(H) - H->CommitBase;
+        FragmentedBytes += H->MemMap.getCapacity() - H->CommitSize;
         NumberOfAllocs++;
         Stats.add(StatAllocated, H->CommitSize);
         Stats.add(StatMapped, H->MemMap.getCapacity());
@@ -668,7 +664,7 @@ void *MapAllocator<Config>::allocate(const Options &Options, uptr Size,
     ScopedLock L(Mutex);
     InUseBlocks.push_back(H);
     AllocatedBytes += CommitSize;
-    FragmentedBytes += reinterpret_cast<uptr>(H) - H->CommitBase;
+    FragmentedBytes += H->MemMap.getCapacity() - CommitSize;
     if (LargestSize < CommitSize)
       LargestSize = CommitSize;
     NumberOfAllocs++;
@@ -687,7 +683,7 @@ void MapAllocator<Config>::deallocate(const Options &Options, void *Ptr)
     ScopedLock L(Mutex);
     InUseBlocks.remove(H);
     FreedBytes += CommitSize;
-    FragmentedBytes -= reinterpret_cast<uptr>(H) - H->CommitBase;
+    FragmentedBytes -= H->MemMap.getCapacity() - CommitSize;
     NumberOfFrees++;
     Stats.sub(StatAllocated, CommitSize);
     Stats.sub(StatMapped, H->MemMap.getCapacity());

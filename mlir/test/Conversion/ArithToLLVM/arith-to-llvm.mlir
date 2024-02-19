@@ -330,6 +330,7 @@ func.func @fcmp(f32, f32) -> () {
   // CHECK-NEXT: llvm.fcmp "ule" %arg0, %arg1 : f32
   // CHECK-NEXT: llvm.fcmp "une" %arg0, %arg1 : f32
   // CHECK-NEXT: llvm.fcmp "uno" %arg0, %arg1 : f32
+  // CHECK-NEXT: llvm.fcmp "oeq" %arg0, %arg1 {fastmathFlags = #llvm.fastmath<fast>} : f32
   // CHECK-NEXT: return
   %1 = arith.cmpf oeq, %arg0, %arg1 : f32
   %2 = arith.cmpf ogt, %arg0, %arg1 : f32
@@ -345,6 +346,8 @@ func.func @fcmp(f32, f32) -> () {
   %12 = arith.cmpf ule, %arg0, %arg1 : f32
   %13 = arith.cmpf une, %arg0, %arg1 : f32
   %14 = arith.cmpf uno, %arg0, %arg1 : f32
+
+  %15 = arith.cmpf oeq, %arg0, %arg1 {fastmath = #arith.fastmath<fast>} : f32
 
   return
 }
@@ -522,10 +525,14 @@ func.func @minmaxi(%arg0 : i32, %arg1 : i32) -> i32 {
 
 // CHECK-LABEL: @minmaxf
 func.func @minmaxf(%arg0 : f32, %arg1 : f32) -> f32 {
+  // CHECK: = llvm.intr.minimum(%arg0, %arg1) : (f32, f32) -> f32
+  %0 = arith.minimumf %arg0, %arg1 : f32
+  // CHECK: = llvm.intr.maximum(%arg0, %arg1) : (f32, f32) -> f32
+  %1 = arith.maximumf %arg0, %arg1 : f32
   // CHECK: = llvm.intr.minnum(%arg0, %arg1) : (f32, f32) -> f32
-  %0 = arith.minf %arg0, %arg1 : f32
+  %2 = arith.minnumf %arg0, %arg1 : f32
   // CHECK: = llvm.intr.maxnum(%arg0, %arg1) : (f32, f32) -> f32
-  %1 = arith.maxf %arg0, %arg1 : f32
+  %3 = arith.maxnumf %arg0, %arg1 : f32
   return %0 : f32
 }
 
@@ -554,10 +561,10 @@ func.func @ops_supporting_fastmath(%arg0: f32, %arg1: f32, %arg2: i32) {
   %0 = arith.addf %arg0, %arg1 fastmath<fast> : f32
 // CHECK: llvm.fdiv %arg0, %arg1  {fastmathFlags = #llvm.fastmath<fast>} : f32
   %1 = arith.divf %arg0, %arg1 fastmath<fast> : f32
-// CHECK: llvm.intr.maxnum(%arg0, %arg1) {fastmathFlags = #llvm.fastmath<fast>} : (f32, f32) -> f32
-  %2 = arith.maxf %arg0, %arg1 fastmath<fast> : f32
-// CHECK: llvm.intr.minnum(%arg0, %arg1) {fastmathFlags = #llvm.fastmath<fast>} : (f32, f32) -> f32
-  %3 = arith.minf %arg0, %arg1 fastmath<fast> : f32
+// CHECK: llvm.intr.maximum(%arg0, %arg1) {fastmathFlags = #llvm.fastmath<fast>} : (f32, f32) -> f32
+  %2 = arith.maximumf %arg0, %arg1 fastmath<fast> : f32
+// CHECK: llvm.intr.minimum(%arg0, %arg1) {fastmathFlags = #llvm.fastmath<fast>} : (f32, f32) -> f32
+  %3 = arith.minimumf %arg0, %arg1 fastmath<fast> : f32
 // CHECK: llvm.fmul %arg0, %arg1  {fastmathFlags = #llvm.fastmath<fast>} : f32
   %4 = arith.mulf %arg0, %arg1 fastmath<fast> : f32
 // CHECK: llvm.fneg %arg0  {fastmathFlags = #llvm.fastmath<fast>} : f32

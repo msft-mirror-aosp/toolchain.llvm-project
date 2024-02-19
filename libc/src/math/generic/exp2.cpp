@@ -25,7 +25,7 @@
 
 #include <errno.h>
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE {
 
 using fputil::DoubleDouble;
 using fputil::TripleDouble;
@@ -104,7 +104,7 @@ Float128 poly_approx_f128(const Float128 &dx) {
   return p;
 }
 
-// Compute exp(x) using 128-bit precision.
+// Compute 2^(x) using 128-bit precision.
 // TODO(lntue): investigate triple-double precision implementation for this
 // step.
 Float128 exp2_f128(double x, int hi, int idx1, int idx2) {
@@ -192,15 +192,14 @@ double exp2_denorm(double x) {
 // Check for exceptional cases when:
 //  * log2(1 - 2^-54) < x < log2(1 + 2^-53)
 //  * x >= 1024
-//  * x <= -1075
+//  * x <= -1022
 //  * x is inf or nan
 double set_exceptional(double x) {
   using FPBits = typename fputil::FPBits<double>;
-  using FloatProp = typename fputil::FloatProperties<double>;
   FPBits xbits(x);
 
   uint64_t x_u = xbits.uintval();
-  uint64_t x_abs = x_u & FloatProp::EXP_MANT_MASK;
+  uint64_t x_abs = xbits.abs().uintval();
 
   // |x| < log2(1 + 2^-53)
   if (x_abs <= 0x3ca71547652b82fd) {
@@ -208,9 +207,9 @@ double set_exceptional(double x) {
     return fputil::multiply_add(x, 0.5, 1.0);
   }
 
-  // x <= 2^-1075 || x >= 1024 or inf/nan.
+  // x <= -1022 || x >= 1024 or inf/nan.
   if (x_u > 0xc08ff00000000000) {
-    // x <= 2^-1075 or -inf/nan
+    // x <= -1075 or -inf/nan
     if (x_u >= 0xc090cc0000000000) {
       // exp(-Inf) = 0
       if (xbits.is_inf())
@@ -221,7 +220,7 @@ double set_exceptional(double x) {
         return x;
 
       if (fputil::quick_get_round() == FE_UPWARD)
-        return static_cast<double>(FPBits(FPBits::MIN_SUBNORMAL));
+        return FPBits::min_denormal();
       fputil::set_errno_if_required(ERANGE);
       fputil::raise_except_if_required(FE_UNDERFLOW);
       return 0.0;
@@ -235,7 +234,7 @@ double set_exceptional(double x) {
   if (x_u < 0x7ff0'0000'0000'0000ULL) {
     int rounding = fputil::quick_get_round();
     if (rounding == FE_DOWNWARD || rounding == FE_TOWARDZERO)
-      return static_cast<double>(FPBits(FPBits::MAX_NORMAL));
+      return FPBits::max_normal();
 
     fputil::set_errno_if_required(ERANGE);
     fputil::raise_except_if_required(FE_OVERFLOW);
@@ -362,7 +361,7 @@ LLVM_LIBC_FUNCTION(double, exp2, (double x)) {
   if (LIBC_LIKELY(upper == lower)) {
     // To multiply by 2^hi, a fast way is to simply add hi to the exponent
     // field.
-    int64_t exp_hi = static_cast<int64_t>(hi) << FloatProp::MANTISSA_WIDTH;
+    int64_t exp_hi = static_cast<int64_t>(hi) << FloatProp::FRACTION_LEN;
     double r = cpp::bit_cast<double>(exp_hi + cpp::bit_cast<int64_t>(upper));
     return r;
   }
@@ -376,7 +375,7 @@ LLVM_LIBC_FUNCTION(double, exp2, (double x)) {
   if (LIBC_LIKELY(upper_dd == lower_dd)) {
     // To multiply by 2^hi, a fast way is to simply add hi to the exponent
     // field.
-    int64_t exp_hi = static_cast<int64_t>(hi) << FloatProp::MANTISSA_WIDTH;
+    int64_t exp_hi = static_cast<int64_t>(hi) << FloatProp::FRACTION_LEN;
     double r = cpp::bit_cast<double>(exp_hi + cpp::bit_cast<int64_t>(upper_dd));
     return r;
   }
@@ -387,4 +386,4 @@ LLVM_LIBC_FUNCTION(double, exp2, (double x)) {
   return static_cast<double>(r_f128);
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE

@@ -185,7 +185,7 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
   //
   // If we only have implicit uses of flat_scr on flat instructions, it is not
   // really needed.
-  if (Info.UsesFlatScratch && !MFI->hasFlatScratchInit() &&
+  if (Info.UsesFlatScratch && !MFI->getUserSGPRInfo().hasFlatScratchInit() &&
       (!hasAnyNonFlatUseOfReg(MRI, *TII, AMDGPU::FLAT_SCR) &&
        !hasAnyNonFlatUseOfReg(MRI, *TII, AMDGPU::FLAT_SCR_LO) &&
        !hasAnyNonFlatUseOfReg(MRI, *TII, AMDGPU::FLAT_SCR_HI))) {
@@ -346,8 +346,7 @@ AMDGPUResourceUsageAnalysis::analyzeResourceUsage(
           IsSGPR = true;
           Width = 1;
         } else if (AMDGPU::VGPR_32RegClass.contains(Reg) ||
-                   AMDGPU::VGPR_LO16RegClass.contains(Reg) ||
-                   AMDGPU::VGPR_HI16RegClass.contains(Reg)) {
+                   AMDGPU::VGPR_16RegClass.contains(Reg)) {
           IsSGPR = false;
           Width = 1;
         } else if (AMDGPU::AGPR_32RegClass.contains(Reg) ||

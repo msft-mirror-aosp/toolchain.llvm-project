@@ -282,7 +282,7 @@ class LoopPredication {
   Instruction *findInsertPt(Instruction *User, ArrayRef<Value*> Ops);
   /// Same as above, *except* that this uses the SCEV definition of invariant
   /// which is that an expression *can be made* invariant via SCEVExpander.
-  /// Thus, this version is only suitable for finding an insert point to be be
+  /// Thus, this version is only suitable for finding an insert point to be
   /// passed to SCEVExpander!
   Instruction *findInsertPt(const SCEVExpander &Expander, Instruction *User,
                             ArrayRef<const SCEV *> Ops);
@@ -327,48 +327,7 @@ public:
   bool runOnLoop(Loop *L);
 };
 
-class LoopPredicationLegacyPass : public LoopPass {
-public:
-  static char ID;
-  LoopPredicationLegacyPass() : LoopPass(ID) {
-    initializeLoopPredicationLegacyPassPass(*PassRegistry::getPassRegistry());
-  }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<BranchProbabilityInfoWrapperPass>();
-    getLoopAnalysisUsage(AU);
-    AU.addPreserved<MemorySSAWrapperPass>();
-  }
-
-  bool runOnLoop(Loop *L, LPPassManager &LPM) override {
-    if (skipLoop(L))
-      return false;
-    auto *SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-    auto *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-    auto *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    auto *MSSAWP = getAnalysisIfAvailable<MemorySSAWrapperPass>();
-    std::unique_ptr<MemorySSAUpdater> MSSAU;
-    if (MSSAWP)
-      MSSAU = std::make_unique<MemorySSAUpdater>(&MSSAWP->getMSSA());
-    auto *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
-    LoopPredication LP(AA, DT, SE, LI, MSSAU ? MSSAU.get() : nullptr);
-    return LP.runOnLoop(L);
-  }
-};
-
-char LoopPredicationLegacyPass::ID = 0;
 } // end namespace
-
-INITIALIZE_PASS_BEGIN(LoopPredicationLegacyPass, "loop-predication",
-                      "Loop predication", false, false)
-INITIALIZE_PASS_DEPENDENCY(BranchProbabilityInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopPass)
-INITIALIZE_PASS_END(LoopPredicationLegacyPass, "loop-predication",
-                    "Loop predication", false, false)
-
-Pass *llvm::createLoopPredicationPass() {
-  return new LoopPredicationLegacyPass();
-}
 
 PreservedAnalyses LoopPredicationPass::run(Loop &L, LoopAnalysisManager &AM,
                                            LoopStandardAnalysisResults &AR,
@@ -967,6 +926,9 @@ bool LoopPredication::isLoopProfitableToPredicate() {
           Numerator += Weight;
         Denominator += Weight;
       }
+      // If all weights are zero act as if there was no profile data
+      if (Denominator == 0)
+        return BranchProbability::getBranchProbability(1, NumSucc);
       return BranchProbability::getBranchProbability(Numerator, Denominator);
     } else {
       assert(LatchBlock != ExitingBlock &&
