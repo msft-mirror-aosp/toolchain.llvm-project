@@ -296,7 +296,7 @@ std::optional<MDNode *> llvm::makeFollowupLoopID(
         StringRef AttrName = cast<MDString>(NameMD)->getString();
 
         // Do not inherit excluded attributes.
-        return !AttrName.startswith(InheritOptionsExceptPrefix);
+        return !AttrName.starts_with(InheritOptionsExceptPrefix);
       };
 
       if (InheritThisAttribute(Op))
@@ -604,6 +604,7 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
   // Use a map to unique and a vector to guarantee deterministic ordering.
   llvm::SmallDenseSet<DebugVariable, 4> DeadDebugSet;
   llvm::SmallVector<DbgVariableIntrinsic *, 4> DeadDebugInst;
+  llvm::SmallVector<DPValue *, 4> DeadDPValues;
 
   if (ExitBlock) {
     // Given LCSSA form is satisfied, we should not have users of instructions
@@ -628,6 +629,24 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
                    "Unexpected user in reachable block");
           U.set(Poison);
         }
+
+        // RemoveDIs: do the same as below for DPValues.
+        if (Block->IsNewDbgInfoFormat) {
+          for (DPValue &DPV :
+               llvm::make_early_inc_range(I.getDbgValueRange())) {
+            DebugVariable Key(DPV.getVariable(), DPV.getExpression(),
+                              DPV.getDebugLoc().get());
+            if (!DeadDebugSet.insert(Key).second)
+              continue;
+            // Unlinks the DPV from it's container, for later insertion.
+            DPV.removeFromParent();
+            DeadDPValues.push_back(&DPV);
+          }
+        }
+
+        // For one of each variable encountered, preserve a debug intrinsic (set
+        // to Poison) and transfer it to the loop exit. This terminates any
+        // variable locations that were set during the loop.
         auto *DVI = dyn_cast<DbgVariableIntrinsic>(&I);
         if (!DVI)
           continue;
@@ -642,12 +661,22 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
     // be be replaced with undef. Loop invariant values will still be available.
     // Move dbg.values out the loop so that earlier location ranges are still
     // terminated and loop invariant assignments are preserved.
-    Instruction *InsertDbgValueBefore = ExitBlock->getFirstNonPHI();
-    assert(InsertDbgValueBefore &&
+    DIBuilder DIB(*ExitBlock->getModule());
+    BasicBlock::iterator InsertDbgValueBefore =
+        ExitBlock->getFirstInsertionPt();
+    assert(InsertDbgValueBefore != ExitBlock->end() &&
            "There should be a non-PHI instruction in exit block, else these "
            "instructions will have no parent.");
+
     for (auto *DVI : DeadDebugInst)
-      DVI->moveBefore(InsertDbgValueBefore);
+      DVI->moveBefore(*ExitBlock, InsertDbgValueBefore);
+
+    // Due to the "head" bit in BasicBlock::iterator, we're going to insert
+    // each DPValue right at the start of the block, wheras dbg.values would be
+    // repeatedly inserted before the first instruction. To replicate this
+    // behaviour, do it backwards.
+    for (DPValue *DPV : llvm::reverse(DeadDPValues))
+      ExitBlock->insertDPValueBefore(DPV, InsertDbgValueBefore);
   }
 
   // Remove the block from the reference counting scheme, so that we can
@@ -1024,9 +1053,7 @@ Value *llvm::getShuffleReduction(IRBuilderBase &Builder, Value *Src,
   return Builder.CreateExtractElement(TmpVec, Builder.getInt32(0));
 }
 
-Value *llvm::createAnyOfTargetReduction(IRBuilderBase &Builder,
-                                        const TargetTransformInfo *TTI,
-                                        Value *Src,
+Value *llvm::createAnyOfTargetReduction(IRBuilderBase &Builder, Value *Src,
                                         const RecurrenceDescriptor &Desc,
                                         PHINode *OrigPhi) {
   assert(
@@ -1064,9 +1091,8 @@ Value *llvm::createAnyOfTargetReduction(IRBuilderBase &Builder,
   return Builder.CreateSelect(Cmp, NewVal, InitVal, "rdx.select");
 }
 
-Value *llvm::createSimpleTargetReduction(IRBuilderBase &Builder,
-                                         const TargetTransformInfo *TTI,
-                                         Value *Src, RecurKind RdxKind) {
+Value *llvm::createSimpleTargetReduction(IRBuilderBase &Builder, Value *Src,
+                                         RecurKind RdxKind) {
   auto *SrcVecEltTy = cast<VectorType>(Src->getType())->getElementType();
   switch (RdxKind) {
   case RecurKind::Add:
@@ -1107,7 +1133,6 @@ Value *llvm::createSimpleTargetReduction(IRBuilderBase &Builder,
 }
 
 Value *llvm::createTargetReduction(IRBuilderBase &B,
-                                   const TargetTransformInfo *TTI,
                                    const RecurrenceDescriptor &Desc, Value *Src,
                                    PHINode *OrigPhi) {
   // TODO: Support in-order reductions based on the recurrence descriptor.
@@ -1118,9 +1143,9 @@ Value *llvm::createTargetReduction(IRBuilderBase &B,
 
   RecurKind RK = Desc.getRecurrenceKind();
   if (RecurrenceDescriptor::isAnyOfRecurrenceKind(RK))
-    return createAnyOfTargetReduction(B, TTI, Src, Desc, OrigPhi);
+    return createAnyOfTargetReduction(B, Src, Desc, OrigPhi);
 
-  return createSimpleTargetReduction(B, TTI, Src, RK);
+  return createSimpleTargetReduction(B, Src, RK);
 }
 
 Value *llvm::createOrderedReduction(IRBuilderBase &B,
@@ -1449,7 +1474,7 @@ int llvm::rewriteLoopExitValues(Loop *L, LoopInfo *LI, TargetLibraryInfo *TLI,
         // Note that we must not perform expansions until after
         // we query *all* the costs, because if we perform temporary expansion
         // inbetween, one that we might not intend to keep, said expansion
-        // *may* affect cost calculation of the the next SCEV's we'll query,
+        // *may* affect cost calculation of the next SCEV's we'll query,
         // and next SCEV may errneously get smaller cost.
 
         // Collect all the candidate PHINodes to be rewritten.
@@ -1694,7 +1719,7 @@ static PointerBounds expandBounds(const RuntimeCheckingPtrGroup *CG,
     End = Builder.CreateFreeze(End, End->getName() + ".fr");
   }
   Value *StrideVal =
-      Stride ? Exp.expandCodeFor(Stride, Type::getInt64Ty(Ctx), Loc) : nullptr;
+      Stride ? Exp.expandCodeFor(Stride, Stride->getType(), Loc) : nullptr;
   LLVM_DEBUG(dbgs() << "Start: " << *Low << " End: " << *High << "\n");
   return {Start, End, StrideVal};
 }
@@ -1791,23 +1816,31 @@ Value *llvm::addDiffRuntimeChecks(
   // Our instructions might fold to a constant.
   Value *MemoryRuntimeCheck = nullptr;
 
+  auto &SE = *Expander.getSE();
+  // Map to keep track of created compares, The key is the pair of operands for
+  // the compare, to allow detecting and re-using redundant compares.
+  DenseMap<std::pair<Value *, Value *>, Value *> SeenCompares;
   for (const auto &C : Checks) {
     Type *Ty = C.SinkStart->getType();
     // Compute VF * IC * AccessSize.
     auto *VFTimesUFTimesSize =
         ChkBuilder.CreateMul(GetVF(ChkBuilder, Ty->getScalarSizeInBits()),
                              ConstantInt::get(Ty, IC * C.AccessSize));
-    Value *Sink = Expander.expandCodeFor(C.SinkStart, Ty, Loc);
-    Value *Src = Expander.expandCodeFor(C.SrcStart, Ty, Loc);
-    if (C.NeedsFreeze) {
-      IRBuilder<> Builder(Loc);
-      Sink = Builder.CreateFreeze(Sink, Sink->getName() + ".fr");
-      Src = Builder.CreateFreeze(Src, Src->getName() + ".fr");
-    }
-    Value *Diff = ChkBuilder.CreateSub(Sink, Src);
-    Value *IsConflict =
-        ChkBuilder.CreateICmpULT(Diff, VFTimesUFTimesSize, "diff.check");
+    Value *Diff = Expander.expandCodeFor(
+        SE.getMinusSCEV(C.SinkStart, C.SrcStart), Ty, Loc);
 
+    // Check if the same compare has already been created earlier. In that case,
+    // there is no need to check it again.
+    Value *IsConflict = SeenCompares.lookup({Diff, VFTimesUFTimesSize});
+    if (IsConflict)
+      continue;
+
+    IsConflict =
+        ChkBuilder.CreateICmpULT(Diff, VFTimesUFTimesSize, "diff.check");
+    SeenCompares.insert({{Diff, VFTimesUFTimesSize}, IsConflict});
+    if (C.NeedsFreeze)
+      IsConflict =
+          ChkBuilder.CreateFreeze(IsConflict, IsConflict->getName() + ".fr");
     if (MemoryRuntimeCheck) {
       IsConflict =
           ChkBuilder.CreateOr(MemoryRuntimeCheck, IsConflict, "conflict.rdx");

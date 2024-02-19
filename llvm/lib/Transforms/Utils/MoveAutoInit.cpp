@@ -14,7 +14,6 @@
 #include "llvm/Transforms/Utils/MoveAutoInit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -202,7 +201,7 @@ static bool runMoveAutoInit(Function &F, DominatorTree &DT, MemorySSA &MSSA) {
   // if two instructions are moved from the same BB to the same BB, we insert
   // the second one in the front, then the first on top of it.
   for (auto &Job : reverse(JobList)) {
-    Job.first->moveBefore(&*Job.second->getFirstInsertionPt());
+    Job.first->moveBefore(*Job.second, Job.second->getFirstInsertionPt());
     MSSAU.moveToPlace(MSSA.getMemoryAccess(Job.first), Job.first->getParent(),
                       MemorySSA::InsertionPlace::Beginning);
   }

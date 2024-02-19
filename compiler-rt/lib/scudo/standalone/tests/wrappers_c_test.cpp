@@ -61,8 +61,14 @@ struct AllocContext {
 struct DeallocContext {
   void *Ptr;
 };
+struct ReallocContext {
+  void *AllocPtr;
+  void *DeallocPtr;
+  size_t Size;
+};
 static AllocContext AC;
 static DeallocContext DC;
+static ReallocContext RC;
 
 #if (SCUDO_ENABLE_HOOKS_TESTS == 1)
 __attribute__((visibility("default"))) void __scudo_allocate_hook(void *Ptr,
@@ -72,6 +78,28 @@ __attribute__((visibility("default"))) void __scudo_allocate_hook(void *Ptr,
 }
 __attribute__((visibility("default"))) void __scudo_deallocate_hook(void *Ptr) {
   DC.Ptr = Ptr;
+}
+__attribute__((visibility("default"))) void
+__scudo_realloc_allocate_hook(void *OldPtr, void *NewPtr, size_t Size) {
+  // Verify that __scudo_realloc_deallocate_hook is called first and set the
+  // right pointer.
+  EXPECT_EQ(OldPtr, RC.DeallocPtr);
+  RC.AllocPtr = NewPtr;
+  RC.Size = Size;
+
+  // Note that this is only used for testing. In general, only one pair of hooks
+  // will be invoked in `realloc`. if __scudo_realloc_*_hook are not defined,
+  // it'll call the general hooks only. To make the test easier, we call the
+  // general one here so that either case (whether __scudo_realloc_*_hook are
+  // defined) will be verified without separating them into different tests.
+  __scudo_allocate_hook(NewPtr, Size);
+}
+__attribute__((visibility("default"))) void
+__scudo_realloc_deallocate_hook(void *Ptr) {
+  RC.DeallocPtr = Ptr;
+
+  // See the comment in the __scudo_realloc_allocate_hook above.
+  __scudo_deallocate_hook(Ptr);
 }
 #endif // (SCUDO_ENABLE_HOOKS_TESTS == 1)
 }
@@ -83,9 +111,13 @@ protected:
       printf("Hooks are enabled but hooks tests are disabled.\n");
   }
 
-  void invalidateAllocHookPtrAs(UNUSED void *Ptr) {
-    if (SCUDO_ENABLE_HOOKS_TESTS)
-      AC.Ptr = Ptr;
+  void invalidateHookPtrs() {
+    if (SCUDO_ENABLE_HOOKS_TESTS) {
+      void *InvalidPtr = reinterpret_cast<void *>(0xdeadbeef);
+      AC.Ptr = InvalidPtr;
+      DC.Ptr = InvalidPtr;
+      RC.AllocPtr = RC.DeallocPtr = InvalidPtr;
+    }
   }
   void verifyAllocHookPtr(UNUSED void *Ptr) {
     if (SCUDO_ENABLE_HOOKS_TESTS)
@@ -98,6 +130,13 @@ protected:
   void verifyDeallocHookPtr(UNUSED void *Ptr) {
     if (SCUDO_ENABLE_HOOKS_TESTS)
       EXPECT_EQ(Ptr, DC.Ptr);
+  }
+  void verifyReallocHookPtrs(UNUSED void *OldPtr, void *NewPtr, size_t Size) {
+    if (SCUDO_ENABLE_HOOKS_TESTS) {
+      EXPECT_EQ(OldPtr, RC.DeallocPtr);
+      EXPECT_EQ(NewPtr, RC.AllocPtr);
+      EXPECT_EQ(Size, RC.Size);
+    }
   }
 };
 using ScudoWrappersCDeathTest = ScudoWrappersCTest;
@@ -258,6 +297,7 @@ TEST_F(ScudoWrappersCTest, AlignedAlloc) {
 }
 
 TEST_F(ScudoWrappersCDeathTest, Realloc) {
+  invalidateHookPtrs();
   // realloc(nullptr, N) is malloc(N)
   void *P = realloc(nullptr, Size);
   EXPECT_NE(P, nullptr);
@@ -266,6 +306,7 @@ TEST_F(ScudoWrappersCDeathTest, Realloc) {
   free(P);
   verifyDeallocHookPtr(P);
 
+  invalidateHookPtrs();
   P = malloc(Size);
   EXPECT_NE(P, nullptr);
   // realloc(P, 0U) is free(P) and returns nullptr
@@ -277,7 +318,7 @@ TEST_F(ScudoWrappersCDeathTest, Realloc) {
   EXPECT_LE(Size, malloc_usable_size(P));
   memset(P, 0x42, Size);
 
-  invalidateAllocHookPtrAs(reinterpret_cast<void *>(0xdeadbeef));
+  invalidateHookPtrs();
   void *OldP = P;
   P = realloc(P, Size * 2U);
   EXPECT_NE(P, nullptr);
@@ -285,14 +326,16 @@ TEST_F(ScudoWrappersCDeathTest, Realloc) {
   for (size_t I = 0; I < Size; I++)
     EXPECT_EQ(0x42, (reinterpret_cast<uint8_t *>(P))[I]);
   if (OldP == P) {
-    verifyAllocHookPtr(reinterpret_cast<void *>(0xdeadbeef));
+    verifyDeallocHookPtr(OldP);
+    verifyAllocHookPtr(OldP);
   } else {
     verifyAllocHookPtr(P);
     verifyAllocHookSize(Size * 2U);
     verifyDeallocHookPtr(OldP);
   }
+  verifyReallocHookPtrs(OldP, P, Size * 2U);
 
-  invalidateAllocHookPtrAs(reinterpret_cast<void *>(0xdeadbeef));
+  invalidateHookPtrs();
   OldP = P;
   P = realloc(P, Size / 2U);
   EXPECT_NE(P, nullptr);
@@ -300,11 +343,13 @@ TEST_F(ScudoWrappersCDeathTest, Realloc) {
   for (size_t I = 0; I < Size / 2U; I++)
     EXPECT_EQ(0x42, (reinterpret_cast<uint8_t *>(P))[I]);
   if (OldP == P) {
-    verifyAllocHookPtr(reinterpret_cast<void *>(0xdeadbeef));
+    verifyDeallocHookPtr(OldP);
+    verifyAllocHookPtr(OldP);
   } else {
     verifyAllocHookPtr(P);
     verifyAllocHookSize(Size / 2U);
   }
+  verifyReallocHookPtrs(OldP, P, Size / 2U);
   free(P);
 
   EXPECT_DEATH(P = realloc(P, Size), "");
@@ -386,28 +431,38 @@ TEST_F(ScudoWrappersCTest, OtherAlloc) {
 #endif
 }
 
-#if !SCUDO_FUCHSIA
-TEST_F(ScudoWrappersCTest, MallInfo) {
+template<typename FieldType>
+void MallInfoTest() {
   // mallinfo is deprecated.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  const size_t BypassQuarantineSize = 1024U;
+  const FieldType BypassQuarantineSize = 1024U;
   struct mallinfo MI = mallinfo();
-  size_t Allocated = MI.uordblks;
+  FieldType Allocated = MI.uordblks;
   void *P = malloc(BypassQuarantineSize);
   EXPECT_NE(P, nullptr);
   MI = mallinfo();
-  EXPECT_GE(static_cast<size_t>(MI.uordblks), Allocated + BypassQuarantineSize);
-  EXPECT_GT(static_cast<size_t>(MI.hblkhd), 0U);
-  size_t Free = MI.fordblks;
+  EXPECT_GE(MI.uordblks, Allocated + BypassQuarantineSize);
+  EXPECT_GT(MI.hblkhd, static_cast<FieldType>(0));
+  FieldType Free = MI.fordblks;
   free(P);
   MI = mallinfo();
-  EXPECT_GE(static_cast<size_t>(MI.fordblks), Free + BypassQuarantineSize);
+  EXPECT_GE(MI.fordblks, Free + BypassQuarantineSize);
 #pragma clang diagnostic pop
+}
+
+#if !SCUDO_FUCHSIA
+TEST_F(ScudoWrappersCTest, MallInfo) {
+#if SCUDO_ANDROID
+  // Android accidentally set the fields to size_t instead of int.
+  MallInfoTest<size_t>();
+#else
+  MallInfoTest<int>();
+#endif
 }
 #endif
 
-#if __GLIBC_PREREQ(2, 33)
+#if __GLIBC_PREREQ(2, 33) || SCUDO_ANDROID
 TEST_F(ScudoWrappersCTest, MallInfo2) {
   const size_t BypassQuarantineSize = 1024U;
   struct mallinfo2 MI = mallinfo2();

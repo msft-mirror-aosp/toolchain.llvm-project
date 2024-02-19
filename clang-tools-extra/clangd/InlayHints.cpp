@@ -286,7 +286,7 @@ std::string summarizeExpr(const Expr *E) {
     // Step through implicit nodes that clang doesn't classify as such.
     std::string VisitCXXMemberCallExpr(const CXXMemberCallExpr *E) {
       // Call to operator bool() inside if (X): dispatch to X.
-      if (E->getNumArgs() == 0 &&
+      if (E->getNumArgs() == 0 && E->getMethodDecl() &&
           E->getMethodDecl()->getDeclName().getNameKind() ==
               DeclarationName::CXXConversionFunctionName &&
           E->getSourceRange() ==
@@ -528,6 +528,13 @@ static FunctionProtoTypeLoc getPrototypeLoc(Expr *Fn) {
   return {};
 }
 
+ArrayRef<const ParmVarDecl *>
+maybeDropCxxExplicitObjectParameters(ArrayRef<const ParmVarDecl *> Params) {
+  if (!Params.empty() && Params.front()->isExplicitObjectParameter())
+    Params = Params.drop_front(1);
+  return Params;
+}
+
 struct Callee {
   // Only one of Decl or Loc is set.
   // Loc is for calls through function pointers.
@@ -582,15 +589,42 @@ public:
     return true;
   }
 
+  // Carefully recurse into PseudoObjectExprs, which typically incorporate
+  // a syntactic expression and several semantic expressions.
+  bool TraversePseudoObjectExpr(PseudoObjectExpr *E) {
+    Expr *SyntacticExpr = E->getSyntacticForm();
+    if (isa<CallExpr>(SyntacticExpr))
+      // Since the counterpart semantics usually get the identical source
+      // locations as the syntactic one, visiting those would end up presenting
+      // confusing hints e.g., __builtin_dump_struct.
+      // Thus, only traverse the syntactic forms if this is written as a
+      // CallExpr. This leaves the door open in case the arguments in the
+      // syntactic form could possibly get parameter names.
+      return RecursiveASTVisitor<InlayHintVisitor>::TraverseStmt(SyntacticExpr);
+    // We don't want the hints for some of the MS property extensions.
+    // e.g.
+    // struct S {
+    //   __declspec(property(get=GetX, put=PutX)) int x[];
+    //   void PutX(int y);
+    //   void Work(int y) { x = y; } // Bad: `x = y: y`.
+    // };
+    if (isa<BinaryOperator>(SyntacticExpr))
+      return true;
+    // FIXME: Handle other forms of a pseudo object expression.
+    return RecursiveASTVisitor<InlayHintVisitor>::TraversePseudoObjectExpr(E);
+  }
+
   bool VisitCallExpr(CallExpr *E) {
     if (!Cfg.InlayHints.Parameters)
       return true;
 
-    // Do not show parameter hints for operator calls written using operator
-    // syntax or user-defined literals. (Among other reasons, the resulting
+    bool IsFunctor = isFunctionObjectCallExpr(E);
+    // Do not show parameter hints for user-defined literals or
+    // operator calls except for operator(). (Among other reasons, the resulting
     // hints can look awkward, e.g. the expression can itself be a function
     // argument and then we'd get two hints side by side).
-    if (isa<CXXOperatorCallExpr>(E) || isa<UserDefinedLiteral>(E))
+    if ((isa<CXXOperatorCallExpr>(E) && !IsFunctor) ||
+        isa<UserDefinedLiteral>(E))
       return true;
 
     auto CalleeDecls = Resolver->resolveCalleeOfCallExpr(E);
@@ -607,7 +641,28 @@ public:
     else
       return true;
 
-    processCall(Callee, {E->getArgs(), E->getNumArgs()});
+    // N4868 [over.call.object]p3 says,
+    // The argument list submitted to overload resolution consists of the
+    // argument expressions present in the function call syntax preceded by the
+    // implied object argument (E).
+    //
+    // As well as the provision from P0847R7 Deducing This [expr.call]p7:
+    // ...If the function is an explicit object member function and there is an
+    // implied object argument ([over.call.func]), the list of provided
+    // arguments is preceded by the implied object argument for the purposes of
+    // this correspondence...
+    //
+    // However, we don't have the implied object argument
+    // for static operator() per clang::Sema::BuildCallToObjectOfClassType.
+    llvm::ArrayRef<const Expr *> Args = {E->getArgs(), E->getNumArgs()};
+    // We don't have the implied object argument through a function pointer
+    // either.
+    if (const CXXMethodDecl *Method =
+            dyn_cast_or_null<CXXMethodDecl>(Callee.Decl))
+      if (Method->isInstance() &&
+          (IsFunctor || Method->hasCXXExplicitFunctionObjectParameter()))
+        Args = Args.drop_front(1);
+    processCall(Callee, Args);
     return true;
   }
 
@@ -832,15 +887,18 @@ private:
         if (Ctor->isCopyOrMoveConstructor())
           return;
 
-    auto Params =
-        Callee.Decl ? Callee.Decl->parameters() : Callee.Loc.getParams();
-
+    ArrayRef<const ParmVarDecl *> Params, ForwardedParams;
     // Resolve parameter packs to their forwarded parameter
-    SmallVector<const ParmVarDecl *> ForwardedParams;
-    if (Callee.Decl)
-      ForwardedParams = resolveForwardingParameters(Callee.Decl);
-    else
+    SmallVector<const ParmVarDecl *> ForwardedParamsStorage;
+    if (Callee.Decl) {
+      Params = maybeDropCxxExplicitObjectParameters(Callee.Decl->parameters());
+      ForwardedParamsStorage = resolveForwardingParameters(Callee.Decl);
+      ForwardedParams =
+          maybeDropCxxExplicitObjectParameters(ForwardedParamsStorage);
+    } else {
+      Params = maybeDropCxxExplicitObjectParameters(Callee.Loc.getParams());
       ForwardedParams = {Params.begin(), Params.end()};
+    }
 
     NameVec ParameterNames = chooseParameterNames(ForwardedParams);
 
@@ -982,7 +1040,7 @@ private:
     if (!SourcePrefix.consume_back(ParamName))
       return false;
     SourcePrefix = SourcePrefix.rtrim(IgnoreChars);
-    return SourcePrefix.endswith("/*");
+    return SourcePrefix.ends_with("/*");
   }
 
   // If "E" spells a single unqualified identifier, return that name.
@@ -1001,7 +1059,7 @@ private:
     return {};
   }
 
-  NameVec chooseParameterNames(SmallVector<const ParmVarDecl *> Parameters) {
+  NameVec chooseParameterNames(ArrayRef<const ParmVarDecl *> Parameters) {
     NameVec ParameterNames;
     for (const auto *P : Parameters) {
       if (isExpandedFromParameterPack(P)) {
@@ -1201,6 +1259,12 @@ private:
     Position HintEnd = sourceLocToPosition(
         SM, RBraceLoc.getLocWithOffset(HintRangeText.size()));
     return Range{HintStart, HintEnd};
+  }
+
+  static bool isFunctionObjectCallExpr(CallExpr *E) noexcept {
+    if (auto *CallExpr = dyn_cast<CXXOperatorCallExpr>(E))
+      return CallExpr->getOperator() == OverloadedOperatorKind::OO_Call;
+    return false;
   }
 
   std::vector<InlayHint> &Results;

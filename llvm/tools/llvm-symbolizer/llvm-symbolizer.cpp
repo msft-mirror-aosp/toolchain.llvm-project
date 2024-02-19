@@ -32,6 +32,7 @@
 #include "llvm/Support/COM.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LLVMDriver.h"
@@ -80,10 +81,10 @@ public:
 
 static std::string ToolName;
 
-static void printError(const ErrorInfoBase &EI, StringRef Path) {
+static void printError(const ErrorInfoBase &EI, StringRef AuxInfo) {
   WithColor::error(errs(), ToolName);
-  if (!EI.isA<FileError>())
-    errs() << "'" << Path << "': ";
+  if (!AuxInfo.empty())
+    errs() << "'" << AuxInfo << "': ";
   EI.log(errs());
   errs() << '\n';
 }
@@ -151,10 +152,14 @@ static StringRef getSpaceDelimitedWord(StringRef &Source) {
   return Result;
 }
 
-static bool parseCommand(StringRef BinaryName, bool IsAddr2Line,
-                         StringRef InputString, Command &Cmd,
-                         std::string &ModuleName, object::BuildID &BuildID,
-                         uint64_t &ModuleOffset) {
+static Error makeStringError(StringRef Msg) {
+  return make_error<StringError>(Msg, inconvertibleErrorCode());
+}
+
+static Error parseCommand(StringRef BinaryName, bool IsAddr2Line,
+                          StringRef InputString, Command &Cmd,
+                          std::string &ModuleName, object::BuildID &BuildID,
+                          StringRef &Symbol, uint64_t &Offset) {
   ModuleName = BinaryName;
   if (InputString.consume_front("CODE ")) {
     Cmd = Command::Code;
@@ -174,34 +179,40 @@ static bool parseCommand(StringRef BinaryName, bool IsAddr2Line,
     InputString = InputString.ltrim();
     if (InputString.consume_front("FILE:")) {
       if (HasFilePrefix || HasBuildIDPrefix)
-        // Input file specification prefix has already been seen.
-        return false;
+        return makeStringError("duplicate input file specification prefix");
       HasFilePrefix = true;
       continue;
     }
     if (InputString.consume_front("BUILDID:")) {
       if (HasBuildIDPrefix || HasFilePrefix)
-        // Input file specification prefix has already been seen.
-        return false;
+        return makeStringError("duplicate input file specification prefix");
       HasBuildIDPrefix = true;
       continue;
     }
     break;
   }
 
+  // If an input file is not specified on the command line, try to extract it
+  // from the command.
   if (HasBuildIDPrefix || HasFilePrefix) {
+    InputString = InputString.ltrim();
+    if (InputString.empty()) {
+      if (HasFilePrefix)
+        return makeStringError("must be followed by an input file");
+      else
+        return makeStringError("must be followed by a hash");
+    }
+
     if (!BinaryName.empty() || !BuildID.empty())
-      // Input file has already been specified on the command line.
-      return false;
+      return makeStringError("input file has already been specified");
+
     StringRef Name = getSpaceDelimitedWord(InputString);
     if (Name.empty())
-      // Wrong name for module file.
-      return false;
+      return makeStringError("unbalanced quotes in input file name");
     if (HasBuildIDPrefix) {
       BuildID = parseBuildID(Name);
       if (BuildID.empty())
-        // Wrong format of BuildID hash.
-        return false;
+        return makeStringError("wrong format of build-id");
     } else {
       ModuleName = Name;
     }
@@ -209,37 +220,81 @@ static bool parseCommand(StringRef BinaryName, bool IsAddr2Line,
     // No input file has been specified. If the input string contains at least
     // two items, assume that the first item is a file name.
     ModuleName = getSpaceDelimitedWord(InputString);
-    if (ModuleName.empty() || InputString.empty())
-      // No input filename has been specified.
-      return false;
+    if (ModuleName.empty())
+      return makeStringError("no input filename has been specified");
   }
 
-  // Skip delimiters and parse module offset.
-  InputString = InputString.ltrim();
-  int OffsetLength = InputString.find_first_of(" \n\r");
-  StringRef Offset = InputString.substr(0, OffsetLength);
-  // GNU addr2line assumes the offset is hexadecimal and allows a redundant
+  // Parse address specification, which can be an offset in module or a
+  // symbol with optional offset.
+  InputString = InputString.trim();
+  if (InputString.empty())
+    return makeStringError("no module offset has been specified");
+
+  // If input string contains a space, ignore everything after it. This behavior
+  // is consistent with GNU addr2line.
+  int AddrSpecLength = InputString.find_first_of(" \n\r");
+  StringRef AddrSpec = InputString.substr(0, AddrSpecLength);
+  bool StartsWithDigit = std::isdigit(AddrSpec.front());
+
+  // GNU addr2line assumes the address is hexadecimal and allows a redundant
   // "0x" or "0X" prefix; do the same for compatibility.
   if (IsAddr2Line)
-    Offset.consume_front("0x") || Offset.consume_front("0X");
-  return !Offset.getAsInteger(IsAddr2Line ? 16 : 0, ModuleOffset);
+    AddrSpec.consume_front("0x") || AddrSpec.consume_front("0X");
+
+  // If address specification is a number, treat it as a module offset.
+  if (!AddrSpec.getAsInteger(IsAddr2Line ? 16 : 0, Offset)) {
+    // Module offset is an address.
+    Symbol = StringRef();
+    return Error::success();
+  }
+
+  // If address specification starts with a digit, but is not a number, consider
+  // it as invalid.
+  if (StartsWithDigit || AddrSpec.empty())
+    return makeStringError("expected a number as module offset");
+
+  // Otherwise it is a symbol name, potentially with an offset.
+  Symbol = AddrSpec;
+  Offset = 0;
+
+  // If the address specification contains '+', try treating it as
+  // "symbol + offset".
+  size_t Plus = AddrSpec.rfind('+');
+  if (Plus != StringRef::npos) {
+    StringRef SymbolStr = AddrSpec.take_front(Plus);
+    StringRef OffsetStr = AddrSpec.substr(Plus + 1);
+    if (!SymbolStr.empty() && !OffsetStr.empty() &&
+        !OffsetStr.getAsInteger(0, Offset)) {
+      Symbol = SymbolStr;
+      return Error::success();
+    }
+    // The found '+' is not an offset delimiter.
+  }
+
+  return Error::success();
 }
 
 template <typename T>
 void executeCommand(StringRef ModuleName, const T &ModuleSpec, Command Cmd,
-                    uint64_t Offset, uint64_t AdjustVMA, bool ShouldInline,
-                    OutputStyle Style, LLVMSymbolizer &Symbolizer,
-                    DIPrinter &Printer) {
+                    StringRef Symbol, uint64_t Offset, uint64_t AdjustVMA,
+                    bool ShouldInline, OutputStyle Style,
+                    LLVMSymbolizer &Symbolizer, DIPrinter &Printer) {
   uint64_t AdjustedOffset = Offset - AdjustVMA;
   object::SectionedAddress Address = {AdjustedOffset,
                                       object::SectionedAddress::UndefSection};
-  Request SymRequest = {ModuleName, Offset};
+  Request SymRequest = {
+      ModuleName, Symbol.empty() ? std::make_optional(Offset) : std::nullopt,
+      Symbol};
   if (Cmd == Command::Data) {
     Expected<DIGlobal> ResOrErr = Symbolizer.symbolizeData(ModuleSpec, Address);
     print(SymRequest, ResOrErr, Printer);
   } else if (Cmd == Command::Frame) {
     Expected<std::vector<DILocal>> ResOrErr =
         Symbolizer.symbolizeFrame(ModuleSpec, Address);
+    print(SymRequest, ResOrErr, Printer);
+  } else if (!Symbol.empty()) {
+    Expected<std::vector<DILineInfo>> ResOrErr =
+        Symbolizer.findSymbol(ModuleSpec, Symbol, Offset);
     print(SymRequest, ResOrErr, Printer);
   } else if (ShouldInline) {
     Expected<DIInliningInfo> ResOrErr =
@@ -268,6 +323,11 @@ void executeCommand(StringRef ModuleName, const T &ModuleSpec, Command Cmd,
   Symbolizer.pruneCache();
 }
 
+static void printUnknownLineInfo(std::string ModuleName, DIPrinter &Printer) {
+  Request SymRequest = {ModuleName, std::nullopt, StringRef()};
+  Printer.print(SymRequest, DILineInfo());
+}
+
 static void symbolizeInput(const opt::InputArgList &Args,
                            object::BuildIDRef IncomingBuildID,
                            uint64_t AdjustVMA, bool IsAddr2Line,
@@ -277,9 +337,14 @@ static void symbolizeInput(const opt::InputArgList &Args,
   std::string ModuleName;
   object::BuildID BuildID(IncomingBuildID.begin(), IncomingBuildID.end());
   uint64_t Offset = 0;
-  if (!parseCommand(Args.getLastArgValue(OPT_obj_EQ), IsAddr2Line,
-                    StringRef(InputString), Cmd, ModuleName, BuildID, Offset)) {
-    Printer.printInvalidCommand({ModuleName, std::nullopt}, InputString);
+  StringRef Symbol;
+  if (Error E = parseCommand(Args.getLastArgValue(OPT_obj_EQ), IsAddr2Line,
+                             StringRef(InputString), Cmd, ModuleName, BuildID,
+                             Symbol, Offset)) {
+    handleAllErrors(std::move(E), [&](const StringError &EI) {
+      printError(EI, InputString);
+      printUnknownLineInfo(ModuleName, Printer);
+    });
     return;
   }
   bool ShouldInline = Args.hasFlag(OPT_inlines, OPT_no_inlines, !IsAddr2Line);
@@ -288,11 +353,11 @@ static void symbolizeInput(const opt::InputArgList &Args,
     if (!Args.hasArg(OPT_no_debuginfod))
       enableDebuginfod(Symbolizer, Args);
     std::string BuildIDStr = toHex(BuildID);
-    executeCommand(BuildIDStr, BuildID, Cmd, Offset, AdjustVMA, ShouldInline,
-                   Style, Symbolizer, Printer);
+    executeCommand(BuildIDStr, BuildID, Cmd, Symbol, Offset, AdjustVMA,
+                   ShouldInline, Style, Symbolizer, Printer);
   } else {
-    executeCommand(ModuleName, ModuleName, Cmd, Offset, AdjustVMA, ShouldInline,
-                   Style, Symbolizer, Printer);
+    executeCommand(ModuleName, ModuleName, Cmd, Symbol, Offset, AdjustVMA,
+                   ShouldInline, Style, Symbolizer, Printer);
   }
 }
 
@@ -391,7 +456,7 @@ static void filterMarkup(const opt::InputArgList &Args, LLVMSymbolizer &Symboliz
   std::string InputString;
   while (std::getline(std::cin, InputString)) {
     InputString += '\n';
-    Filter.filter(InputString);
+    Filter.filter(std::move(InputString));
   }
   Filter.finish();
 }
@@ -496,7 +561,7 @@ int llvm_symbolizer_main(int argc, char **argv, const llvm::ToolContext &) {
   if (auto *Arg = Args.getLastArg(OPT_obj_EQ); Arg) {
     auto Status = Symbolizer.getOrCreateModuleInfo(Arg->getValue());
     if (!Status) {
-      Request SymRequest = {Arg->getValue(), 0};
+      Request SymRequest = {Arg->getValue(), 0, StringRef()};
       handleAllErrors(Status.takeError(), [&](const ErrorInfoBase &EI) {
         Printer->printError(SymRequest, EI);
       });

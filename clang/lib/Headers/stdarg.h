@@ -7,9 +7,31 @@
  *===-----------------------------------------------------------------------===
  */
 
-#if !defined(__STDARG_H) || defined(__need___va_list) ||                       \
-    defined(__need_va_list) || defined(__need_va_arg) ||                       \
-    defined(__need___va_copy) || defined(__need_va_copy)
+/*
+ * This header is designed to be included multiple times. If any of the __need_
+ * macros are defined, then only that subset of interfaces are provided. This
+ * can be useful for POSIX headers that need to not expose all of stdarg.h, but
+ * need to use some of its interfaces. Otherwise this header provides all of
+ * the expected interfaces.
+ *
+ * When clang modules are enabled, this header is a textual header. It ignores
+ * its header guard so that multiple submodules can export its interfaces.
+ * Take module SM with submodules A and B, whose headers both include stdarg.h
+ * When SM.A builds, __STDARG_H will be defined. When SM.B builds, the
+ * definition from SM.A will leak when building without local submodule
+ * visibility. stdarg.h wouldn't include any of its implementation headers, and
+ * SM.B wouldn't import any of the stdarg modules, and SM.B's `export *`
+ * wouldn't export any stdarg interfaces as expected. However, since stdarg.h
+ * ignores its header guard when building with modules, it all works as
+ * expected.
+ *
+ * When clang modules are not enabled, the header guards can function in the
+ * normal simple fashion.
+ */
+#if !defined(__STDARG_H) || __has_feature(modules) ||                          \
+    defined(__need___va_list) || defined(__need_va_list) ||                    \
+    defined(__need_va_arg) || defined(__need___va_copy) ||                     \
+    defined(__need_va_copy)
 
 #if !defined(__need___va_list) && !defined(__need_va_list) &&                  \
     !defined(__need_va_arg) && !defined(__need___va_copy) &&                   \
@@ -30,41 +52,27 @@
 #endif
 
 #ifdef __need___va_list
-#ifndef __GNUC_VA_LIST
-#define __GNUC_VA_LIST
-typedef __builtin_va_list __gnuc_va_list;
-#endif
+#include <__stdarg___gnuc_va_list.h>
 #undef __need___va_list
 #endif /* defined(__need___va_list) */
 
 #ifdef __need_va_list
-#ifndef _VA_LIST
-typedef __builtin_va_list va_list;
-#define _VA_LIST
-#endif
+#include <__stdarg_va_list.h>
 #undef __need_va_list
 #endif /* defined(__need_va_list) */
 
 #ifdef __need_va_arg
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
-/* C23 does not require the second parameter for va_start. */
-#define va_start(ap, ...) __builtin_va_start(ap, 0)
-#else
-/* Versions before C23 do require the second parameter. */
-#define va_start(ap, param) __builtin_va_start(ap, param)
-#endif
-#define va_end(ap)          __builtin_va_end(ap)
-#define va_arg(ap, type)    __builtin_va_arg(ap, type)
+#include <__stdarg_va_arg.h>
 #undef __need_va_arg
 #endif /* defined(__need_va_arg) */
 
 #ifdef __need___va_copy
-#define __va_copy(d,s) __builtin_va_copy(d,s)
+#include <__stdarg___va_copy.h>
 #undef __need___va_copy
 #endif /* defined(__need___va_copy) */
 
 #ifdef __need_va_copy
-#define va_copy(dest, src)  __builtin_va_copy(dest, src)
+#include <__stdarg_va_copy.h>
 #undef __need_va_copy
 #endif /* defined(__need_va_copy) */
 

@@ -17,13 +17,19 @@ set -ex
 set -o pipefail
 
 MONOREPO_ROOT="${MONOREPO_ROOT:="$(git rev-parse --show-toplevel)"}"
-BUILD_DIR="${BUILD_DIR:=${MONOREPO_ROOT}/build/monolithic-windows}"
+BUILD_DIR="${BUILD_DIR:=${MONOREPO_ROOT}/build}"
 
 rm -rf ${BUILD_DIR}
 
+if [[ -n "${CLEAR_CACHE:-}" ]]; then
+  echo "clearing sccache"
+  rm -rf "$SCCACHE_DIR"
+fi
+
 sccache --zero-stats
 function show-stats {
-  sccache --show-stats
+  mkdir -p artifacts
+  sccache --show-stats >> artifacts/sccache_stats.txt
 }
 trap show-stats EXIT
 
@@ -42,7 +48,9 @@ cmake -S ${MONOREPO_ROOT}/llvm -B ${BUILD_DIR} \
       -D LLVM_LIT_ARGS="-v --xunit-xml-output ${BUILD_DIR}/test-results.xml" \
       -D COMPILER_RT_BUILD_ORC=OFF \
       -D CMAKE_C_COMPILER_LAUNCHER=sccache \
-      -D CMAKE_CXX_COMPILER_LAUNCHER=sccache
+      -D CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+      -D MLIR_ENABLE_BINDINGS_PYTHON=ON
 
 echo "--- ninja"
-ninja -C ${BUILD_DIR} ${targets}
+# Targets are not escaped as they are passed as separate arguments.
+ninja -C "${BUILD_DIR}" ${targets}
