@@ -17,6 +17,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -54,6 +55,9 @@ namespace llvm {
     using iterator = const char *;
     using const_iterator = const char *;
     using size_type = size_t;
+    using value_type = char;
+    using reverse_iterator = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
   private:
     /// The start of the string, in an external buffer.
@@ -112,6 +116,14 @@ namespace llvm {
 
     iterator end() const { return Data + Length; }
 
+    reverse_iterator rbegin() const {
+      return std::make_reverse_iterator(end());
+    }
+
+    reverse_iterator rend() const {
+      return std::make_reverse_iterator(begin());
+    }
+
     const unsigned char *bytes_begin() const {
       return reinterpret_cast<const unsigned char *>(begin());
     }
@@ -157,13 +169,6 @@ namespace llvm {
       char *S = A.template Allocate<char>(Length);
       std::copy(begin(), end(), S);
       return StringRef(S, Length);
-    }
-
-    /// equals - Check for string equality, this is more efficient than
-    /// compare() when the relative ordering of inequal strings isn't needed.
-    [[nodiscard]] bool equals(StringRef RHS) const {
-      return (Length == RHS.Length &&
-              compareMemory(Data, RHS.Data, RHS.Length) == 0);
     }
 
     /// Check for string equality, ignoring case.

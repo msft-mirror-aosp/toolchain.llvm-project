@@ -126,6 +126,10 @@ public:
   /// branched to.
   void getExitBlocks(SmallVectorImpl<BlockT *> &TmpStorage) const;
 
+  /// Return all blocks of this cycle that have successor outside of this cycle.
+  /// These blocks have cycle exit branch.
+  void getExitingBlocks(SmallVectorImpl<BlockT *> &TmpStorage) const;
+
   /// Return the preheader block for this cycle. Pre-header is well-defined for
   /// reducible cycle in docs/LoopTerminology.rst as: the only one entering
   /// block and its only edge is to the entry block. Return null for irreducible
@@ -135,6 +139,9 @@ public:
   /// If the cycle has exactly one entry with exactly one predecessor, return
   /// it, otherwise return nullptr.
   BlockT *getCyclePredecessor() const;
+
+  void verifyCycle() const;
+  void verifyCycleNest() const;
 
   /// Iteration over child cycles.
   //@{
@@ -273,9 +280,8 @@ public:
 
   /// Methods for debug and self-test.
   //@{
-#ifndef NDEBUG
-  bool validateTree() const;
-#endif
+  void verifyCycleNest(bool VerifyFull = false) const;
+  void verify() const;
   void print(raw_ostream &Out) const;
   void dump() const { print(dbgs()); }
   Printable print(const CycleT *Cycle) { return Cycle->print(Context); }

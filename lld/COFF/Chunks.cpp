@@ -31,8 +31,8 @@ using llvm::support::ulittle32_t;
 
 namespace lld::coff {
 
-SectionChunk::SectionChunk(ObjFile *f, const coff_section *h)
-    : Chunk(SectionKind), file(f), header(h), repl(this) {
+SectionChunk::SectionChunk(ObjFile *f, const coff_section *h, Kind k)
+    : Chunk(k), file(f), header(h), repl(this) {
   // Initialize relocs.
   if (file)
     setRelocs(file->getCOFFObj()->getRelocations(header));
@@ -410,6 +410,12 @@ void SectionChunk::writeTo(uint8_t *buf) const {
 
     applyRelocation(buf + rel.VirtualAddress, rel);
   }
+
+  // Write the offset to EC entry thunk preceding section contents. The low bit
+  // is always set, so it's effectively an offset from the last byte of the
+  // offset.
+  if (Defined *entryThunk = getEntryThunk())
+    write32le(buf - sizeof(uint32_t), entryThunk->getRVA() - rva + 1);
 }
 
 void SectionChunk::applyRelocation(uint8_t *off,
@@ -1065,6 +1071,11 @@ void AbsolutePointerChunk::writeTo(uint8_t *buf) const {
   } else {
     write32le(buf, value);
   }
+}
+
+void ECExportThunkChunk::writeTo(uint8_t *buf) const {
+  memcpy(buf, ECExportThunkCode, sizeof(ECExportThunkCode));
+  write32le(buf + 10, target->getRVA() - rva - 14);
 }
 
 } // namespace lld::coff
