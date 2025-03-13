@@ -17,19 +17,15 @@
 #include "MipsSEInstrInfo.h"
 #include "MipsSubtarget.h"
 #include "MipsTargetMachine.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -38,7 +34,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "mips-reg-info"
 
-MipsSERegisterInfo::MipsSERegisterInfo() : MipsRegisterInfo() {}
+MipsSERegisterInfo::MipsSERegisterInfo() = default;
 
 bool MipsSERegisterInfo::
 requiresRegisterScavenging(const MachineFunction &MF) const {
@@ -101,9 +97,9 @@ static inline unsigned getLoadStoreOffsetSizeInBits(const unsigned Opcode,
   case Mips::SC_MMR6:
     return 9;
   case Mips::INLINEASM: {
-    unsigned ConstraintID = InlineAsm::getMemoryConstraintID(MO.getImm());
-    switch (ConstraintID) {
-    case InlineAsm::Constraint_ZC: {
+    const InlineAsm::Flag F(MO.getImm());
+    switch (F.getMemoryConstraintID()) {
+    case InlineAsm::ConstraintCode::ZC: {
       const MipsSubtarget &Subtarget = MO.getParent()
                                            ->getParent()
                                            ->getParent()
@@ -180,7 +176,7 @@ void MipsSERegisterInfo::eliminateFI(MachineBasicBlock::iterator II,
   if ((FrameIndex >= MinCSFI && FrameIndex <= MaxCSFI) || EhDataRegFI ||
       IsISRRegFI)
     FrameReg = ABI.GetStackPtr();
-  else if (RegInfo->needsStackRealignment(MF)) {
+  else if (RegInfo->hasStackRealignment(MF)) {
     if (MFI.hasVarSizedObjects() && !MFI.isFixedObjectIndex(FrameIndex))
       FrameReg = ABI.GetBasePtr();
     else if (MFI.isFixedObjectIndex(FrameIndex))

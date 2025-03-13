@@ -20,10 +20,9 @@
 #include "clang/Basic/Specifiers.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Compiler.h"
 #include <cassert>
@@ -32,6 +31,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -39,7 +39,12 @@
 
 namespace llvm {
 class Error;
-}
+class raw_ostream;
+class MemoryBuffer;
+namespace vfs {
+class FileSystem;
+} // namespace vfs
+} // namespace llvm
 
 namespace clang {
 
@@ -164,9 +169,9 @@ struct DiagnosticStorage {
   /// The values for the various substitution positions.
   ///
   /// This is used when the argument is not an std::string. The specific value
-  /// is mangled into an intptr_t and the interpretation depends on exactly
+  /// is mangled into an uint64_t and the interpretation depends on exactly
   /// what sort of argument kind it is.
-  intptr_t DiagArgumentsVal[MaxArguments];
+  uint64_t DiagArgumentsVal[MaxArguments];
 
   /// The values for the various substitution positions that have
   /// string arguments.
@@ -180,6 +185,41 @@ struct DiagnosticStorage {
   SmallVector<FixItHint, 6> FixItHints;
 
   DiagnosticStorage() = default;
+};
+
+/// An allocator for DiagnosticStorage objects, which uses a small cache to
+/// objects, used to reduce malloc()/free() traffic for partial diagnostics.
+class DiagStorageAllocator {
+  static const unsigned NumCached = 16;
+  DiagnosticStorage Cached[NumCached];
+  DiagnosticStorage *FreeList[NumCached];
+  unsigned NumFreeListEntries;
+
+public:
+  DiagStorageAllocator();
+  ~DiagStorageAllocator();
+
+  /// Allocate new storage.
+  DiagnosticStorage *Allocate() {
+    if (NumFreeListEntries == 0)
+      return new DiagnosticStorage;
+
+    DiagnosticStorage *Result = FreeList[--NumFreeListEntries];
+    Result->NumDiagArgs = 0;
+    Result->DiagRanges.clear();
+    Result->FixItHints.clear();
+    return Result;
+  }
+
+  /// Free the given storage object.
+  void Deallocate(DiagnosticStorage *S) {
+    if (S >= Cached && S <= Cached + NumCached) {
+      FreeList[NumFreeListEntries++] = S;
+      return;
+    }
+
+    delete S;
+  }
 };
 
 /// Concrete class used by the front-end to report problems and issues.
@@ -273,6 +313,13 @@ private:
   // Which overload candidates to show.
   OverloadsShown ShowOverloads = Ovl_All;
 
+  // With Ovl_Best, the number of overload candidates to show when we encounter
+  // an error.
+  //
+  // The value here is the number of candidates to show in the first nontrivial
+  // error.  Future errors may show a different number of candidates.
+  unsigned NumOverloadsToShow = 32;
+
   // Cap of # errors emitted, 0 -> no limit.
   unsigned ErrorLimit = 0;
 
@@ -306,27 +353,34 @@ private:
     // "Global" configuration state that can actually vary between modules.
 
     // Ignore all warnings: -w
+    LLVM_PREFERRED_TYPE(bool)
     unsigned IgnoreAllWarnings : 1;
 
     // Enable all warnings.
+    LLVM_PREFERRED_TYPE(bool)
     unsigned EnableAllWarnings : 1;
 
     // Treat warnings like errors.
+    LLVM_PREFERRED_TYPE(bool)
     unsigned WarningsAsErrors : 1;
 
     // Treat errors like fatal errors.
+    LLVM_PREFERRED_TYPE(bool)
     unsigned ErrorsAsFatal : 1;
 
     // Suppress warnings in system headers.
+    LLVM_PREFERRED_TYPE(bool)
     unsigned SuppressSystemWarnings : 1;
 
     // Map extensions to warnings or errors?
     diag::Severity ExtBehavior = diag::Severity::Ignored;
 
-    DiagState()
+    DiagnosticIDs &DiagIDs;
+
+    DiagState(DiagnosticIDs &DiagIDs)
         : IgnoreAllWarnings(false), EnableAllWarnings(false),
           WarningsAsErrors(false), ErrorsAsFatal(false),
-          SuppressSystemWarnings(false) {}
+          SuppressSystemWarnings(false), DiagIDs(DiagIDs) {}
 
     using iterator = llvm::DenseMap<unsigned, DiagnosticMapping>::iterator;
     using const_iterator =
@@ -507,26 +561,10 @@ private:
   void *ArgToStringCookie = nullptr;
   ArgToStringFnTy ArgToStringFn;
 
-  /// ID of the "delayed" diagnostic, which is a (typically
-  /// fatal) diagnostic that had to be delayed because it was found
-  /// while emitting another diagnostic.
-  unsigned DelayedDiagID;
-
-  /// First string argument for the delayed diagnostic.
-  std::string DelayedDiagArg1;
-
-  /// Second string argument for the delayed diagnostic.
-  std::string DelayedDiagArg2;
-
-  /// Third string argument for the delayed diagnostic.
-  std::string DelayedDiagArg3;
-
-  /// Optional flag value.
-  ///
-  /// Some flags accept values, for instance: -Wframe-larger-than=<value> and
-  /// -Rpass=<value>. The content of this string is emitted after the flag name
-  /// and '='.
-  std::string FlagValue;
+  /// Whether the diagnostic should be suppressed in FilePath.
+  llvm::unique_function<bool(diag::kind, SourceLocation /*DiagLoc*/,
+                             const SourceManager &) const>
+      DiagSuppressionMapping;
 
 public:
   explicit DiagnosticsEngine(IntrusiveRefCntPtr<DiagnosticIDs> Diags,
@@ -537,6 +575,7 @@ public:
   DiagnosticsEngine &operator=(const DiagnosticsEngine &) = delete;
   ~DiagnosticsEngine();
 
+  friend void DiagnosticsTestHelper(DiagnosticsEngine &);
   LLVM_DUMP_METHOD void dump() const;
   LLVM_DUMP_METHOD void dump(StringRef DiagName) const;
 
@@ -707,6 +746,37 @@ public:
   }
   OverloadsShown getShowOverloads() const { return ShowOverloads; }
 
+  /// When a call or operator fails, print out up to this many candidate
+  /// overloads as suggestions.
+  ///
+  /// With Ovl_Best, we set a high limit for the first nontrivial overload set
+  /// we print, and a lower limit for later sets.  This way the user has a
+  /// chance of diagnosing at least one callsite in their program without
+  /// having to recompile with -fshow-overloads=all.
+  unsigned getNumOverloadCandidatesToShow() const {
+    switch (getShowOverloads()) {
+    case Ovl_All:
+      // INT_MAX rather than UINT_MAX so that we don't have to think about the
+      // effect of implicit conversions on this value. In practice we'll never
+      // hit 2^31 candidates anyway.
+      return std::numeric_limits<int>::max();
+    case Ovl_Best:
+      return NumOverloadsToShow;
+    }
+    llvm_unreachable("invalid OverloadsShown kind");
+  }
+
+  /// Call this after showing N overload candidates.  This influences the value
+  /// returned by later calls to getNumOverloadCandidatesToShow().
+  void overloadCandidatesShown(unsigned N) {
+    // Current heuristic: Start out with a large value for NumOverloadsToShow,
+    // and then once we print one nontrivially-large overload set, decrease it
+    // for future calls.
+    if (N > 4) {
+      NumOverloadsToShow = 4;
+    }
+  }
+
   /// Pretend that the last diagnostic issued was ignored, so any
   /// subsequent notes will be suppressed, or restore a prior ignoring
   /// state after ignoring some diagnostics and their notes, possibly in
@@ -769,6 +839,9 @@ public:
   bool setSeverityForGroup(diag::Flavor Flavor, StringRef Group,
                            diag::Severity Map,
                            SourceLocation Loc = SourceLocation());
+  bool setSeverityForGroup(diag::Flavor Flavor, diag::Group Group,
+                           diag::Severity Map,
+                           SourceLocation Loc = SourceLocation());
 
   /// Set the warning-as-error flag for the given diagnostic group.
   ///
@@ -806,6 +879,7 @@ public:
     return FatalErrorOccurred || UnrecoverableErrorOccurred;
   }
 
+  unsigned getNumErrors() const { return NumErrors; }
   unsigned getNumWarnings() const { return NumWarnings; }
 
   void setNumWarnings(unsigned NumWarnings) {
@@ -821,6 +895,8 @@ public:
   /// \param FormatString A fixed diagnostic format string that will be hashed
   /// and mapped to a unique DiagID.
   template <unsigned N>
+  // TODO: Deprecate this once all uses are removed from Clang.
+  // [[deprecated("Use a CustomDiagDesc instead of a Level")]]
   unsigned getCustomDiagID(Level L, const char (&FormatString)[N]) {
     return Diags->getCustomDiagID((DiagnosticIDs::Level)L,
                                   StringRef(FormatString, N - 1));
@@ -848,9 +924,9 @@ public:
     LastDiagLevel = Other.LastDiagLevel;
   }
 
-  /// Reset the state of the diagnostic object to its initial
-  /// configuration.
-  void Reset();
+  /// Reset the state of the diagnostic object to its initial configuration.
+  /// \param[in] soft - if true, doesn't reset the diagnostic mappings and state
+  void Reset(bool soft = false);
 
   //===--------------------------------------------------------------------===//
   // DiagnosticsEngine classification and reporting interfaces.
@@ -883,6 +959,26 @@ public:
     return (Level)Diags->getDiagnosticLevel(DiagID, Loc, *this);
   }
 
+  /// Diagnostic suppression mappings can be used to suppress specific
+  /// diagnostics in specific files.
+  /// Mapping file is expected to be a special case list with sections denoting
+  /// diagnostic groups and `src` entries for globs to suppress. `emit` category
+  /// can be used to disable suppression. Longest glob that matches a filepath
+  /// takes precedence. For example:
+  ///   [unused]
+  ///   src:clang/*
+  ///   src:clang/foo/*=emit
+  ///   src:clang/foo/bar/*
+  ///
+  /// Such a mappings file suppress all diagnostics produced by -Wunused in all
+  /// sources under `clang/` directory apart from `clang/foo/`. Diagnostics
+  /// under `clang/foo/bar/` will also be suppressed. Note that the FilePath is
+  /// matched against the globs as-is.
+  /// These take presumed locations into account, and can still be overriden by
+  /// clang-diagnostics pragmas.
+  void setDiagSuppressionMapping(llvm::MemoryBuffer &Input);
+  bool isSuppressedViaMapping(diag::kind DiagId, SourceLocation DiagLoc) const;
+
   /// Issue the message to the client.
   ///
   /// This actually returns an instance of DiagnosticBuilder which emits the
@@ -896,69 +992,17 @@ public:
 
   void Report(const StoredDiagnostic &storedDiag);
 
-  /// Determine whethere there is already a diagnostic in flight.
-  bool isDiagnosticInFlight() const {
-    return CurDiagID != std::numeric_limits<unsigned>::max();
-  }
-
-  /// Set the "delayed" diagnostic that will be emitted once
-  /// the current diagnostic completes.
-  ///
-  ///  If a diagnostic is already in-flight but the front end must
-  ///  report a problem (e.g., with an inconsistent file system
-  ///  state), this routine sets a "delayed" diagnostic that will be
-  ///  emitted after the current diagnostic completes. This should
-  ///  only be used for fatal errors detected at inconvenient
-  ///  times. If emitting a delayed diagnostic causes a second delayed
-  ///  diagnostic to be introduced, that second delayed diagnostic
-  ///  will be ignored.
-  ///
-  /// \param DiagID The ID of the diagnostic being delayed.
-  ///
-  /// \param Arg1 A string argument that will be provided to the
-  /// diagnostic. A copy of this string will be stored in the
-  /// DiagnosticsEngine object itself.
-  ///
-  /// \param Arg2 A string argument that will be provided to the
-  /// diagnostic. A copy of this string will be stored in the
-  /// DiagnosticsEngine object itself.
-  ///
-  /// \param Arg3 A string argument that will be provided to the
-  /// diagnostic. A copy of this string will be stored in the
-  /// DiagnosticsEngine object itself.
-  void SetDelayedDiagnostic(unsigned DiagID, StringRef Arg1 = "",
-                            StringRef Arg2 = "", StringRef Arg3 = "");
-
-  /// Clear out the current diagnostic.
-  void Clear() { CurDiagID = std::numeric_limits<unsigned>::max(); }
-
-  /// Return the value associated with this diagnostic flag.
-  StringRef getFlagValue() const { return FlagValue; }
-
 private:
   // This is private state used by DiagnosticBuilder.  We put it here instead of
   // in DiagnosticBuilder in order to keep DiagnosticBuilder a small lightweight
-  // object.  This implementation choice means that we can only have one
-  // diagnostic "in flight" at a time, but this seems to be a reasonable
-  // tradeoff to keep these objects small.  Assertions verify that only one
-  // diagnostic is in flight at a time.
+  // object.  This implementation choice means that we can only have a few
+  // diagnostics "in flight" at a time, but this seems to be a reasonable
+  // tradeoff to keep these objects small.
   friend class Diagnostic;
   friend class DiagnosticBuilder;
   friend class DiagnosticErrorTrap;
   friend class DiagnosticIDs;
   friend class PartialDiagnostic;
-
-  /// Report the delayed diagnostic.
-  void ReportDelayed();
-
-  /// The location of the current diagnostic that is in flight.
-  SourceLocation CurDiagLoc;
-
-  /// The ID of the current diagnostic that is in flight.
-  ///
-  /// This is set to std::numeric_limits<unsigned>::max() when there is no
-  /// diagnostic in flight.
-  unsigned CurDiagID;
 
   enum {
     /// The maximum number of arguments we can hold.
@@ -969,7 +1013,7 @@ private:
     MaxArguments = DiagnosticStorage::MaxArguments,
   };
 
-  DiagnosticStorage DiagStorage;
+  DiagStorageAllocator DiagAllocator;
 
   DiagnosticMapping makeUserMapping(diag::Severity Map, SourceLocation L) {
     bool isPragma = L.isValid();
@@ -989,8 +1033,8 @@ private:
   /// Used to report a diagnostic that is finally fully formed.
   ///
   /// \returns true if the diagnostic was emitted, false if it was suppressed.
-  bool ProcessDiag() {
-    return Diags->ProcessDiag(*this);
+  bool ProcessDiag(const DiagnosticBuilder &DiagBuilder) {
+    return Diags->ProcessDiag(*this, DiagBuilder);
   }
 
   /// @name Diagnostic Emission
@@ -1005,14 +1049,10 @@ protected:
   // Sema::Diag() patterns.
   friend class Sema;
 
-  /// Emit the current diagnostic and clear the diagnostic state.
+  /// Emit the diagnostic
   ///
   /// \param Force Emit the diagnostic regardless of suppression settings.
-  bool EmitCurrentDiagnostic(bool Force = false);
-
-  unsigned getCurrentDiagID() const { return CurDiagID; }
-
-  SourceLocation getCurrentDiagLoc() const { return CurDiagLoc; }
+  bool EmitDiagnostic(const DiagnosticBuilder &DB, bool Force = false);
 
   /// @}
 };
@@ -1065,40 +1105,7 @@ public:
 ///
 class StreamingDiagnostic {
 public:
-  /// An allocator for DiagnosticStorage objects, which uses a small cache to
-  /// objects, used to reduce malloc()/free() traffic for partial diagnostics.
-  class DiagStorageAllocator {
-    static const unsigned NumCached = 16;
-    DiagnosticStorage Cached[NumCached];
-    DiagnosticStorage *FreeList[NumCached];
-    unsigned NumFreeListEntries;
-
-  public:
-    DiagStorageAllocator();
-    ~DiagStorageAllocator();
-
-    /// Allocate new storage.
-    DiagnosticStorage *Allocate() {
-      if (NumFreeListEntries == 0)
-        return new DiagnosticStorage;
-
-      DiagnosticStorage *Result = FreeList[--NumFreeListEntries];
-      Result->NumDiagArgs = 0;
-      Result->DiagRanges.clear();
-      Result->FixItHints.clear();
-      return Result;
-    }
-
-    /// Free the given storage object.
-    void Deallocate(DiagnosticStorage *S) {
-      if (S >= Cached && S <= Cached + NumCached) {
-        FreeList[NumFreeListEntries++] = S;
-        return;
-      }
-
-      delete S;
-    }
-  };
+  using DiagStorageAllocator = clang::DiagStorageAllocator;
 
 protected:
   mutable DiagnosticStorage *DiagStorage = nullptr;
@@ -1137,7 +1144,7 @@ public:
     DiagStorage = nullptr;
   }
 
-  void AddTaggedVal(intptr_t V, DiagnosticsEngine::ArgumentKind Kind) const {
+  void AddTaggedVal(uint64_t V, DiagnosticsEngine::ArgumentKind Kind) const {
     if (!DiagStorage)
       DiagStorage = getStorage();
 
@@ -1187,11 +1194,6 @@ public:
 protected:
   StreamingDiagnostic() = default;
 
-  /// Construct with an external storage not owned by itself. The allocator
-  /// is a null pointer in this case.
-  explicit StreamingDiagnostic(DiagnosticStorage *Storage)
-      : DiagStorage(Storage) {}
-
   /// Construct with a storage allocator which will manage the storage. The
   /// allocator is not a null pointer in this case.
   explicit StreamingDiagnostic(DiagStorageAllocator &Alloc)
@@ -1222,8 +1224,19 @@ protected:
 class DiagnosticBuilder : public StreamingDiagnostic {
   friend class DiagnosticsEngine;
   friend class PartialDiagnostic;
+  friend class Diagnostic;
 
   mutable DiagnosticsEngine *DiagObj = nullptr;
+
+  SourceLocation DiagLoc;
+  unsigned DiagID;
+
+  /// Optional flag value.
+  ///
+  /// Some flags accept values, for instance: -Wframe-larger-than=<value> and
+  /// -Rpass=<value>. The content of this string is emitted after the flag name
+  /// and '='.
+  mutable std::string FlagValue;
 
   /// Status variable indicating if this diagnostic is still active.
   ///
@@ -1238,16 +1251,8 @@ class DiagnosticBuilder : public StreamingDiagnostic {
 
   DiagnosticBuilder() = default;
 
-  explicit DiagnosticBuilder(DiagnosticsEngine *diagObj)
-      : StreamingDiagnostic(&diagObj->DiagStorage), DiagObj(diagObj),
-        IsActive(true) {
-    assert(diagObj && "DiagnosticBuilder requires a valid DiagnosticsEngine!");
-    assert(DiagStorage &&
-           "DiagnosticBuilder requires a valid DiagnosticStorage!");
-    DiagStorage->NumDiagArgs = 0;
-    DiagStorage->DiagRanges.clear();
-    DiagStorage->FixItHints.clear();
-  }
+  DiagnosticBuilder(DiagnosticsEngine *DiagObj, SourceLocation DiagLoc,
+                    unsigned DiagID);
 
 protected:
   /// Clear out the current diagnostic.
@@ -1273,7 +1278,7 @@ protected:
     if (!isActive()) return false;
 
     // Process the diagnostic.
-    bool Result = DiagObj->EmitCurrentDiagnostic(IsForceEmit);
+    bool Result = DiagObj->EmitDiagnostic(*this, IsForceEmit);
 
     // This diagnostic is dead.
     Clear();
@@ -1284,13 +1289,7 @@ protected:
 public:
   /// Copy constructor.  When copied, this "takes" the diagnostic info from the
   /// input and neuters it.
-  DiagnosticBuilder(const DiagnosticBuilder &D) : StreamingDiagnostic() {
-    DiagObj = D.DiagObj;
-    DiagStorage = D.DiagStorage;
-    IsActive = D.IsActive;
-    IsForceEmit = D.IsForceEmit;
-    D.Clear();
-  }
+  DiagnosticBuilder(const DiagnosticBuilder &D);
 
   template <typename T> const DiagnosticBuilder &operator<<(const T &V) const {
     assert(isActive() && "Clients must not add to cleared diagnostic!");
@@ -1302,8 +1301,8 @@ public:
   // It is necessary to limit this to rvalue reference to avoid calling this
   // function with a bitfield lvalue argument since non-const reference to
   // bitfield is not allowed.
-  template <typename T, typename = typename std::enable_if<
-                            !std::is_lvalue_reference<T>::value>::type>
+  template <typename T,
+            typename = std::enable_if_t<!std::is_lvalue_reference<T>::value>>
   const DiagnosticBuilder &operator<<(T &&V) const {
     assert(isActive() && "Clients must not add to cleared diagnostic!");
     const StreamingDiagnostic &DB = *this;
@@ -1322,7 +1321,7 @@ public:
     return *this;
   }
 
-  void addFlagValue(StringRef V) const { DiagObj->FlagValue = std::string(V); }
+  void addFlagValue(StringRef V) const { FlagValue = std::string(V); }
 };
 
 struct AddFlagValue {
@@ -1360,6 +1359,18 @@ inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
   return DB;
 }
 
+inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
+                                             long I) {
+  DB.AddTaggedVal(I, DiagnosticsEngine::ak_sint);
+  return DB;
+}
+
+inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
+                                             long long I) {
+  DB.AddTaggedVal(I, DiagnosticsEngine::ak_sint);
+  return DB;
+}
+
 // We use enable_if here to prevent that this overload is selected for
 // pointers or other arguments that are implicitly convertible to bool.
 template <typename T>
@@ -1372,6 +1383,18 @@ operator<<(const StreamingDiagnostic &DB, T I) {
 
 inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
                                              unsigned I) {
+  DB.AddTaggedVal(I, DiagnosticsEngine::ak_uint);
+  return DB;
+}
+
+inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
+                                             unsigned long I) {
+  DB.AddTaggedVal(I, DiagnosticsEngine::ak_uint);
+  return DB;
+}
+
+inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
+                                             unsigned long long I) {
   DB.AddTaggedVal(I, DiagnosticsEngine::ak_uint);
   return DB;
 }
@@ -1400,6 +1423,12 @@ inline std::enable_if_t<
 operator<<(const StreamingDiagnostic &DB, T *DC) {
   DB.AddTaggedVal(reinterpret_cast<intptr_t>(DC),
                   DiagnosticsEngine::ak_declcontext);
+  return DB;
+}
+
+inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
+                                             SourceLocation L) {
+  DB.AddSourceRange(CharSourceRange::getTokenRange(L));
   return DB;
 }
 
@@ -1437,7 +1466,7 @@ inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
 
 inline const StreamingDiagnostic &
 operator<<(const StreamingDiagnostic &DB,
-           const llvm::Optional<SourceRange> &Opt) {
+           const std::optional<SourceRange> &Opt) {
   if (Opt)
     DB << *Opt;
   return DB;
@@ -1445,15 +1474,14 @@ operator<<(const StreamingDiagnostic &DB,
 
 inline const StreamingDiagnostic &
 operator<<(const StreamingDiagnostic &DB,
-           const llvm::Optional<CharSourceRange> &Opt) {
+           const std::optional<CharSourceRange> &Opt) {
   if (Opt)
     DB << *Opt;
   return DB;
 }
 
 inline const StreamingDiagnostic &
-operator<<(const StreamingDiagnostic &DB,
-           const llvm::Optional<FixItHint> &Opt) {
+operator<<(const StreamingDiagnostic &DB, const std::optional<FixItHint> &Opt) {
   if (Opt)
     DB << *Opt;
   return DB;
@@ -1468,12 +1496,7 @@ const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
 
 inline DiagnosticBuilder DiagnosticsEngine::Report(SourceLocation Loc,
                                                    unsigned DiagID) {
-  assert(CurDiagID == std::numeric_limits<unsigned>::max() &&
-         "Multiple diagnostics in flight at once!");
-  CurDiagLoc = Loc;
-  CurDiagID = DiagID;
-  FlagValue.clear();
-  return DiagnosticBuilder(this);
+  return DiagnosticBuilder(this, Loc, DiagID);
 }
 
 const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
@@ -1488,24 +1511,29 @@ inline DiagnosticBuilder DiagnosticsEngine::Report(unsigned DiagID) {
 //===----------------------------------------------------------------------===//
 
 /// A little helper class (which is basically a smart pointer that forwards
-/// info from DiagnosticsEngine) that allows clients to enquire about the
-/// currently in-flight diagnostic.
+/// info from DiagnosticsEngine and DiagnosticStorage) that allows clients to
+/// enquire about the diagnostic.
 class Diagnostic {
   const DiagnosticsEngine *DiagObj;
-  StringRef StoredDiagMessage;
+  SourceLocation DiagLoc;
+  unsigned DiagID;
+  std::string FlagValue;
+  const DiagnosticStorage &DiagStorage;
+  std::optional<StringRef> StoredDiagMessage;
 
 public:
-  explicit Diagnostic(const DiagnosticsEngine *DO) : DiagObj(DO) {}
-  Diagnostic(const DiagnosticsEngine *DO, StringRef storedDiagMessage)
-      : DiagObj(DO), StoredDiagMessage(storedDiagMessage) {}
+  Diagnostic(const DiagnosticsEngine *DO, const DiagnosticBuilder &DiagBuilder);
+  Diagnostic(const DiagnosticsEngine *DO, SourceLocation DiagLoc,
+             unsigned DiagID, const DiagnosticStorage &DiagStorage,
+             StringRef StoredDiagMessage);
 
   const DiagnosticsEngine *getDiags() const { return DiagObj; }
-  unsigned getID() const { return DiagObj->CurDiagID; }
-  const SourceLocation &getLocation() const { return DiagObj->CurDiagLoc; }
+  unsigned getID() const { return DiagID; }
+  const SourceLocation &getLocation() const { return DiagLoc; }
   bool hasSourceManager() const { return DiagObj->hasSourceManager(); }
   SourceManager &getSourceManager() const { return DiagObj->getSourceManager();}
 
-  unsigned getNumArgs() const { return DiagObj->DiagStorage.NumDiagArgs; }
+  unsigned getNumArgs() const { return DiagStorage.NumDiagArgs; }
 
   /// Return the kind of the specified index.
   ///
@@ -1515,8 +1543,7 @@ public:
   /// \pre Idx < getNumArgs()
   DiagnosticsEngine::ArgumentKind getArgKind(unsigned Idx) const {
     assert(Idx < getNumArgs() && "Argument index out of range!");
-    return (DiagnosticsEngine::ArgumentKind)
-        DiagObj->DiagStorage.DiagArgumentsKind[Idx];
+    return (DiagnosticsEngine::ArgumentKind)DiagStorage.DiagArgumentsKind[Idx];
   }
 
   /// Return the provided argument string specified by \p Idx.
@@ -1524,7 +1551,7 @@ public:
   const std::string &getArgStdStr(unsigned Idx) const {
     assert(getArgKind(Idx) == DiagnosticsEngine::ak_std_string &&
            "invalid argument accessor!");
-    return DiagObj->DiagStorage.DiagArgumentsStr[Idx];
+    return DiagStorage.DiagArgumentsStr[Idx];
   }
 
   /// Return the specified C string argument.
@@ -1532,24 +1559,23 @@ public:
   const char *getArgCStr(unsigned Idx) const {
     assert(getArgKind(Idx) == DiagnosticsEngine::ak_c_string &&
            "invalid argument accessor!");
-    return reinterpret_cast<const char *>(
-        DiagObj->DiagStorage.DiagArgumentsVal[Idx]);
+    return reinterpret_cast<const char *>(DiagStorage.DiagArgumentsVal[Idx]);
   }
 
   /// Return the specified signed integer argument.
   /// \pre getArgKind(Idx) == DiagnosticsEngine::ak_sint
-  int getArgSInt(unsigned Idx) const {
+  int64_t getArgSInt(unsigned Idx) const {
     assert(getArgKind(Idx) == DiagnosticsEngine::ak_sint &&
            "invalid argument accessor!");
-    return (int)DiagObj->DiagStorage.DiagArgumentsVal[Idx];
+    return (int64_t)DiagStorage.DiagArgumentsVal[Idx];
   }
 
   /// Return the specified unsigned integer argument.
   /// \pre getArgKind(Idx) == DiagnosticsEngine::ak_uint
-  unsigned getArgUInt(unsigned Idx) const {
+  uint64_t getArgUInt(unsigned Idx) const {
     assert(getArgKind(Idx) == DiagnosticsEngine::ak_uint &&
            "invalid argument accessor!");
-    return (unsigned)DiagObj->DiagStorage.DiagArgumentsVal[Idx];
+    return DiagStorage.DiagArgumentsVal[Idx];
   }
 
   /// Return the specified IdentifierInfo argument.
@@ -1558,45 +1584,40 @@ public:
     assert(getArgKind(Idx) == DiagnosticsEngine::ak_identifierinfo &&
            "invalid argument accessor!");
     return reinterpret_cast<IdentifierInfo *>(
-        DiagObj->DiagStorage.DiagArgumentsVal[Idx]);
+        DiagStorage.DiagArgumentsVal[Idx]);
   }
 
   /// Return the specified non-string argument in an opaque form.
   /// \pre getArgKind(Idx) != DiagnosticsEngine::ak_std_string
-  intptr_t getRawArg(unsigned Idx) const {
+  uint64_t getRawArg(unsigned Idx) const {
     assert(getArgKind(Idx) != DiagnosticsEngine::ak_std_string &&
            "invalid argument accessor!");
-    return DiagObj->DiagStorage.DiagArgumentsVal[Idx];
+    return DiagStorage.DiagArgumentsVal[Idx];
   }
 
   /// Return the number of source ranges associated with this diagnostic.
-  unsigned getNumRanges() const {
-    return DiagObj->DiagStorage.DiagRanges.size();
-  }
+  unsigned getNumRanges() const { return DiagStorage.DiagRanges.size(); }
 
   /// \pre Idx < getNumRanges()
   const CharSourceRange &getRange(unsigned Idx) const {
     assert(Idx < getNumRanges() && "Invalid diagnostic range index!");
-    return DiagObj->DiagStorage.DiagRanges[Idx];
+    return DiagStorage.DiagRanges[Idx];
   }
 
   /// Return an array reference for this diagnostic's ranges.
-  ArrayRef<CharSourceRange> getRanges() const {
-    return DiagObj->DiagStorage.DiagRanges;
-  }
+  ArrayRef<CharSourceRange> getRanges() const { return DiagStorage.DiagRanges; }
 
-  unsigned getNumFixItHints() const {
-    return DiagObj->DiagStorage.FixItHints.size();
-  }
+  unsigned getNumFixItHints() const { return DiagStorage.FixItHints.size(); }
 
   const FixItHint &getFixItHint(unsigned Idx) const {
     assert(Idx < getNumFixItHints() && "Invalid index!");
-    return DiagObj->DiagStorage.FixItHints[Idx];
+    return DiagStorage.FixItHints[Idx];
   }
 
-  ArrayRef<FixItHint> getFixItHints() const {
-    return DiagObj->DiagStorage.FixItHints;
-  }
+  ArrayRef<FixItHint> getFixItHints() const { return DiagStorage.FixItHints; }
+
+  /// Return the value associated with this diagnostic flag.
+  StringRef getFlagValue() const { return FlagValue; }
 
   /// Format this diagnostic into a string, substituting the
   /// formal arguments into the %0 slots.
@@ -1648,9 +1669,7 @@ public:
   range_iterator range_end() const { return Ranges.end(); }
   unsigned range_size() const { return Ranges.size(); }
 
-  ArrayRef<CharSourceRange> getRanges() const {
-    return llvm::makeArrayRef(Ranges);
-  }
+  ArrayRef<CharSourceRange> getRanges() const { return llvm::ArrayRef(Ranges); }
 
   using fixit_iterator = std::vector<FixItHint>::const_iterator;
 
@@ -1658,10 +1677,11 @@ public:
   fixit_iterator fixit_end() const { return FixIts.end(); }
   unsigned fixit_size() const { return FixIts.size(); }
 
-  ArrayRef<FixItHint> getFixIts() const {
-    return llvm::makeArrayRef(FixIts);
-  }
+  ArrayRef<FixItHint> getFixIts() const { return llvm::ArrayRef(FixIts); }
 };
+
+// Simple debug printing of StoredDiagnostic.
+llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const StoredDiagnostic &);
 
 /// Abstract interface, implemented by clients of the front-end, which
 /// formats and prints fully processed diagnostics.
@@ -1750,12 +1770,17 @@ public:
 struct TemplateDiffTypes {
   intptr_t FromType;
   intptr_t ToType;
+  LLVM_PREFERRED_TYPE(bool)
   unsigned PrintTree : 1;
+  LLVM_PREFERRED_TYPE(bool)
   unsigned PrintFromType : 1;
+  LLVM_PREFERRED_TYPE(bool)
   unsigned ElideType : 1;
+  LLVM_PREFERRED_TYPE(bool)
   unsigned ShowColors : 1;
 
   // The printer sets this variable to true if the template diff was used.
+  LLVM_PREFERRED_TYPE(bool)
   unsigned TemplateDiffUsed : 1;
 };
 
@@ -1767,8 +1792,8 @@ const char ToggleHighlight = 127;
 /// warning options specified on the command line.
 void ProcessWarningOptions(DiagnosticsEngine &Diags,
                            const DiagnosticOptions &Opts,
-                           bool ReportDiags = true);
-
+                           llvm::vfs::FileSystem &VFS, bool ReportDiags = true);
+void EscapeStringForDiagnostic(StringRef Str, SmallVectorImpl<char> &OutStr);
 } // namespace clang
 
 #endif // LLVM_CLANG_BASIC_DIAGNOSTIC_H

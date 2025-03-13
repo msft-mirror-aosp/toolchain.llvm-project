@@ -25,15 +25,13 @@
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/ValueTypes.h"
+#include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/MachineValueType.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
-#include <cassert>
 #include <deque>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -99,6 +97,9 @@ class TargetRegisterClass;
       // Floating Point Compare
       FPCmp,
 
+      // Floating point Abs
+      FAbs,
+
       // Floating point select
       FSELECT,
 
@@ -157,7 +158,7 @@ class TargetRegisterClass;
       Ins,
       CIns,
 
-      // EXTR.W instrinsic nodes.
+      // EXTR.W intrinsic nodes.
       EXTP,
       EXTPDP,
       EXTR_S_H,
@@ -241,15 +242,21 @@ class TargetRegisterClass;
       VEXTRACT_SEXT_ELT,
       VEXTRACT_ZEXT_ELT,
 
+      // Double select nodes for machines without conditional-move.
+      DOUBLE_SELECT_I,
+      DOUBLE_SELECT_I64,
+
       // Load/Store Left/Right nodes.
-      LWL = ISD::FIRST_TARGET_MEMORY_OPCODE,
+      FIRST_MEMORY_OPCODE,
+      LWL = FIRST_MEMORY_OPCODE,
       LWR,
       SWL,
       SWR,
       LDL,
       LDR,
       SDL,
-      SDR
+      SDR,
+      LAST_MEMORY_OPCODE = SDR,
     };
 
   } // ene namespace MipsISD
@@ -280,8 +287,9 @@ class TargetRegisterClass;
     EVT getTypeForExtReturn(LLVMContext &Context, EVT VT,
                             ISD::NodeType) const override;
 
-    bool isCheapToSpeculateCttz() const override;
-    bool isCheapToSpeculateCtlz() const override;
+    bool isCheapToSpeculateCttz(Type *Ty) const override;
+    bool isCheapToSpeculateCtlz(Type *Ty) const override;
+    bool hasBitTest(SDValue X, SDValue Y) const override;
     bool shouldFoldConstantShiftPairToMask(const SDNode *N,
                                            CombineLevel Level) const override;
 
@@ -303,7 +311,7 @@ class TargetRegisterClass;
 
     /// Return the correct alignment for the current calling convention.
     Align getABIAlignmentForCallingConv(Type *ArgTy,
-                                        DataLayout DL) const override {
+                                        const DataLayout &DL) const override {
       const Align ABIAlign = DL.getABITypeAlign(ArgTy);
       if (ArgTy->isVectorTy())
         return std::min(ABIAlign, Align(8));
@@ -358,6 +366,8 @@ class TargetRegisterClass;
     getExceptionSelectorRegister(const Constant *PersonalityFn) const override {
       return ABI.IsN64() ? Mips::A1_64 : Mips::A1;
     }
+
+    bool softPromoteHalfType() const override { return true; }
 
     bool isJumpTableRelative() const override {
       return getTargetMachine().isPositionIndependent();
@@ -479,6 +489,33 @@ class TargetRegisterClass;
           DAG.getNode(MipsISD::GPRel, DL, DAG.getVTList(Ty), GPRel));
     }
 
+    // This method creates the following nodes, which are necessary for
+    // loading a dllimported symbol:
+    //
+    // (lw (add (shl(%high(sym), 16), %low(sym)))
+    template <class NodeTy>
+    SDValue getDllimportSymbol(NodeTy *N, const SDLoc &DL, EVT Ty,
+                               SelectionDAG &DAG) const {
+      SDValue Hi =
+          getTargetNode(N, Ty, DAG, MipsII::MO_ABS_HI | MipsII::MO_DLLIMPORT);
+      SDValue Lo =
+          getTargetNode(N, Ty, DAG, MipsII::MO_ABS_LO | MipsII::MO_DLLIMPORT);
+      return DAG.getNode(ISD::ADD, DL, Ty, DAG.getNode(MipsISD::Lo, DL, Ty, Lo),
+                         DAG.getNode(MipsISD::Hi, DL, Ty, Hi));
+    }
+
+    // This method creates the following nodes, which are necessary for
+    // loading a dllimported global variable:
+    //
+    // (lw (lw (add (shl(%high(sym), 16), %low(sym))))
+    template <class NodeTy>
+    SDValue getDllimportVariable(NodeTy *N, const SDLoc &DL, EVT Ty,
+                                 SelectionDAG &DAG, SDValue Chain,
+                                 const MachinePointerInfo &PtrInfo) const {
+      return DAG.getLoad(Ty, DL, Chain, getDllimportSymbol(N, DL, Ty, DAG),
+                         PtrInfo);
+    }
+
     /// This function fills Ops, which is the list of operands that will later
     /// be used when a function call node is created. It also generates
     /// copyToReg nodes to set up argument registers.
@@ -520,7 +557,7 @@ class TargetRegisterClass;
                           unsigned Flag) const;
 
     // Lower Operand helpers
-    SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
+    SDValue LowerCallResult(SDValue Chain, SDValue InGlue,
                             CallingConv::ID CallConv, bool isVarArg,
                             const SmallVectorImpl<ISD::InputArg> &Ins,
                             const SDLoc &dl, SelectionDAG &DAG,
@@ -540,6 +577,11 @@ class TargetRegisterClass;
     SDValue lowerVAARG(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerFABS(SDValue Op, SelectionDAG &DAG) const;
+    SDValue lowerFABS32(SDValue Op, SelectionDAG &DAG,
+                        bool HasExtractInsert) const;
+    SDValue lowerFABS64(SDValue Op, SelectionDAG &DAG,
+                        bool HasExtractInsert) const;
+    SDValue lowerFCANONICALIZE(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const;
@@ -600,7 +642,7 @@ class TargetRegisterClass;
     bool CanLowerReturn(CallingConv::ID CallConv, MachineFunction &MF,
                         bool isVarArg,
                         const SmallVectorImpl<ISD::OutputArg> &Outs,
-                        LLVMContext &Context) const override;
+                        LLVMContext &Context, const Type *RetTy) const override;
 
     SDValue LowerReturn(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
                         const SmallVectorImpl<ISD::OutputArg> &Outs,
@@ -610,7 +652,7 @@ class TargetRegisterClass;
     SDValue LowerInterruptReturn(SmallVectorImpl<SDValue> &RetOps,
                                  const SDLoc &DL, SelectionDAG &DAG) const;
 
-    bool shouldSignExtendTypeInLibCall(EVT Type, bool IsSigned) const override;
+    bool shouldSignExtendTypeInLibCall(Type *Ty, bool IsSigned) const override;
 
     // Inline asm support
     ConstraintType getConstraintType(StringRef Constraint) const override;
@@ -633,19 +675,18 @@ class TargetRegisterClass;
     /// vector.  If it is invalid, don't add anything to Ops. If hasMemory is
     /// true it means one of the asm constraint of the inline asm instruction
     /// being processed is 'm'.
-    void LowerAsmOperandForConstraint(SDValue Op,
-                                      std::string &Constraint,
+    void LowerAsmOperandForConstraint(SDValue Op, StringRef Constraint,
                                       std::vector<SDValue> &Ops,
                                       SelectionDAG &DAG) const override;
 
-    unsigned
+    InlineAsm::ConstraintCode
     getInlineAsmMemConstraint(StringRef ConstraintCode) const override {
       if (ConstraintCode == "o")
-        return InlineAsm::Constraint_o;
+        return InlineAsm::ConstraintCode::o;
       if (ConstraintCode == "R")
-        return InlineAsm::Constraint_R;
+        return InlineAsm::ConstraintCode::R;
       if (ConstraintCode == "ZC")
-        return InlineAsm::Constraint_ZC;
+        return InlineAsm::ConstraintCode::ZC;
       return TargetLowering::getInlineAsmMemConstraint(ConstraintCode);
     }
 

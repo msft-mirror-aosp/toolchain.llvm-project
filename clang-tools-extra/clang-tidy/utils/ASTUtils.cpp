@@ -12,9 +12,7 @@
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Lex/Lexer.h"
 
-namespace clang {
-namespace tidy {
-namespace utils {
+namespace clang::tidy::utils {
 using namespace ast_matchers;
 
 const FunctionDecl *getSurroundingFunction(ASTContext &Context,
@@ -24,15 +22,13 @@ const FunctionDecl *getSurroundingFunction(ASTContext &Context,
                         Statement, Context));
 }
 
-bool IsBinaryOrTernary(const Expr *E) {
-  const Expr *E_base = E->IgnoreImpCasts();
-  if (clang::isa<clang::BinaryOperator>(E_base) ||
-      clang::isa<clang::ConditionalOperator>(E_base)) {
+bool isBinaryOrTernary(const Expr *E) {
+  const Expr *EBase = E->IgnoreImpCasts();
+  if (isa<BinaryOperator>(EBase) || isa<ConditionalOperator>(EBase)) {
     return true;
   }
 
-  if (const auto *Operator =
-          clang::dyn_cast<clang::CXXOperatorCallExpr>(E_base)) {
+  if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(EBase)) {
     return Operator->isInfixBinaryOp();
   }
 
@@ -56,7 +52,7 @@ bool exprHasBitFlagWithSpelling(const Expr *Flags, const SourceManager &SM,
   }
   // If it's a binary OR operation.
   if (const auto *BO = dyn_cast<BinaryOperator>(Flags))
-    if (BO->getOpcode() == clang::BinaryOperatorKind::BO_Or)
+    if (BO->getOpcode() == BinaryOperatorKind::BO_Or)
       return exprHasBitFlagWithSpelling(BO->getLHS()->IgnoreParenCasts(), SM,
                                         LangOpts, FlagName) ||
              exprHasBitFlagWithSpelling(BO->getRHS()->IgnoreParenCasts(), SM,
@@ -92,6 +88,53 @@ bool rangeCanBeFixed(SourceRange Range, const SourceManager *SM) {
          !utils::rangeContainsMacroExpansion(Range, SM);
 }
 
-} // namespace utils
-} // namespace tidy
-} // namespace clang
+bool areStatementsIdentical(const Stmt *FirstStmt, const Stmt *SecondStmt,
+                            const ASTContext &Context, bool Canonical) {
+  if (!FirstStmt || !SecondStmt)
+    return false;
+
+  if (FirstStmt == SecondStmt)
+    return true;
+
+  if (FirstStmt->getStmtClass() != SecondStmt->getStmtClass())
+    return false;
+
+  if (isa<Expr>(FirstStmt) && isa<Expr>(SecondStmt)) {
+    // If we have errors in expressions, we will be unable
+    // to accurately profile and compute hashes for each statements.
+    if (llvm::cast<Expr>(FirstStmt)->containsErrors() ||
+        llvm::cast<Expr>(SecondStmt)->containsErrors())
+      return false;
+  }
+
+  llvm::FoldingSetNodeID DataFirst, DataSecond;
+  FirstStmt->Profile(DataFirst, Context, Canonical);
+  SecondStmt->Profile(DataSecond, Context, Canonical);
+  return DataFirst == DataSecond;
+}
+
+const IndirectFieldDecl *
+findOutermostIndirectFieldDeclForField(const FieldDecl *FD) {
+  const RecordDecl *Record = FD->getParent();
+  assert(Record->isAnonymousStructOrUnion() &&
+         "FD must be a field in an anonymous record");
+
+  const DeclContext *Context = Record;
+  while (isa<RecordDecl>(Context) &&
+         cast<RecordDecl>(Context)->isAnonymousStructOrUnion()) {
+    Context = Context->getParent();
+  }
+
+  // Search for the target IndirectFieldDecl within the located context.
+  for (const auto *D : Context->decls()) {
+    const auto *IFD = dyn_cast<IndirectFieldDecl>(D);
+    if (!IFD)
+      continue;
+    if (IFD->getAnonField() == FD)
+      return IFD;
+  }
+
+  return nullptr;
+}
+
+} // namespace clang::tidy::utils

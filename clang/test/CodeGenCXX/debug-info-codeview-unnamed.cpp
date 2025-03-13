@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -debug-info-kind=limited -S -emit-llvm -std=c++11 -o - %s | FileCheck --check-prefix LINUX %s
-// RUN: %clang_cc1 -triple x86_64-windows-msvc -debug-info-kind=limited -gcodeview -S -emit-llvm -std=c++11 -o - %s | FileCheck --check-prefix MSVC %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -debug-info-kind=limited -emit-llvm -std=c++11 -o - %s | FileCheck --check-prefix LINUX %s
+// RUN: %clang_cc1 -triple x86_64-windows-msvc -debug-info-kind=limited -gcodeview -emit-llvm -std=c++11 -o - %s | FileCheck --check-prefix MSVC %s
 
 int main(int argc, char* argv[], char* arge[]) {
   //
@@ -100,7 +100,7 @@ int main(int argc, char* argv[], char* arge[]) {
   // MSVC-SAME:      )
   // MSVC:       [[TYPE_OF_FOUR]] = distinct !DICompositeType
   // MSVC-SAME:      tag: DW_TAG_class_type
-  // MSVC-NOT:       name:
+  // MSVC-SAME:      name: "<lambda_0>"
   // MSVC-SAME:      identifier: ".?AV<lambda_0>@?0??main@@9@"
   // MSVC-SAME:      )
 

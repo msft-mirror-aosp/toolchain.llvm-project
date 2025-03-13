@@ -99,8 +99,13 @@ llvm::ErrorOr<std::vector<std::string>> GetAllowedSymbolPatterns() {
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  tooling::CommonOptionsParser OptionsParser(argc, argv,
-                                             ChangeNamespaceCategory);
+  auto ExpectedParser =
+      tooling::CommonOptionsParser::create(argc, argv, ChangeNamespaceCategory);
+  if (!ExpectedParser) {
+    llvm::errs() << ExpectedParser.takeError();
+    return 1;
+  }
+  tooling::CommonOptionsParser &OptionsParser = ExpectedParser.get();
   const auto &Files = OptionsParser.getSourcePathList();
   tooling::RefactoringTool Tool(OptionsParser.getCompilations(), Files);
   llvm::ErrorOr<std::vector<std::string>> AllowedPatterns =
@@ -147,8 +152,8 @@ int main(int argc, const char **argv) {
       for (auto I = ChangedFiles.begin(), E = ChangedFiles.end(); I != E; ++I) {
         OS << "  {\n";
         OS << "    \"FilePath\": \"" << *I << "\",\n";
-        const auto Entry = FileMgr.getFile(*I);
-        auto ID = Sources.getOrCreateFileID(*Entry, SrcMgr::C_User);
+        auto Entry = llvm::cantFail(FileMgr.getFileRef(*I));
+        auto ID = Sources.getOrCreateFileID(Entry, SrcMgr::C_User);
         std::string Content;
         llvm::raw_string_ostream ContentStream(Content);
         Rewrite.getEditBuffer(ID).write(ContentStream);
@@ -165,9 +170,9 @@ int main(int argc, const char **argv) {
   }
 
   for (const auto &File : ChangedFiles) {
-    const auto Entry = FileMgr.getFile(File);
+    auto Entry = llvm::cantFail(FileMgr.getFileRef(File));
 
-    auto ID = Sources.getOrCreateFileID(*Entry, SrcMgr::C_User);
+    auto ID = Sources.getOrCreateFileID(Entry, SrcMgr::C_User);
     outs() << "============== " << File << " ==============\n";
     Rewrite.getEditBuffer(ID).write(llvm::outs());
     outs() << "\n============================================\n";

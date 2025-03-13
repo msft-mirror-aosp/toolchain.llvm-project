@@ -6,6 +6,7 @@ set(LLVM_LINK_COMPONENTS
 add_clang_library(clangAnalysis
   AnalysisDeclContext.cpp
   BodyFarm.cpp
+  CalledOnceCheck.cpp
   CFG.cpp
   CFGReachabilityAnalysis.cpp
   CFGStmtMap.cpp
@@ -17,8 +18,10 @@ add_clang_library(clangAnalysis
   CodeInjector.cpp
   Dominators.cpp
   ExprMutationAnalyzer.cpp
+  IntervalPartition.cpp
   IssueHash.cpp
   LiveVariables.cpp
+  MacroExpansionContext.cpp
   ObjCNoReturn.cpp
   PathDiagnostic.cpp
   PostOrderCFGView.cpp
@@ -30,6 +33,7 @@ add_clang_library(clangAnalysis
   ThreadSafetyLogical.cpp
   ThreadSafetyTIL.cpp
   UninitializedValues.cpp
+  UnsafeBufferUsage.cpp
 
   LINK_LIBS
   clangAST
@@ -39,6 +43,8 @@ add_clang_library(clangAnalysis
 
   DEPENDS
   omp_gen
+  ClangDriverOptions
   )
 
 add_subdirectory(plugins)
+add_subdirectory(FlowSensitive)

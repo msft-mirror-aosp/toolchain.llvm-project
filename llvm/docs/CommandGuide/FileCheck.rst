@@ -69,10 +69,8 @@ and from the command line.
  This option controls the behavior when using more than one prefix as specified
  by :option:`--check-prefix` or :option:`--check-prefixes`, and some of these
  prefixes are missing in the test file. If true, this is allowed, if false,
- FileCheck will report an error, listing the missing prefixes.
-
- It is currently, temporarily, true by default, and will be subsequently
- switched to false.
+ FileCheck will report an error, listing the missing prefixes. The default value
+ is false.
 
 .. option:: --input-file filename
 
@@ -431,7 +429,7 @@ However, this would be a bad test: if the value for ``foo`` changes, the test
 would still pass because the "``CHECK: Value: 1``" line would match the value
 from ``baz``. To fix this, you could add ``CHECK-NEXT`` matchers for every
 ``FieldN:`` line, but that would be verbose, and need to be updated when
-``Field4`` is added. A more succint way to write the test using the
+``Field4`` is added. A more succinct way to write the test using the
 "``CHECK-SAME:``" matcher would be as follows:
 
 .. code-block:: text
@@ -660,6 +658,30 @@ simply uniquely match a single line in the file being verified.
 
 ``CHECK-LABEL:`` directives cannot contain variable definitions or uses.
 
+Directive modifiers
+~~~~~~~~~~~~~~~~~~~
+
+A directive modifier can be append to a directive by following the directive
+with ``{<modifier>}`` where the only supported value for ``<modifier>`` is
+``LITERAL``.
+
+The ``LITERAL`` directive modifier can be used to perform a literal match. The
+modifier results in the directive not recognizing any syntax to perform regex
+matching, variable capture or any substitutions. This is useful when the text
+to match would require excessive escaping otherwise. For example, the
+following will perform literal matches rather than considering these as
+regular expressions:
+
+.. code-block:: text
+
+   Input: [[[10, 20]], [[30, 40]]]
+   Output %r10: [[10, 20]]
+   Output %r10: [[30, 40]]
+
+   ; CHECK{LITERAL}: [[[10, 20]], [[30, 40]]]
+   ; CHECK-DAG{LITERAL}: [[30, 40]]
+   ; CHECK-DAG{LITERAL}: [[10, 20]]
+
 FileCheck Regex Matching Syntax
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -709,7 +731,7 @@ The first check line matches a regex ``%[a-z]+`` and captures it into the
 string variable ``REGISTER``.  The second line verifies that whatever is in
 ``REGISTER`` occurs later in the file after an "``andw``". :program:`FileCheck`
 string substitution blocks are always contained in ``[[ ]]`` pairs, and string
-variable names can be formed with the regex ``[a-zA-Z_][a-zA-Z0-9_]*``.  If a
+variable names can be formed with the regex ``\$[a-zA-Z_][a-zA-Z0-9_]*``.  If a
 colon follows the name, then it is a definition of the variable; otherwise, it
 is a substitution.
 
@@ -749,8 +771,11 @@ The syntax to capture a numeric value is
 * ``<NUMVAR>:`` is an optional definition of variable ``<NUMVAR>`` from the
   captured value.
 
-The syntax of ``<fmtspec>`` is: ``.<precision><conversion specifier>`` where:
+The syntax of ``<fmtspec>`` is: ``#.<precision><conversion specifier>`` where:
 
+* ``#`` is an optional flag available for hex values (see
+  ``<conversion specifier>`` below) which requires the value matched to be
+  prefixed by ``0x``.
 * ``.<precision>`` is an optional printf-style precision specifier in which
   ``<precision>`` indicates the minimum number of digits that the value matched
   must have, expecting leading zeros if needed.

@@ -11,33 +11,76 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PassDetail.h"
+#include "mlir/Transforms/Passes.h"
+
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
+
+namespace mlir {
+#define GEN_PASS_DEF_CANONICALIZER
+#include "mlir/Transforms/Passes.h.inc"
+} // namespace mlir
 
 using namespace mlir;
 
 namespace {
 /// Canonicalize operations in nested regions.
-struct Canonicalizer : public CanonicalizerBase<Canonicalizer> {
-  void runOnOperation() override {
-    OwningRewritePatternList patterns;
-
-    // TODO: Instead of adding all known patterns from the whole system lazily
-    // add and cache the canonicalization patterns for ops we see in practice
-    // when building the worklist.  For now, we just grab everything.
-    auto *context = &getContext();
-    for (auto *op : context->getRegisteredOperations())
-      op->getCanonicalizationPatterns(patterns, context);
-
-    Operation *op = getOperation();
-    applyPatternsAndFoldGreedily(op->getRegions(), std::move(patterns));
+struct Canonicalizer : public impl::CanonicalizerBase<Canonicalizer> {
+  Canonicalizer() = default;
+  Canonicalizer(const GreedyRewriteConfig &config,
+                ArrayRef<std::string> disabledPatterns,
+                ArrayRef<std::string> enabledPatterns)
+      : config(config) {
+    this->topDownProcessingEnabled = config.useTopDownTraversal;
+    this->enableRegionSimplification = config.enableRegionSimplification;
+    this->maxIterations = config.maxIterations;
+    this->maxNumRewrites = config.maxNumRewrites;
+    this->disabledPatterns = disabledPatterns;
+    this->enabledPatterns = enabledPatterns;
   }
+
+  /// Initialize the canonicalizer by building the set of patterns used during
+  /// execution.
+  LogicalResult initialize(MLIRContext *context) override {
+    // Set the config from possible pass options set in the meantime.
+    config.useTopDownTraversal = topDownProcessingEnabled;
+    config.enableRegionSimplification = enableRegionSimplification;
+    config.maxIterations = maxIterations;
+    config.maxNumRewrites = maxNumRewrites;
+
+    RewritePatternSet owningPatterns(context);
+    for (auto *dialect : context->getLoadedDialects())
+      dialect->getCanonicalizationPatterns(owningPatterns);
+    for (RegisteredOperationName op : context->getRegisteredOperations())
+      op.getCanonicalizationPatterns(owningPatterns, context);
+
+    patterns = std::make_shared<FrozenRewritePatternSet>(
+        std::move(owningPatterns), disabledPatterns, enabledPatterns);
+    return success();
+  }
+  void runOnOperation() override {
+    LogicalResult converged =
+        applyPatternsGreedily(getOperation(), *patterns, config);
+    // Canonicalization is best-effort. Non-convergence is not a pass failure.
+    if (testConvergence && failed(converged))
+      signalPassFailure();
+  }
+  GreedyRewriteConfig config;
+  std::shared_ptr<const FrozenRewritePatternSet> patterns;
 };
-} // end anonymous namespace
+} // namespace
 
 /// Create a Canonicalizer pass.
 std::unique_ptr<Pass> mlir::createCanonicalizerPass() {
   return std::make_unique<Canonicalizer>();
+}
+
+/// Creates an instance of the Canonicalizer pass with the specified config.
+std::unique_ptr<Pass>
+mlir::createCanonicalizerPass(const GreedyRewriteConfig &config,
+                              ArrayRef<std::string> disabledPatterns,
+                              ArrayRef<std::string> enabledPatterns) {
+  return std::make_unique<Canonicalizer>(config, disabledPatterns,
+                                         enabledPatterns);
 }

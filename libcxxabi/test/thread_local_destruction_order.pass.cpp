@@ -1,4 +1,4 @@
-//===-------------- thread_local_destruction_order.pass.cpp ---------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,21 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-// Darwin TLV finalization routines used to fail when creating a thread-local
-// variable in the destructor for another thread-local variable:
-//  - http://lists.llvm.org/pipermail/cfe-dev/2016-November/051376.html
-//  - rdar://29523281
-// This was fixed in dyld in macos 10.15.
-//
-// XFAIL: macosx10.14
-// XFAIL: macosx10.13
-// XFAIL: macosx10.12
-// XFAIL: macosx10.11
-// XFAIL: macosx10.10
-// XFAIL: macosx10.9
-
 // UNSUPPORTED: c++03
-// UNSUPPORTED: libcxxabi-no-threads
+// UNSUPPORTED: no-threads
+
+// XFAIL: LIBCXX-FREEBSD-FIXME
+
+// TODO: This test does start working with newer updates of the mingw-w64
+// toolchain, when it includes the following commit:
+// https://github.com/mingw-w64/mingw-w64/commit/71eddccd746c56d9cde28bb5620d027d49259de9
+// Thus, remove this UNSUPPORTED marking after the next update of the CI
+// toolchain.
+// UNSUPPORTED: target={{.*-windows-gnu}}
 
 #include <cassert>
 #include <thread>

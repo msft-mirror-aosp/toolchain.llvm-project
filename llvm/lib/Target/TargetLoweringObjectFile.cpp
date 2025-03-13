@@ -24,10 +24,8 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 using namespace llvm;
@@ -44,12 +42,14 @@ void TargetLoweringObjectFile::Initialize(MCContext &ctx,
   // `Initialize` can be called more than once.
   delete Mang;
   Mang = new Mangler();
-  InitMCObjectFileInfo(TM.getTargetTriple(), TM.isPositionIndependent(), ctx,
+  initMCObjectFileInfo(ctx, TM.isPositionIndependent(),
                        TM.getCodeModel() == CodeModel::Large);
 
   // Reset various EH DWARF encodings.
   PersonalityEncoding = LSDAEncoding = TTypeEncoding = dwarf::DW_EH_PE_absptr;
   CallSiteEncoding = dwarf::DW_EH_PE_uleb128;
+
+  this->TM = &TM;
 }
 
 TargetLoweringObjectFile::~TargetLoweringObjectFile() {
@@ -71,7 +71,7 @@ static bool isNullOrUndef(const Constant *C) {
     return true;
   if (!isa<ConstantAggregate>(C))
     return false;
-  for (auto Operand : C->operand_values()) {
+  for (const auto *Operand : C->operand_values()) {
     if (!isNullOrUndef(cast<Constant>(Operand)))
       return false;
   }
@@ -129,7 +129,7 @@ MCSymbol *TargetLoweringObjectFile::getSymbolWithGlobalValueBase(
   assert(!Suffix.empty());
 
   SmallString<60> NameStr;
-  NameStr += GV->getParent()->getDataLayout().getPrivateGlobalPrefix();
+  NameStr += GV->getDataLayout().getPrivateGlobalPrefix();
   TM.getNameWithPrefix(NameStr, GV, *Mang);
   NameStr.append(Suffix.begin(), Suffix.end());
   return getContext().getOrCreateSymbol(NameStr);
@@ -141,11 +141,56 @@ MCSymbol *TargetLoweringObjectFile::getCFIPersonalitySymbol(
   return TM.getSymbol(GV);
 }
 
-void TargetLoweringObjectFile::emitPersonalityValue(MCStreamer &Streamer,
-                                                    const DataLayout &,
-                                                    const MCSymbol *Sym) const {
-}
+void TargetLoweringObjectFile::emitPersonalityValue(
+    MCStreamer &Streamer, const DataLayout &, const MCSymbol *Sym,
+    const MachineModuleInfo *MMI) const {}
 
+void TargetLoweringObjectFile::emitCGProfileMetadata(MCStreamer &Streamer,
+                                                     Module &M) const {
+  MCContext &C = getContext();
+  SmallVector<Module::ModuleFlagEntry, 8> ModuleFlags;
+  M.getModuleFlagsMetadata(ModuleFlags);
+
+  MDNode *CFGProfile = nullptr;
+
+  for (const auto &MFE : ModuleFlags) {
+    StringRef Key = MFE.Key->getString();
+    if (Key == "CG Profile") {
+      CFGProfile = cast<MDNode>(MFE.Val);
+      break;
+    }
+  }
+
+  if (!CFGProfile)
+    return;
+
+  auto GetSym = [this](const MDOperand &MDO) -> MCSymbol * {
+    if (!MDO)
+      return nullptr;
+    auto *V = cast<ValueAsMetadata>(MDO);
+    const Function *F = cast<Function>(V->getValue()->stripPointerCasts());
+    if (F->hasDLLImportStorageClass())
+      return nullptr;
+    return TM->getSymbol(F);
+  };
+
+  for (const auto &Edge : CFGProfile->operands()) {
+    MDNode *E = cast<MDNode>(Edge);
+    const MCSymbol *From = GetSym(E->getOperand(0));
+    const MCSymbol *To = GetSym(E->getOperand(1));
+    // Skip null functions. This can happen if functions are dead stripped after
+    // the CGProfile pass has been run.
+    if (!From || !To)
+      continue;
+    uint64_t Count = cast<ConstantAsMetadata>(E->getOperand(2))
+                         ->getValue()
+                         ->getUniqueInteger()
+                         .getZExtValue();
+    Streamer.emitCGProfileEntry(
+        MCSymbolRefExpr::create(From, MCSymbolRefExpr::VK_None, C),
+        MCSymbolRefExpr::create(To, MCSymbolRefExpr::VK_None, C), Count);
+  }
+}
 
 /// getKindForGlobal - This is a top-level target-independent classifier for
 /// a global object.  Given a global variable and information from the TM, this
@@ -169,8 +214,14 @@ SectionKind TargetLoweringObjectFile::getKindForGlobal(const GlobalObject *GO,
 
   // Handle thread-local data first.
   if (GVar->isThreadLocal()) {
-    if (isSuitableForBSS(GVar) && !TM.Options.NoZerosInBSS)
+    if (isSuitableForBSS(GVar) && !TM.Options.NoZerosInBSS) {
+      // Zero-initialized TLS variables with local linkage always get classified
+      // as ThreadBSSLocal.
+      if (GVar->hasLocalLinkage()) {
+        return SectionKind::getThreadBSSLocal();
+      }
       return SectionKind::getThreadBSS();
+    }
     return SectionKind::getThreadData();
   }
 
@@ -187,6 +238,13 @@ SectionKind TargetLoweringObjectFile::getKindForGlobal(const GlobalObject *GO,
       return SectionKind::getBSSExtern();
     return SectionKind::getBSS();
   }
+
+  // Global variables with '!exclude' should get the exclude section kind if
+  // they have an explicit section and no other metadata.
+  if (GVar->hasSection())
+    if (MDNode *MD = GVar->getMetadata(LLVMContext::MD_exclude))
+      if (!MD->getNumOperands())
+        return SectionKind::getExclude();
 
   // If the global is marked constant, we can put it into a mergable section,
   // a mergable string section, or general .data if it contains relocations.
@@ -225,7 +283,7 @@ SectionKind TargetLoweringObjectFile::getKindForGlobal(const GlobalObject *GO,
       // a section for this size, use it, otherwise use the arbitrary sized
       // mergable section.
       switch (
-          GVar->getParent()->getDataLayout().getTypeAllocSize(C->getType())) {
+          GVar->getDataLayout().getTypeAllocSize(C->getType())) {
       case 4:  return SectionKind::getMergeableConst4();
       case 8:  return SectionKind::getMergeableConst8();
       case 16: return SectionKind::getMergeableConst16();
@@ -242,7 +300,8 @@ SectionKind TargetLoweringObjectFile::getKindForGlobal(const GlobalObject *GO,
       // consideration when it tries to merge entries in the section.
       Reloc::Model ReloModel = TM.getRelocationModel();
       if (ReloModel == Reloc::Static || ReloModel == Reloc::ROPI ||
-          ReloModel == Reloc::RWPI || ReloModel == Reloc::ROPI_RWPI)
+          ReloModel == Reloc::RWPI || ReloModel == Reloc::ROPI_RWPI ||
+          !C->needsDynamicRelocation())
         return SectionKind::getReadOnly();
 
       // Otherwise, the dynamic linker needs to fix it up, put it in the
@@ -274,11 +333,6 @@ MCSection *TargetLoweringObjectFile::SectionForGlobal(
     }
   }
 
-  if (auto *F = dyn_cast<Function>(GO)) {
-    if (F->hasFnAttribute("implicit-section-name"))
-      return getExplicitSectionGlobal(GO, Kind, TM);
-  }
-
   // Use default section depending on the 'type' of global
   return SelectSectionForGlobal(GO, Kind, TM);
 }
@@ -294,8 +348,14 @@ TargetLoweringObjectFile::SectionForGlobal(const GlobalObject *GO,
 
 MCSection *TargetLoweringObjectFile::getSectionForJumpTable(
     const Function &F, const TargetMachine &TM) const {
+  return getSectionForJumpTable(F, TM, /*JTE=*/nullptr);
+}
+
+MCSection *TargetLoweringObjectFile::getSectionForJumpTable(
+    const Function &F, const TargetMachine &TM,
+    const MachineJumpTableEntry *JTE) const {
   Align Alignment(1);
-  return getSectionForConstant(F.getParent()->getDataLayout(),
+  return getSectionForConstant(F.getDataLayout(),
                                SectionKind::getReadOnly(), /*C=*/nullptr,
                                Alignment);
 }
@@ -329,6 +389,11 @@ MCSection *TargetLoweringObjectFile::getSectionForConstant(
 MCSection *TargetLoweringObjectFile::getSectionForMachineBasicBlock(
     const Function &F, const MachineBasicBlock &MBB,
     const TargetMachine &TM) const {
+  return nullptr;
+}
+
+MCSection *TargetLoweringObjectFile::getUniqueSectionForFunction(
+    const Function &F, const TargetMachine &TM) const {
   return nullptr;
 }
 

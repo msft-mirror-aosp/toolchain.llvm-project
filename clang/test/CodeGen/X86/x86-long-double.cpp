@@ -34,23 +34,23 @@
 long double x = 0;
 int size = sizeof(x);
 
-// FP80-ELF32: @x = global x86_fp80 {{.*}}, align 4
-// FP80-ELF32: @size = global i32 12
-// FP80-ELF64: @x = global x86_fp80 {{.*}}, align 16
-// FP80-ELF64: @size = global i32 16
-// FP80-DARWIN: @x = global x86_fp80 {{.*}}, align 16
-// FP80-DARWIN: @size = global i32 16
+// FP80-ELF32: @x ={{.*}} global x86_fp80 {{.*}}, align 4
+// FP80-ELF32: @size ={{.*}} global i32 12
+// FP80-ELF64: @x ={{.*}} global x86_fp80 {{.*}}, align 16
+// FP80-ELF64: @size ={{.*}} global i32 16
+// FP80-DARWIN: @x ={{.*}} global x86_fp80 {{.*}}, align 16
+// FP80-DARWIN: @size ={{.*}} global i32 16
 
-// FP64-X32: @x = global double {{.*}}, align 4
-// FP64-X32: @size = global i32 8
-// FP64-X64: @x = global double {{.*}}, align 8
-// FP64-X64: @size = global i32 8
+// FP64-X32: @x ={{.*}} global double {{.*}}, align 4
+// FP64-X32: @size ={{.*}} global i32 8
+// FP64-X64: @x ={{.*}} global double {{.*}}, align 8
+// FP64-X64: @size ={{.*}} global i32 8
 
-// FP128: @x = global fp128 {{.*}}, align 16
-// FP128: @size = global i32 16
+// FP128: @x ={{.*}} global fp128 {{.*}}, align 16
+// FP128: @size ={{.*}} global i32 16
 
 long double foo(long double d) { return d; }
 
-// FP64: double @_Z3fooe(double %d)
-// FP80: x86_fp80 @_Z3fooe(x86_fp80 %d)
-// FP128: fp128 @_Z3foog(fp128 %d)
+// FP64: double @_Z3fooe(double noundef %d)
+// FP80: x86_fp80 @_Z3fooe(x86_fp80 noundef %d)
+// FP128: fp128 @_Z3foog(fp128 noundef %d)

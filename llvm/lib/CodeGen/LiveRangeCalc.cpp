@@ -20,14 +20,11 @@
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
-#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/MC/LaneBitmask.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
 #include <cassert>
 #include <iterator>
 #include <tuple>
@@ -158,8 +155,7 @@ bool LiveRangeCalc::isDefOnEntry(LiveRange &LR, ArrayRef<SlotIndex> Undefs,
     // If LR has a segment S that starts at the next block, i.e. [End, ...),
     // std::upper_bound will return the segment following S. Instead,
     // S should be treated as the first segment that does not overlap B.
-    LiveRange::iterator UB = std::upper_bound(LR.begin(), LR.end(),
-                                              End.getPrevSlot());
+    LiveRange::iterator UB = upper_bound(LR, End.getPrevSlot());
     if (UB != LR.begin()) {
       LiveRange::Segment &Seg = *std::prev(UB);
       if (Seg.end > Begin) {
@@ -211,7 +207,7 @@ bool LiveRangeCalc::findReachingDefs(LiveRange &LR, MachineBasicBlock &UseMBB,
 
 #ifndef NDEBUG
     if (MBB->pred_empty()) {
-      MBB->getParent()->verify();
+      MBB->getParent()->verify(nullptr, nullptr, &errs());
       errs() << "Use of " << printReg(PhysReg, MRI->getTargetRegisterInfo())
              << " does not have a corresponding definition on every path:\n";
       const MachineInstr *MI = Indexes->getInstructionFromIndex(Use);
@@ -220,13 +216,18 @@ bool LiveRangeCalc::findReachingDefs(LiveRange &LR, MachineBasicBlock &UseMBB,
       report_fatal_error("Use not jointly dominated by defs.");
     }
 
-    if (Register::isPhysicalRegister(PhysReg) && !MBB->isLiveIn(PhysReg)) {
-      MBB->getParent()->verify();
+    if (Register::isPhysicalRegister(PhysReg)) {
       const TargetRegisterInfo *TRI = MRI->getTargetRegisterInfo();
-      errs() << "The register " << printReg(PhysReg, TRI)
-             << " needs to be live in to " << printMBBReference(*MBB)
-             << ", but is missing from the live-in list.\n";
-      report_fatal_error("Invalid global physical register");
+      bool IsLiveIn = MBB->isLiveIn(PhysReg);
+      for (MCRegAliasIterator Alias(PhysReg, TRI, false); !IsLiveIn && Alias.isValid(); ++Alias)
+        IsLiveIn = MBB->isLiveIn(*Alias);
+      if (!IsLiveIn) {
+        MBB->getParent()->verify(nullptr, nullptr, &errs());
+        errs() << "The register " << printReg(PhysReg, TRI)
+               << " needs to be live in to " << printMBBReference(*MBB)
+               << ", but is missing from the live-in list.\n";
+        report_fatal_error("Invalid global physical register");
+      }
     }
 #endif
     FoundUndef |= MBB->pred_empty();
@@ -440,15 +441,21 @@ bool LiveRangeCalc::isJointlyDominated(const MachineBasicBlock *MBB,
   for (SlotIndex I : Defs)
     DefBlocks.set(Indexes.getMBBFromIndex(I)->getNumber());
 
+  unsigned EntryNum = MF.front().getNumber();
   SetVector<unsigned> PredQueue;
   PredQueue.insert(MBB->getNumber());
   for (unsigned i = 0; i != PredQueue.size(); ++i) {
     unsigned BN = PredQueue[i];
     if (DefBlocks[BN])
-      return true;
+      continue;
+    if (BN == EntryNum) {
+      // We found a path from MBB back to the entry block without hitting any of
+      // the def blocks.
+      return false;
+    }
     const MachineBasicBlock *B = MF.getBlockNumbered(BN);
     for (const MachineBasicBlock *P : B->predecessors())
       PredQueue.insert(P->getNumber());
   }
-  return false;
+  return true;
 }

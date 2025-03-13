@@ -1,4 +1,4 @@
-//===-------------------------- test_aux_runtime.cpp ----------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -25,9 +25,13 @@ bool bad_typeid_test () {
     class A { virtual void f() {}};
     class B { virtual void g() {}};
 
-    B *bp = NULL;
-    try {bool b = typeid(*bp) == typeid (A); ((void)b); }
-    catch ( const std::bad_typeid &) { return true; }
+    B* bp = nullptr;
+    try {
+      bool b = typeid(*bp) == typeid(A);
+      ((void)b);
+    } catch (const std::bad_typeid&) {
+      return true;
+    }
     return false;
 }
 

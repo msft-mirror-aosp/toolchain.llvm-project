@@ -10,26 +10,25 @@
 #define LLD_ELF_SCRIPT_PARSER_H
 
 #include "lld/Common/LLVM.h"
-#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/MemoryBufferRef.h"
 
-namespace lld {
-namespace elf {
+namespace lld::elf {
+struct Ctx;
 
 // Parses a linker script. Calling this function updates
 // lld::elf::config and lld::elf::script.
-void readLinkerScript(MemoryBufferRef mb);
+void readLinkerScript(Ctx &ctx, MemoryBufferRef mb);
 
 // Parses a version script.
-void readVersionScript(MemoryBufferRef mb);
+void readVersionScript(Ctx &ctx, MemoryBufferRef mb);
 
-void readDynamicList(MemoryBufferRef mb);
+void readDynamicList(Ctx &ctx, MemoryBufferRef mb);
 
 // Parses the defsym expression.
-void readDefsym(StringRef name, MemoryBufferRef mb);
+void readDefsym(Ctx &ctx, MemoryBufferRef mb);
 
 bool hasWildcard(StringRef s);
 
-} // namespace elf
-} // namespace lld
+} // namespace lld::elf
 
 #endif

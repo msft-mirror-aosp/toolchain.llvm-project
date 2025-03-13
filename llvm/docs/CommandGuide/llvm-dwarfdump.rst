@@ -45,6 +45,16 @@ OPTIONS
 
             Use colors in output.
 
+.. option:: --error-display=<value>       
+
+            Set the level of detail and summary to display when verifying.
+            Implies :option:`--verify`. The supported values are:
+
+            `quiet`   - Only display whether errors occurred.
+            `summary` - Display only a summary of the errors found.
+            `details` - Display each error in detail but no summary.
+            `full`    - Display each error as well as a summary. [default]
+
 .. option:: -f <name>, --find=<name>
 
             Search for the exact text <name> in the accelerator tables
@@ -109,6 +119,11 @@ OPTIONS
 
             Show the sizes of all debug sections, expressed in bytes.
 
+.. option:: --show-sources
+
+            Print all source files mentioned in the debug information. Absolute
+            paths are given whenever possible.
+
 .. option:: --statistics
 
             Collect debug info quality metrics and print the results
@@ -145,11 +160,17 @@ OPTIONS
             compile unit chains, DIE relationships graph, address
             ranges, and more.
 
+.. option:: --verify-json=<path>
+
+            Output JSON-formatted error summary to the a file specfied by
+            <path>. Implies :option:`--verify`.  The output format is described
+            in the section below (:ref:`verify-json-format`).
+
 .. option:: --version
 
             Display the version of the tool.
 
-.. option:: --debug-abbrev, --debug-addr, --debug-aranges, --debug-cu-index, --debug-frame[=<offset>], --debug-gnu-pubnames, --debug-gnu-pubtypes, --debug-info [=<offset>], --debug-line [=<offset>], --debug-line-str, --debug-loc [=<offset>], --debug-loclists [=<offset>], --debug-macro, --debug-names, --debug-pubnames, --debug-pubtypes, --debug-ranges, --debug-rnglists, --debug-str, --debug-str-offsets, --debug-tu-index, --debug-types [=<offset>], --eh-frame [=<offset>], --gdb-index, --apple-names, --apple-types, --apple-namespaces, --apple-objc
+.. option:: --debug-abbrev, --debug-addr, --debug-aranges, --debug-cu-index, --debug-frame [=<offset>], --debug-gnu-pubnames, --debug-gnu-pubtypes, --debug-info [=<offset>], --debug-line [=<offset>], --debug-line-str, --debug-loc [=<offset>], --debug-loclists [=<offset>], --debug-macro, --debug-names, --debug-pubnames, --debug-pubtypes, --debug-ranges, --debug-rnglists, --debug-str, --debug-str-offsets, --debug-tu-index, --debug-types [=<offset>], --eh-frame [=<offset>], --gdb-index, --apple-names, --apple-types, --apple-namespaces, --apple-objc
 
             Dump the specified DWARF section by name. Only the
             `.debug_info` section is shown by default. Some entries
@@ -158,6 +179,10 @@ OPTIONS
             respective section. When an offset is provided, only the
             entry at that offset will be dumped, else the entire
             section will be dumped.
+
+            The :option:`--debug-macro` option prints both the .debug_macro and the .debug_macinfo sections.
+
+            The :option:`--debug-frame` and :option:`--eh-frame` options are aliases, in cases where both sections are present one command outputs both.
 
 .. option:: @<FILE>
 
@@ -168,7 +193,7 @@ OPTIONS
 FORMAT OF STATISTICS OUTPUT
 ---------------------------
 
-The ::option:`--statistics` option generates single-line JSON output
+The :option:`--statistics` option generates single-line JSON output
 representing quality metrics of the processed debug info. These metrics are
 useful to compare changes between two compilers, particularly for judging
 the effect that a change to the compiler has on the debug info quality.
@@ -186,6 +211,28 @@ For aggregated values, the following keys are used:
       - `#bytes` ==> the number of bytes
       - `#variables - entry values ...` ==> the number of variables excluding
         the entry values etc.
+
+.. _verify-json-format:
+
+FORMAT OF VERIFY JSON OUTPUT
+----------------------------
+
+The format of the JSON output created by the :option:`--verify-json` is::
+
+  { 
+    "error-categories": { 
+      "<first category description>": {"count": 1234},
+      "<next category description>": {"count": 4321}
+    },
+    "error-count": 5555
+  }
+
+The following is generated if there are no errors reported::
+
+  { 
+    "error-categories": {},
+    "error-count": 0
+  }
 
 EXIT STATUS
 -----------

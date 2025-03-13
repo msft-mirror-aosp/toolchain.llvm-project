@@ -82,7 +82,7 @@ let NumMicroOps = 0 in {
   def : WriteRes<LSU, [Z196_LSUnit]>;
   def : WriteRes<FPU, [Z196_FPUnit]>;
   def : WriteRes<DFU, [Z196_DFUnit]>;
-  foreach Num = 2-6 in { let ResourceCycles = [Num] in {
+  foreach Num = 2-6 in { let ReleaseAtCycles = [Num] in {
     def : WriteRes<!cast<SchedWrite>("FXU"#Num), [Z196_FXUnit]>;
     def : WriteRes<!cast<SchedWrite>("LSU"#Num), [Z196_LSUnit]>;
     def : WriteRes<!cast<SchedWrite>("FPU"#Num), [Z196_FPUnit]>;
@@ -146,13 +146,13 @@ def : InstRW<[WLat1, FXU, NormalGr], (instregex "CL(F|G)IT(Asm.*)?$")>;
 
 // Call
 def : InstRW<[WLat1, LSU, FXU2, GroupAlone], (instregex "(Call)?BRAS$")>;
-def : InstRW<[WLat1, LSU, FXU2, GroupAlone], (instregex "(Call)?BRASL$")>;
-def : InstRW<[WLat1, LSU, FXU2, GroupAlone], (instregex "(Call)?BAS(R)?$")>;
+def : InstRW<[WLat1, LSU, FXU2, GroupAlone], (instregex "(Call)?BRASL(_XPLINK64)?$")>;
+def : InstRW<[WLat1, LSU, FXU2, GroupAlone], (instregex "(Call)?BAS(R)?(_XPLINK64|_STACKEXT)?$")>;
 def : InstRW<[WLat1, LSU, FXU2, GroupAlone], (instregex "TLS_(G|L)DCALL$")>;
 
 // Return
-def : InstRW<[WLat1, LSU, EndGroup], (instregex "Return$")>;
-def : InstRW<[WLat1, LSU, EndGroup], (instregex "CondReturn$")>;
+def : InstRW<[WLat1, LSU, EndGroup], (instregex "Return(_XPLINK)?$")>;
+def : InstRW<[WLat1, LSU, EndGroup], (instregex "CondReturn(_XPLINK)?$")>;
 
 //===----------------------------------------------------------------------===//
 // Move instructions
@@ -182,7 +182,7 @@ def : InstRW<[WLat1, FXU, NormalGr], (instregex "LLIL(F|H|L)$")>;
 
 def : InstRW<[WLat1, FXU, NormalGr], (instregex "LG(F|H)I$")>;
 def : InstRW<[WLat1, FXU, NormalGr], (instregex "LHI(Mux)?$")>;
-def : InstRW<[WLat1, FXU, NormalGr], (instregex "LR(Mux)?$")>;
+def : InstRW<[WLat1, FXU, NormalGr], (instregex "LR$")>;
 
 // Load and test
 def : InstRW<[WLat1LSU, WLat1LSU, LSU, FXU, NormalGr], (instregex "LT(G)?$")>;
@@ -469,9 +469,9 @@ def : InstRW<[WLat5LSU, WLat5LSU, FXU4, LSU, GroupAlone2],
 def : InstRW<[WLat2LSU, FXU, LSU, NormalGr], (instregex "RLL(G)?$")>;
 
 // Rotate and insert
-def : InstRW<[WLat1, FXU, NormalGr], (instregex "RISBG(32)?$")>;
 def : InstRW<[WLat1, FXU, NormalGr], (instregex "RISBH(G|H|L)$")>;
 def : InstRW<[WLat1, FXU, NormalGr], (instregex "RISBL(G|H|L)$")>;
+def : InstRW<[WLat1, FXU, NormalGr], (instregex "RISBG(32)?(Z)?$")>;
 def : InstRW<[WLat1, FXU, NormalGr], (instregex "RISBMux$")>;
 
 // Rotate and Select
@@ -716,8 +716,7 @@ def : InstRW<[WLat2, FXU2, GroupAlone2], (instregex "LXR$")>;
 
 // Load and Test
 def : InstRW<[WLat9, WLat9, FPU, NormalGr], (instregex "LT(E|D)BR$")>;
-def : InstRW<[WLat9, FPU, NormalGr], (instregex "LT(E|D)BRCompare$")>;
-def : InstRW<[WLat10, WLat10, FPU4, GroupAlone], (instregex "LTXBR(Compare)?$")>;
+def : InstRW<[WLat10, WLat10, FPU4, GroupAlone], (instregex "LTXBR$")>;
 
 // Copy sign
 def : InstRW<[WLat5, FXU2, GroupAlone], (instregex "CPSDR(d|s)(d|s)$")>;
@@ -1236,5 +1235,11 @@ def : InstRW<[WLat30, MCD], (instregex "STC(PS|RW)$")>;
 def : InstRW<[WLat30, MCD], (instregex "TPI$")>;
 def : InstRW<[WLat30, MCD], (instregex "SAL$")>;
 
+//===----------------------------------------------------------------------===//
+// NOPs
+//===----------------------------------------------------------------------===//
+
+def : InstRW<[WLat1, LSU, EndGroup], (instregex "NOP(R)?(Opt)?$")>;
+def : InstRW<[WLat1, LSU, EndGroup], (instregex "J(G)?NOP$")>;
 }
 

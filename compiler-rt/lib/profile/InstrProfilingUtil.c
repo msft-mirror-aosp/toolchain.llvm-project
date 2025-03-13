@@ -12,12 +12,13 @@
 #include <windows.h>
 #include "WindowsMMap.h"
 #else
+#include <errno.h>
+#include <fcntl.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
 #endif
 
 #ifdef COMPILER_RT_HAS_UNAME
@@ -32,10 +33,20 @@
 #include <sys/prctl.h>
 #endif
 
+#if defined(__Fuchsia__)
+#include <zircon/process.h>
+#include <zircon/syscalls.h>
+#endif
+
+#if defined(__FreeBSD__)
+#include <signal.h>
+#include <sys/procctl.h>
+#endif
+
 #include "InstrProfiling.h"
 #include "InstrProfilingUtil.h"
 
-COMPILER_RT_WEAK unsigned lprofDirMode = 0755;
+COMPILER_RT_VISIBILITY unsigned lprofDirMode = 0755;
 
 COMPILER_RT_VISIBILITY
 void __llvm_profile_recursive_mkdir(char *path) {
@@ -141,8 +152,11 @@ COMPILER_RT_VISIBILITY int lprofLockFd(int fd) {
     }
   }
   return 0;
-#else
+#elif defined(COMPILER_RT_HAS_FLOCK) || defined(_WIN32)
+  // Windows doesn't have flock but WindowsMMap.h provides a shim
   flock(fd, LOCK_EX);
+  return 0;
+#else
   return 0;
 #endif
 }
@@ -166,8 +180,11 @@ COMPILER_RT_VISIBILITY int lprofUnlockFd(int fd) {
     }
   }
   return 0;
-#else
+#elif defined(COMPILER_RT_HAS_FLOCK) || defined(_WIN32)
+  // Windows doesn't have flock but WindowsMMap.h provides a shim
   flock(fd, LOCK_UN);
+  return 0;
+#else
   return 0;
 #endif
 }
@@ -313,20 +330,121 @@ COMPILER_RT_VISIBILITY const char *lprofFindLastDirSeparator(const char *Path) {
   return Sep;
 }
 
-COMPILER_RT_VISIBILITY int lprofSuspendSigKill() {
+COMPILER_RT_VISIBILITY int lprofSuspendSigKill(void) {
 #if defined(__linux__)
   int PDeachSig = 0;
   /* Temporarily suspend getting SIGKILL upon exit of the parent process. */
   if (prctl(PR_GET_PDEATHSIG, &PDeachSig) == 0 && PDeachSig == SIGKILL)
     prctl(PR_SET_PDEATHSIG, 0);
   return (PDeachSig == SIGKILL);
+#elif defined(__FreeBSD__)
+  int PDeachSig = 0, PDisableSig = 0;
+  if (procctl(P_PID, 0, PROC_PDEATHSIG_STATUS, &PDeachSig) == 0 &&
+      PDeachSig == SIGKILL)
+    procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &PDisableSig);
+  return (PDeachSig == SIGKILL);
 #else
   return 0;
 #endif
 }
 
-COMPILER_RT_VISIBILITY void lprofRestoreSigKill() {
+COMPILER_RT_VISIBILITY void lprofRestoreSigKill(void) {
 #if defined(__linux__)
   prctl(PR_SET_PDEATHSIG, SIGKILL);
+#elif defined(__FreeBSD__)
+  int PEnableSig = SIGKILL;
+  procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &PEnableSig);
 #endif
+}
+
+COMPILER_RT_VISIBILITY int lprofReleaseMemoryPagesToOS(uintptr_t Begin,
+                                                       uintptr_t End) {
+#if defined(__ve__) || defined(__wasi__)
+  // VE and WASI doesn't support madvise.
+  return 0;
+#else
+  size_t PageSize = getpagesize();
+  uintptr_t BeginAligned = lprofRoundUpTo((uintptr_t)Begin, PageSize);
+  uintptr_t EndAligned = lprofRoundDownTo((uintptr_t)End, PageSize);
+  if (BeginAligned < EndAligned) {
+#if defined(__Fuchsia__)
+    return _zx_vmar_op_range(_zx_vmar_root_self(), ZX_VMAR_OP_DECOMMIT,
+                             (zx_vaddr_t)BeginAligned,
+                             EndAligned - BeginAligned, NULL, 0);
+#else
+    return madvise((void *)BeginAligned, EndAligned - BeginAligned,
+                   MADV_DONTNEED);
+#endif
+  }
+  return 0;
+#endif
+}
+
+#ifdef _AIX
+typedef struct fn_node {
+  AtExit_Fn_ptr func;
+  struct fn_node *next;
+} fn_node;
+typedef struct {
+  fn_node *top;
+} fn_stack;
+
+static void fn_stack_push(fn_stack *, AtExit_Fn_ptr);
+static AtExit_Fn_ptr fn_stack_pop(fn_stack *);
+/* return 1 if stack is empty, 0 otherwise */
+static int fn_stack_is_empty(fn_stack *);
+
+static fn_stack AtExit_stack = {0};
+#define ATEXIT_STACK (&AtExit_stack)
+
+/* On AIX, atexit() functions registered by a shared library do not get called
+ * when the library is dlclose'd, causing a crash when they are eventually
+ * called at main program exit. However, a destructor does get called. So we
+ * collect all atexit functions registered by profile-rt and at program
+ * termination time (normal exit, shared library unload, or dlclose) we walk
+ * the list and execute any function that is still sitting in the atexit system
+ * queue.
+ */
+__attribute__((__destructor__)) static void cleanup() {
+  while (!fn_stack_is_empty(ATEXIT_STACK)) {
+    AtExit_Fn_ptr func = fn_stack_pop(ATEXIT_STACK);
+    if (func && unatexit(func) == 0)
+      func();
+  }
+}
+
+static void fn_stack_push(fn_stack *st, AtExit_Fn_ptr func) {
+  fn_node *old_top, *n = (fn_node *)malloc(sizeof(fn_node));
+  n->func = func;
+
+  while (1) {
+    old_top = st->top;
+    n->next = old_top;
+    if (COMPILER_RT_BOOL_CMPXCHG(&st->top, old_top, n))
+      return;
+  }
+}
+static AtExit_Fn_ptr fn_stack_pop(fn_stack *st) {
+  fn_node *old_top, *new_top;
+  while (1) {
+    old_top = st->top;
+    if (old_top == 0)
+      return 0;
+    new_top = old_top->next;
+    if (COMPILER_RT_BOOL_CMPXCHG(&st->top, old_top, new_top)) {
+      AtExit_Fn_ptr func = old_top->func;
+      free(old_top);
+      return func;
+    }
+  }
+}
+
+static int fn_stack_is_empty(fn_stack *st) { return st->top == 0; }
+#endif
+
+COMPILER_RT_VISIBILITY int lprofAtExit(AtExit_Fn_ptr func) {
+#ifdef _AIX
+  fn_stack_push(ATEXIT_STACK, func);
+#endif
+  return atexit(func);
 }

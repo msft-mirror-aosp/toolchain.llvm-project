@@ -10,8 +10,10 @@
 #define NASTY_CONTAINERS_H
 
 #include <cassert>
+#include <cstddef>
 #include <vector>
 #include <list>
+#include <type_traits>
 
 #include "test_macros.h"
 
@@ -41,6 +43,8 @@ public:
 #if TEST_STD_VER >= 11
     nasty_vector(std::initializer_list<value_type> il) : v_(il) {}
 #endif
+    nasty_vector(const nasty_vector&) = default;
+    nasty_vector& operator=(const nasty_vector&) = default;
     ~nasty_vector() {}
 
     template <class InputIterator>
@@ -119,13 +123,15 @@ public:
     void resize(size_type sz)                      { v_.resize(sz); }
     void resize(size_type sz, const value_type& c) { v_.resize(sz, c); }
 
-    void swap(nasty_vector &nv)
+    void swap(nasty_vector& nv)
 #if TEST_STD_VER > 14
-    noexcept(std::is_nothrow_swappable<nested_container>::value)
+        noexcept(std::is_nothrow_swappable<nested_container>::value)
 #elif defined(_LIBCPP_VERSION)
-    TEST_NOEXCEPT_COND(std::__is_nothrow_swappable<nested_container>::value)
+        TEST_NOEXCEPT_COND(std::__is_nothrow_swappable_v<nested_container>)
 #endif
-    { v_.swap(nv.v_); }
+    {
+      v_.swap(nv.v_);
+    }
 
     nasty_vector *operator &()             { assert(false); return nullptr; }  // nasty
     const nasty_vector *operator &() const { assert(false); return nullptr; }  // nasty
@@ -135,6 +141,14 @@ public:
 
 template <class T>
 bool operator==(const nasty_vector<T>& x, const nasty_vector<T>& y) { return x.v_ == y.v_; }
+
+
+#if TEST_STD_VER >= 20
+
+template <class T>
+auto operator<=>(const nasty_vector<T>& x, const nasty_vector<T>& y) { return x.v_ <=> y.v_; }
+
+#endif
 
 template <class T>
 class nasty_list
@@ -164,7 +178,8 @@ public:
 #if TEST_STD_VER >= 11
     nasty_list(std::initializer_list<value_type> il) : l_(il) {}
 #endif
-
+    nasty_list(const nasty_list&) = default;
+    nasty_list& operator=(const nasty_list&) = default;
     ~nasty_list() {}
 
 #if TEST_STD_VER >= 11
@@ -206,7 +221,7 @@ public:
     void push_back(const value_type& x)     { l_.push_back(x); }
 #if TEST_STD_VER >= 11
     void push_back(value_type&& x)          { l_.push_back(std::forward<value_type&&>(x)); }
-    void push_front(value_type&& x)         { l_.push_back(std::forward<value_type&&>(x)); }
+    void push_front(value_type&& x)         { l_.push_front(std::forward<value_type&&>(x)); }
     template <class... Args>
         void emplace_back(Args&&... args)   { l_.emplace_back(std::forward<Args>(args)...); }
     template <class... Args>
@@ -234,18 +249,20 @@ public:
 #endif
 
     iterator erase(const_iterator pos)                      { return l_.erase(pos); }
-    iterator erase(const_iterator pos, const_iterator last) { return l_.erase(pos, last); }
+    iterator erase(const_iterator first, const_iterator last) { return l_.erase(first, last); }
 
-    void resize(size_type)                      { l_.resize(); }
-    void resize(size_type, const value_type& c) { l_.resize(c); }
+    void resize(size_type n)                      { l_.resize(n); }
+    void resize(size_type n, const value_type& c) { l_.resize(n, c); }
 
-    void swap(nasty_list &nl)
+    void swap(nasty_list& nl)
 #if TEST_STD_VER > 14
-    noexcept(std::is_nothrow_swappable<nested_container>::value)
+        noexcept(std::is_nothrow_swappable<nested_container>::value)
 #elif defined(_LIBCPP_VERSION)
-    TEST_NOEXCEPT_COND(std::__is_nothrow_swappable<nested_container>::value)
+        TEST_NOEXCEPT_COND(std::__is_nothrow_swappable_v<nested_container>)
 #endif
-    { l_.swap(nl.l_); }
+    {
+      l_.swap(nl.l_);
+    }
 
     void clear() TEST_NOEXCEPT { l_.clear(); }
 
@@ -282,6 +299,13 @@ public:
 
 template <class T>
 bool operator==(const nasty_list<T>& x, const nasty_list<T>& y) { return x.l_ == y.l_; }
+
+#if TEST_STD_VER >= 20
+
+template <class T>
+auto operator<=>(const nasty_list<T>& x, const nasty_list<T>& y) { return x.l_ <=> y.l_; }
+
+#endif
 
 // Not really a mutex, but can play one in tests
 class nasty_mutex

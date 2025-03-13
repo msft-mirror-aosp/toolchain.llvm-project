@@ -26,13 +26,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "SpillPlacement.h"
+#include "llvm/CodeGen/SpillPlacement.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/EdgeBundles.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -45,22 +44,20 @@ using namespace llvm;
 
 #define DEBUG_TYPE "spill-code-placement"
 
-char SpillPlacement::ID = 0;
+char SpillPlacementWrapperLegacy::ID = 0;
 
-char &llvm::SpillPlacementID = SpillPlacement::ID;
+char &llvm::SpillPlacementID = SpillPlacementWrapperLegacy::ID;
 
-INITIALIZE_PASS_BEGIN(SpillPlacement, DEBUG_TYPE,
+INITIALIZE_PASS_BEGIN(SpillPlacementWrapperLegacy, DEBUG_TYPE,
                       "Spill Code Placement Analysis", true, true)
-INITIALIZE_PASS_DEPENDENCY(EdgeBundles)
-INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
-INITIALIZE_PASS_END(SpillPlacement, DEBUG_TYPE,
+INITIALIZE_PASS_DEPENDENCY(EdgeBundlesWrapperLegacy)
+INITIALIZE_PASS_END(SpillPlacementWrapperLegacy, DEBUG_TYPE,
                     "Spill Code Placement Analysis", true, true)
 
-void SpillPlacement::getAnalysisUsage(AnalysisUsage &AU) const {
+void SpillPlacementWrapperLegacy::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
-  AU.addRequired<MachineBlockFrequencyInfo>();
-  AU.addRequiredTransitive<EdgeBundles>();
-  AU.addRequiredTransitive<MachineLoopInfo>();
+  AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
+  AU.addRequiredTransitive<EdgeBundlesWrapperLegacy>();
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
@@ -109,8 +106,10 @@ struct SpillPlacement::Node {
 
   /// clear - Reset per-query data, but preserve frequencies that only depend on
   /// the CFG.
-  void clear(const BlockFrequency &Threshold) {
-    BiasN = BiasP = Value = 0;
+  void clear(BlockFrequency Threshold) {
+    BiasN = BlockFrequency(0);
+    BiasP = BlockFrequency(0);
+    Value = 0;
     SumLinkWeights = Threshold;
     Links.clear();
   }
@@ -121,9 +120,9 @@ struct SpillPlacement::Node {
     SumLinkWeights += w;
 
     // There can be multiple links to the same bundle, add them up.
-    for (LinkVector::iterator I = Links.begin(), E = Links.end(); I != E; ++I)
-      if (I->second == b) {
-        I->first += w;
+    for (std::pair<BlockFrequency, unsigned> &L : Links)
+      if (L.second == b) {
+        L.first += w;
         return;
       }
     // This must be the first link to b.
@@ -142,22 +141,22 @@ struct SpillPlacement::Node {
       BiasN += freq;
       break;
     case MustSpill:
-      BiasN = BlockFrequency::getMaxFrequency();
+      BiasN = BlockFrequency::max();
       break;
     }
   }
 
   /// update - Recompute Value from Bias and Links. Return true when node
   /// preference changes.
-  bool update(const Node nodes[], const BlockFrequency &Threshold) {
+  bool update(const Node nodes[], BlockFrequency Threshold) {
     // Compute the weighted sum of inputs.
     BlockFrequency SumN = BiasN;
     BlockFrequency SumP = BiasP;
-    for (LinkVector::iterator I = Links.begin(), E = Links.end(); I != E; ++I) {
-      if (nodes[I->second].Value == -1)
-        SumN += I->first;
-      else if (nodes[I->second].Value == 1)
-        SumP += I->first;
+    for (std::pair<BlockFrequency, unsigned> &L : Links) {
+      if (nodes[L.second].Value == -1)
+        SumN += L.first;
+      else if (nodes[L.second].Value == 1)
+        SumP += L.first;
     }
 
     // Each weighted sum is going to be less than the total frequency of the
@@ -190,33 +189,64 @@ struct SpillPlacement::Node {
   }
 };
 
-bool SpillPlacement::runOnMachineFunction(MachineFunction &mf) {
+bool SpillPlacementWrapperLegacy::runOnMachineFunction(MachineFunction &MF) {
+  auto *Bundles = &getAnalysis<EdgeBundlesWrapperLegacy>().getEdgeBundles();
+  auto *MBFI = &getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
+
+  Impl.run(MF, Bundles, MBFI);
+  return false;
+}
+
+AnalysisKey SpillPlacementAnalysis::Key;
+
+SpillPlacement
+SpillPlacementAnalysis::run(MachineFunction &MF,
+                            MachineFunctionAnalysisManager &MFAM) {
+  auto *Bundles = &MFAM.getResult<EdgeBundlesAnalysis>(MF);
+  auto *MBFI = &MFAM.getResult<MachineBlockFrequencyAnalysis>(MF);
+  SpillPlacement Impl;
+  Impl.run(MF, Bundles, MBFI);
+  return Impl;
+}
+
+bool SpillPlacementAnalysis::Result::invalidate(
+    MachineFunction &MF, const PreservedAnalyses &PA,
+    MachineFunctionAnalysisManager::Invalidator &Inv) {
+  auto PAC = PA.getChecker<SpillPlacementAnalysis>();
+  if (!PAC.preserved() && !PAC.preservedSet<AllAnalysesOn<MachineFunction>>())
+    return true;
+  // Check dependencies.
+  return Inv.invalidate<EdgeBundlesAnalysis>(MF, PA) ||
+         Inv.invalidate<MachineBlockFrequencyAnalysis>(MF, PA);
+}
+
+SpillPlacement::SpillPlacement() = default;
+SpillPlacement::~SpillPlacement() = default;
+SpillPlacement::SpillPlacement(SpillPlacement &&) = default;
+
+void SpillPlacement::releaseMemory() {
+  nodes.reset();
+  TodoList.clear();
+}
+
+void SpillPlacement::run(MachineFunction &mf, EdgeBundles *Bundles,
+                         MachineBlockFrequencyInfo *MBFI) {
   MF = &mf;
-  bundles = &getAnalysis<EdgeBundles>();
-  loops = &getAnalysis<MachineLoopInfo>();
+  this->bundles = Bundles;
+  this->MBFI = MBFI;
 
   assert(!nodes && "Leaking node array");
-  nodes = new Node[bundles->getNumBundles()];
+  nodes.reset(new Node[bundles->getNumBundles()]);
   TodoList.clear();
   TodoList.setUniverse(bundles->getNumBundles());
 
   // Compute total ingoing and outgoing block frequencies for all bundles.
   BlockFrequencies.resize(mf.getNumBlockIDs());
-  MBFI = &getAnalysis<MachineBlockFrequencyInfo>();
   setThreshold(MBFI->getEntryFreq());
   for (auto &I : mf) {
     unsigned Num = I.getNumber();
     BlockFrequencies[Num] = MBFI->getBlockFreq(&I);
   }
-
-  // We never change the function.
-  return false;
-}
-
-void SpillPlacement::releaseMemory() {
-  delete[] nodes;
-  nodes = nullptr;
-  TodoList.clear();
 }
 
 /// activate - mark node n as active if it wasn't already.
@@ -237,8 +267,10 @@ void SpillPlacement::activate(unsigned n) {
   // limiting the number of blocks visited and the number of links in the
   // Hopfield network.
   if (bundles->getBlocks(n).size() > 100) {
-    nodes[n].BiasP = 0;
-    nodes[n].BiasN = (MBFI->getEntryFreq() / 16);
+    nodes[n].BiasP = BlockFrequency(0);
+    BlockFrequency BiasN = MBFI->getEntryFreq();
+    BiasN >>= 4;
+    nodes[n].BiasN = BiasN;
   }
 }
 
@@ -247,46 +279,44 @@ void SpillPlacement::activate(unsigned n) {
 /// Set the threshold relative to \c Entry.  Since the threshold is used as a
 /// bound on the open interval (-Threshold;Threshold), 1 is the minimum
 /// threshold.
-void SpillPlacement::setThreshold(const BlockFrequency &Entry) {
+void SpillPlacement::setThreshold(BlockFrequency Entry) {
   // Apparently 2 is a good threshold when Entry==2^14, but we need to scale
   // it.  Divide by 2^13, rounding as appropriate.
   uint64_t Freq = Entry.getFrequency();
   uint64_t Scaled = (Freq >> 13) + bool(Freq & (1 << 12));
-  Threshold = std::max(UINT64_C(1), Scaled);
+  Threshold = BlockFrequency(std::max(UINT64_C(1), Scaled));
 }
 
 /// addConstraints - Compute node biases and weights from a set of constraints.
 /// Set a bit in NodeMask for each active node.
 void SpillPlacement::addConstraints(ArrayRef<BlockConstraint> LiveBlocks) {
-  for (ArrayRef<BlockConstraint>::iterator I = LiveBlocks.begin(),
-       E = LiveBlocks.end(); I != E; ++I) {
-    BlockFrequency Freq = BlockFrequencies[I->Number];
+  for (const BlockConstraint &LB : LiveBlocks) {
+    BlockFrequency Freq = BlockFrequencies[LB.Number];
 
     // Live-in to block?
-    if (I->Entry != DontCare) {
-      unsigned ib = bundles->getBundle(I->Number, false);
+    if (LB.Entry != DontCare) {
+      unsigned ib = bundles->getBundle(LB.Number, false);
       activate(ib);
-      nodes[ib].addBias(Freq, I->Entry);
+      nodes[ib].addBias(Freq, LB.Entry);
     }
 
     // Live-out from block?
-    if (I->Exit != DontCare) {
-      unsigned ob = bundles->getBundle(I->Number, true);
+    if (LB.Exit != DontCare) {
+      unsigned ob = bundles->getBundle(LB.Number, true);
       activate(ob);
-      nodes[ob].addBias(Freq, I->Exit);
+      nodes[ob].addBias(Freq, LB.Exit);
     }
   }
 }
 
 /// addPrefSpill - Same as addConstraints(PrefSpill)
 void SpillPlacement::addPrefSpill(ArrayRef<unsigned> Blocks, bool Strong) {
-  for (ArrayRef<unsigned>::iterator I = Blocks.begin(), E = Blocks.end();
-       I != E; ++I) {
-    BlockFrequency Freq = BlockFrequencies[*I];
+  for (unsigned B : Blocks) {
+    BlockFrequency Freq = BlockFrequencies[B];
     if (Strong)
       Freq += Freq;
-    unsigned ib = bundles->getBundle(*I, false);
-    unsigned ob = bundles->getBundle(*I, true);
+    unsigned ib = bundles->getBundle(B, false);
+    unsigned ob = bundles->getBundle(B, true);
     activate(ib);
     activate(ob);
     nodes[ib].addBias(Freq, PrefSpill);
@@ -295,9 +325,7 @@ void SpillPlacement::addPrefSpill(ArrayRef<unsigned> Blocks, bool Strong) {
 }
 
 void SpillPlacement::addLinks(ArrayRef<unsigned> Links) {
-  for (ArrayRef<unsigned>::iterator I = Links.begin(), E = Links.end(); I != E;
-       ++I) {
-    unsigned Number = *I;
+  for (unsigned Number : Links) {
     unsigned ib = bundles->getBundle(Number, false);
     unsigned ob = bundles->getBundle(Number, true);
 
@@ -327,9 +355,9 @@ bool SpillPlacement::scanActiveBundles() {
 }
 
 bool SpillPlacement::update(unsigned n) {
-  if (!nodes[n].update(nodes, Threshold))
+  if (!nodes[n].update(nodes.get(), Threshold))
     return false;
-  nodes[n].getDissentingNeighbors(TodoList, nodes);
+  nodes[n].getDissentingNeighbors(TodoList, nodes.get());
   return true;
 }
 
@@ -376,4 +404,27 @@ SpillPlacement::finish() {
     }
   ActiveNodes = nullptr;
   return Perfect;
+}
+
+void SpillPlacement::BlockConstraint::print(raw_ostream &OS) const {
+  auto toString = [](BorderConstraint C) -> StringRef {
+    switch(C) {
+    case DontCare: return "DontCare";
+    case PrefReg: return "PrefReg";
+    case PrefSpill: return "PrefSpill";
+    case PrefBoth: return "PrefBoth";
+    case MustSpill: return "MustSpill";
+    };
+    llvm_unreachable("uncovered switch");
+  };
+
+  dbgs() << "{" << Number << ", "
+         << toString(Entry) << ", "
+         << toString(Exit) << ", "
+         << (ChangesValue ? "changes" : "no change") << "}";
+}
+
+void SpillPlacement::BlockConstraint::dump() const {
+  print(dbgs());
+  dbgs() << "\n";
 }

@@ -14,16 +14,15 @@ define i32 @div8() nounwind {
 ; CHECK:       ## %bb.0: ## %entry
 ; CHECK-NEXT:    pushq %rbp
 ; CHECK-NEXT:    movq %rsp, %rbp
+; CHECK-NEXT:    ## implicit-def: $rax
+; CHECK-NEXT:    movb %al, %cl
 ; CHECK-NEXT:    xorl %eax, %eax
 ; CHECK-NEXT:    ## kill: def $al killed $al killed $eax
-; CHECK-NEXT:    movb %al, {{[-0-9]+}}(%r{{[sb]}}p) ## 1-byte Spill
-; CHECK-NEXT:    ## implicit-def: $rcx
-; CHECK-NEXT:    ## kill: def $cl killed $cl killed $rcx
 ; CHECK-NEXT:    movzbw %al, %ax
 ; CHECK-NEXT:    divb %cl
-; CHECK-NEXT:    movb %al, %dl
-; CHECK-NEXT:    movb {{[-0-9]+}}(%r{{[sb]}}p), %al ## 1-byte Reload
-; CHECK-NEXT:    movb %dl, {{[-0-9]+}}(%r{{[sb]}}p) ## 1-byte Spill
+; CHECK-NEXT:    movb %al, {{[-0-9]+}}(%r{{[sb]}}p) ## 1-byte Spill
+; CHECK-NEXT:    xorl %eax, %eax
+; CHECK-NEXT:    ## kill: def $al killed $al killed $eax
 ; CHECK-NEXT:    movzbw %al, %ax
 ; CHECK-NEXT:    divb %cl
 ; CHECK-NEXT:    shrw $8, %ax
@@ -35,7 +34,9 @@ define i32 @div8() nounwind {
 ; CHECK-NEXT:    movzbl %al, %eax
 ; CHECK-NEXT:    ## implicit-def: $ecx
 ; CHECK-NEXT:    imull %ecx, %eax
+; CHECK-NEXT:    ## implicit-def: $ecx
 ; CHECK-NEXT:    addl %ecx, %eax
+; CHECK-NEXT:    ## implicit-def: $ecx
 ; CHECK-NEXT:    cmpl %ecx, %eax
 ; CHECK-NEXT:    je LBB0_3
 ; CHECK-NEXT:  LBB0_2: ## %"40"
@@ -87,8 +88,8 @@ define i64 @addressModeWith32bitIndex(i32 %V) {
 ; CHECK-NEXT:    idivq (%rcx,%rsi,8)
 ; CHECK-NEXT:    popq %rbp
 ; CHECK-NEXT:    retq
-  %gep = getelementptr i64, i64* null, i32 %V
-  %load = load i64, i64* %gep
+  %gep = getelementptr i64, ptr null, i32 %V
+  %load = load i64, ptr %gep
   %sdiv = sdiv i64 0, %load
   ret i64 %sdiv
 }

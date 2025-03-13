@@ -4,6 +4,18 @@
 // RUN: llvm-readelf -r %t.o | FileCheck --check-prefix=InputRelocs %s
 // RUN: llvm-objdump -d %t | FileCheck --check-prefix=Dis %s
 
+// RUN: not ld.lld -shared %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=ERR
+
+/// Reject local-exec TLS relocations for -shared.
+// ERR: error: relocation R_PPC64_TPREL16_HA against a cannot be used with -shared
+// ERR: error: relocation R_PPC64_TPREL16_LO against a cannot be used with -shared
+// ERR: error: relocation R_PPC64_TPREL16 against b cannot be used with -shared
+// ERR: error: relocation R_PPC64_TPREL16_HI against b cannot be used with -shared
+// ERR: error: relocation R_PPC64_TPREL16_DS against b cannot be used with -shared
+// ERR: error: relocation R_PPC64_TPREL16_LO_DS against b cannot be used with -shared
+// ERR: error: relocation R_PPC64_TPREL16_HIGHESTA against b cannot be used with -shared
+// ERR: error: relocation R_PPC64_TPREL16_HIGHERA against b cannot be used with -shared
+
 	.text
 	.abiversion 2
 	.globl	test_local_exec                    # -- Begin function test_local_exec
@@ -50,7 +62,7 @@ test_ds:
   addi 2, 2, .TOC.-.Lfunc_gep3@l
 .Lfunc_lep3:
   .localentry test_ds, .Lfunc_lep3-.Lfunc_gep3
-  ld 3, b@tprel, 13
+  ld 3, b@tprel(13)
   blr
 
 test_lo_ds:
@@ -59,7 +71,7 @@ test_lo_ds:
   addi 2, 2, .TOC.-.Lfunc_gep4@l
 .Lfunc_lep4:
   .localentry test_lo_ds, .Lfunc_lep4-.Lfunc_gep4
-  ld 3, b@tprel@l, 13
+  ld 3, b@tprel@l(13)
   blr
 
 test_highest_a:

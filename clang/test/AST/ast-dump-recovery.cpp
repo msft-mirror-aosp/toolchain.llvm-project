@@ -9,7 +9,7 @@ int some_func(int *);
 // CHECK-NEXT:    `-IntegerLiteral {{.*}} 123
 // DISABLED-NOT: -RecoveryExpr {{.*}} contains-errors
 int invalid_call = some_func(123);
-void test_invalid_call(int s) {
+void test_invalid_call_1(int s) {
   // CHECK:      CallExpr {{.*}} '<dependent type>' contains-errors
   // CHECK-NEXT: |-UnresolvedLookupExpr {{.*}} 'some_func'
   // CHECK-NEXT: |-RecoveryExpr {{.*}} <col:13>
@@ -30,6 +30,26 @@ void test_invalid_call(int s) {
   // CHECK-NEXT:   |-UnresolvedLookupExpr {{.*}} 'some_func'
   // CHECK-NEXT:   `-RecoveryExpr {{.*}} contains-errors
   int var = some_func(undef1);
+}
+
+int some_func2(int a, int b);
+void test_invalid_call_2() {
+  // CHECK:   -RecoveryExpr {{.*}} 'int' contains-errors
+  // CHECK-NEXT: `-UnresolvedLookupExpr {{.*}} '<overloaded function type>' lvalue (ADL) = 'some_func2'
+  some_func2(,);
+
+  // CHECK:   -RecoveryExpr {{.*}} 'int' contains-errors
+  // CHECK-NEXT: `-UnresolvedLookupExpr {{.*}} '<overloaded function type>' lvalue (ADL) = 'some_func2'
+  some_func2(,,);
+
+  // CHECK:   `-RecoveryExpr {{.*}} 'int' contains-errors
+  // CHECK-NEXT: |-UnresolvedLookupExpr {{.*}} '<overloaded function type>' lvalue (ADL) = 'some_func2'
+  // CHECK-NEXT: `-IntegerLiteral {{.*}} 'int' 1
+  some_func2(1,);
+
+  // FIXME: Handle invalid argument with recovery
+  // CHECK-NOT: `-RecoveryExpr
+  some_func2(,1);
 }
 
 int ambig_func(double);
@@ -119,6 +139,41 @@ struct Foo {} foo;
 void test(int x) {
   foo.abc;
   foo->func(x);
+}
+
+void AccessIncompleteClass() {
+  struct Forward;
+  Forward* ptr;
+  // CHECK:      CallExpr {{.*}} '<dependent type>'
+  // CHECK-NEXT: `-CXXDependentScopeMemberExpr {{.*}} '<dependent type>'
+  // CHECK-NEXT:   `-RecoveryExpr {{.*}} '<dependent type>' contains-errors
+  // CHECK-NEXT:     `-DeclRefExpr {{.*}} 'Forward *'
+  ptr->method();
+}
+
+struct Foo2 {
+  double func();
+  class ForwardClass;
+  ForwardClass createFwd();
+
+  int overload();
+  int overload(int, int);
+};
+void test2(Foo2 f) {
+  // CHECK:      RecoveryExpr {{.*}} 'double'
+  // CHECK-NEXT:   |-MemberExpr {{.*}} '<bound member function type>'
+  // CHECK-NEXT:   | `-DeclRefExpr {{.*}} 'f'
+  // CHECK-NEXT: `-IntegerLiteral {{.*}} 'int' 1
+  f.func(1);
+  // CHECK:      RecoveryExpr {{.*}} 'ForwardClass':'Foo2::ForwardClass'
+  // CHECK-NEXT: `-MemberExpr {{.*}} '<bound member function type>' .createFwd
+  // CHECK-NEXT:   `-DeclRefExpr {{.*}} 'f'
+  f.createFwd();
+  // CHECK:      RecoveryExpr {{.*}} 'int' contains-errors
+  // CHECK-NEXT: |-UnresolvedMemberExpr
+  // CHECK-NEXT:    `-DeclRefExpr {{.*}} 'Foo2'
+  // CHECK-NEXT: `-IntegerLiteral {{.*}} 'int' 1
+  f.overload(1);
 }
 
 // CHECK:     |-AlignedAttr {{.*}} alignas
@@ -225,7 +280,7 @@ using Escape = decltype([] { return undef(); }());
 // CHECK-NEXT: `-RecoveryExpr {{.*}} '<dependent type>' contains-errors lvalue
 // CHECK-NEXT:   `-InitListExpr
 // CHECK-NEXT:     `-DesignatedInitExpr {{.*}} 'void'
-// CHECK-NEXT:       `-CXXNullPtrLiteralExpr {{.*}} 'nullptr_t'
+// CHECK-NEXT:       `-CXXNullPtrLiteralExpr {{.*}} 'std::nullptr_t'
 struct {
   int& abc;
 } NoCrashOnInvalidInitList = {
@@ -272,13 +327,190 @@ void InvalidCondition() {
   invalid() ? 1 : 2;
 }
 
-void abcc();
-void TypoCorrection() {
-  // RecoveryExpr is always dependent-type in this case in order to suppress
-  // following diagnostics.
-  // CHECK:      RecoveryExpr {{.*}} '<dependent type>'
-  // CHECK-NEXT: `-CallExpr {{.*}} 'void'
-  // CHECK-NEXT:   `-ImplicitCastExpr
-  // CHECK-NEXT:     `-DeclRefExpr {{.*}} 'abcc'
-  abc();
+void CtorInitializer() {
+  struct S{int m};
+  class MemberInit {
+    int x, y, z;
+    S s;
+    MemberInit() : x(invalid), y(invalid, invalid), z(invalid()), s(1,2) {}
+    // CHECK:      CXXConstructorDecl {{.*}} MemberInit 'void ()'
+    // CHECK-NEXT: |-CXXCtorInitializer Field {{.*}} 'x' 'int'
+    // CHECK-NEXT: | `-ParenListExpr
+    // CHECK-NEXT: |   `-RecoveryExpr {{.*}} '<dependent type>'
+    // CHECK-NEXT: |-CXXCtorInitializer Field {{.*}} 'y' 'int'
+    // CHECK-NEXT: | `-ParenListExpr
+    // CHECK-NEXT: |   |-RecoveryExpr {{.*}} '<dependent type>'
+    // CHECK-NEXT: |   `-RecoveryExpr {{.*}} '<dependent type>'
+    // CHECK-NEXT: |-CXXCtorInitializer Field {{.*}} 'z' 'int'
+    // CHECK-NEXT: | `-ParenListExpr
+    // CHECK-NEXT: |   `-RecoveryExpr {{.*}} '<dependent type>'
+    // CHECK-NEXT: |     `-UnresolvedLookupExpr {{.*}} '<overloaded function type>'
+    // CHECK-NEXT: |-CXXCtorInitializer Field {{.*}} 's' 'S'
+    // CHECK-NEXT: | `-RecoveryExpr {{.*}} 'S' contains-errors
+    // CHECK-NEXT: |   |-IntegerLiteral {{.*}} 1
+    // CHECK-NEXT: |   `-IntegerLiteral {{.*}} 2
+  };
+  class BaseInit : S {
+    BaseInit(float) : S("no match") {}
+    // CHECK:      CXXConstructorDecl {{.*}} BaseInit 'void (float)'
+    // CHECK-NEXT: |-ParmVarDecl
+    // CHECK-NEXT: |-CXXCtorInitializer 'S'
+    // CHECK-NEXT: | `-RecoveryExpr {{.*}} 'S'
+    // CHECK-NEXT: |   `-StringLiteral
+
+    BaseInit(double) : S(invalid) {}
+    // CHECK:      CXXConstructorDecl {{.*}} BaseInit 'void (double)'
+    // CHECK-NEXT: |-ParmVarDecl
+    // CHECK-NEXT: |-CXXCtorInitializer 'S'
+    // CHECK-NEXT: | `-ParenListExpr
+    // CHECK-NEXT: |   `-RecoveryExpr {{.*}} '<dependent type>'
+  };
+  class DelegatingInit {
+    DelegatingInit(float) : DelegatingInit("no match") {}
+    // CHECK:      CXXConstructorDecl {{.*}} DelegatingInit 'void (float)'
+    // CHECK-NEXT: |-ParmVarDecl
+    // CHECK-NEXT: |-CXXCtorInitializer 'DelegatingInit'
+    // CHECK-NEXT: | `-RecoveryExpr {{.*}} 'DelegatingInit'
+    // CHECK-NEXT: |   `-StringLiteral
+
+    DelegatingInit(double) : DelegatingInit(invalid) {}
+    // CHECK:      CXXConstructorDecl {{.*}} DelegatingInit 'void (double)'
+    // CHECK-NEXT: |-ParmVarDecl
+    // CHECK-NEXT: |-CXXCtorInitializer 'DelegatingInit'
+    // CHECK-NEXT: | `-ParenListExpr
+    // CHECK-NEXT: |   `-RecoveryExpr {{.*}} '<dependent type>'
+  };
 }
+
+float *brokenReturn() {
+  // CHECK:      FunctionDecl {{.*}} brokenReturn
+  return 42;
+  // CHECK:      ReturnStmt
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} 'float *'
+  // CHECK-NEXT:   `-IntegerLiteral {{.*}} 'int' 42
+}
+
+// Return deduction treats the first, second *and* third differently!
+auto *brokenDeducedReturn(int *x, float *y, double *z) {
+  // CHECK:      FunctionDecl {{.*}} invalid brokenDeducedReturn
+  if (x) return x;
+  // CHECK:      ReturnStmt
+  // CHECK-NEXT: `-ImplicitCastExpr {{.*}} <LValueToRValue>
+  // CHECK-NEXT:   `-DeclRefExpr {{.*}} 'x' 'int *'
+  if (y) return y;
+  // CHECK:      ReturnStmt
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} 'int *'
+  // CHECK-NEXT:   `-DeclRefExpr {{.*}} 'y' 'float *'
+  if (z) return z;
+  // CHECK:      ReturnStmt
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} 'int *'
+  // CHECK-NEXT:   `-DeclRefExpr {{.*}} 'z' 'double *'
+  return x;
+  // Unfortunate: we wrap a valid return in RecoveryExpr.
+  // This is to avoid running deduction again after it failed once.
+  // CHECK:      ReturnStmt
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} 'int *'
+  // CHECK-NEXT:   `-DeclRefExpr {{.*}} 'x' 'int *'
+}
+
+void returnInitListFromVoid() {
+  // CHECK:      FunctionDecl {{.*}} returnInitListFromVoid
+  return {7,8};
+  // CHECK:      ReturnStmt
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} '<dependent type>'
+  // CHECK-NEXT:   |-IntegerLiteral {{.*}} 'int' 7
+  // CHECK-NEXT:   `-IntegerLiteral {{.*}} 'int' 8
+}
+
+void RecoveryExprForInvalidDecls(Unknown InvalidDecl) {
+  InvalidDecl + 1;
+  // CHECK:      BinaryOperator {{.*}}
+  // CHECK-NEXT: |-RecoveryExpr {{.*}} '<dependent type>'
+  // CHECK-NEXT: | | `-DeclRefExpr {{.*}} 'InvalidDecl' 'int'
+  // CHECK-NEXT: `-IntegerLiteral {{.*}} 'int' 1
+  InvalidDecl();
+  // CHECK:      CallExpr {{.*}}
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} '<dependent type>'
+}
+
+void InitializerOfInvalidDecl() {
+  int ValidDecl;
+  Unkown InvalidDecl = ValidDecl;
+  // CHECK:      VarDecl {{.*}} invalid InvalidDecl
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} '<dependent type>' contains-errors
+  // CHECK-NEXT:   `-DeclRefExpr {{.*}} 'int' lvalue Var {{.*}} 'ValidDecl'
+
+  Unknown InvalidDeclWithInvalidInit = Invalid;
+  // CHECK:      VarDecl {{.*}} invalid InvalidDeclWithInvalidInit
+  // CHECK-NEXT: `-RecoveryExpr {{.*}} '<dependent type>' contains-errors
+  // CHECK-NOT:    `-TypoExpr
+}
+
+void RecoverToAnInvalidDecl() {
+  Unknown* foo; // invalid decl
+  goo; // the typo was correct to the invalid foo.
+  // Verify that RecoveryExpr has an inner DeclRefExpr.
+  // CHECK:      RecoveryExpr {{.*}} '<dependent type>' contains-errors lvalue
+  // CHECK-NEXT: `-DeclRefExpr {{.*}} 'foo' 'int *'
+}
+
+void RecoveryToDoWhileStmtCond() {
+  // CHECK:       FunctionDecl {{.*}} RecoveryToDoWhileStmtCond
+  // CHECK:       `-DoStmt {{.*}}
+  // CHECK-NEXT:    |-CompoundStmt {{.*}}
+  // CHECK-NEXT:    `-BinaryOperator {{.*}} '<dependent type>' contains-errors '<'
+  // CHECK-NEXT:      |-BinaryOperator {{.*}} '<dependent type>' contains-errors '+'
+  // CHECK-NEXT:      | |-RecoveryExpr {{.*}} '<dependent type>' contains-errors lvalue
+  // CHECK-NEXT:      | `-IntegerLiteral {{.*}} 'int' 1
+  // CHECK-NEXT:      `-IntegerLiteral {{.*}} 'int' 10
+  do {} while (some_invalid_val + 1 < 10);
+}
+
+void RecoveryForStmtCond() {
+  // CHECK:FunctionDecl {{.*}} RecoveryForStmtCond
+  // CHECK-NEXT:`-CompoundStmt {{.*}}
+  // CHECK-NEXT:  `-ForStmt {{.*}}
+  // CHECK-NEXT:    |-DeclStmt {{.*}}
+  // CHECK-NEXT:    | `-VarDecl {{.*}}
+  // CHECK-NEXT:    |   `-IntegerLiteral {{.*}} <col:16> 'int' 0
+  // CHECK-NEXT:    |-<<<NULL>>>
+  // CHECK-NEXT:    |-RecoveryExpr {{.*}} 'bool' contains-errors
+  // CHECK-NEXT:    |-UnaryOperator {{.*}} 'int' lvalue prefix '++'
+  // CHECK-NEXT:    | `-DeclRefExpr {{.*}} 'int' lvalue Var {{.*}} 'i' 'int'
+  // CHECK-NEXT:    `-CompoundStmt {{.*}}
+  for (int i = 0; i < invalid; ++i) {}
+}
+
+// Fix crash issue https://github.com/llvm/llvm-project/issues/112560.
+// Make sure clang compiles the following code without crashing:
+
+// CHECK:NamespaceDecl {{.*}} GH112560
+// CHECK-NEXT:  |-CXXRecordDecl {{.*}} referenced union U definition
+// CHECK-NEXT:  | |-DefinitionData {{.*}}
+// CHECK-NEXT:  | | |-DefaultConstructor {{.*}}
+// CHECK-NEXT:  | | |-CopyConstructor {{.*}}
+// CHECK-NEXT:  | | |-MoveConstructor {{.*}}
+// CHECK-NEXT:  | | |-CopyAssignment {{.*}}
+// CHECK-NEXT:  | | |-MoveAssignment {{.*}}
+// CHECK-NEXT:  | | `-Destructor {{.*}}
+// CHECK-NEXT:  | |-CXXRecordDecl {{.*}} implicit union U
+// CHECK-NEXT:  | `-FieldDecl {{.*}} invalid f 'int'
+// CHECK-NEXT:  |   `-RecoveryExpr {{.*}} 'int' contains-errors
+// DISABLED-NOT: -RecoveryExpr {{.*}} contains-errors
+namespace GH112560 {
+union U {
+  int f = ;
+};
+
+// CHECK: FunctionDecl {{.*}} foo 'void ()'
+// CHECK-NEXT:    `-CompoundStmt {{.*}}
+// CHECK-NEXT:      `-DeclStmt {{.*}}
+// CHECK-NEXT:        `-VarDecl {{.*}} g 'U':'GH112560::U' listinit
+// CHECK-NEXT:          `-InitListExpr {{.*}} 'U':'GH112560::U' contains-errors field Field {{.*}} 'f' 'int'
+// CHECK-NEXT:            `-CXXDefaultInitExpr {{.*}} 'int' contains-errors has rewritten init
+// CHECK-NEXT:              `-RecoveryExpr {{.*}} 'int' contains-errors
+// DISABLED-NOT: -RecoveryExpr {{.*}} contains-errors
+void foo() {
+  U g{};
+}
+} // namespace GH112560

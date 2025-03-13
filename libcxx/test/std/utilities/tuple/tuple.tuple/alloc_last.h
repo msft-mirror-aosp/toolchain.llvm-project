@@ -44,6 +44,8 @@ struct alloc_last
         allocator_constructed = true;
     }
 
+    alloc_last(const alloc_last&) = default;
+    alloc_last& operator=(const alloc_last&) = default;
     ~alloc_last() {data_ = -1;}
 
     friend bool operator==(const alloc_last& x, const alloc_last& y)
@@ -54,4 +56,4 @@ struct alloc_last
 
 bool alloc_last::allocator_constructed = false;
 
-#endif  // ALLOC_LAST_H
+#endif // ALLOC_LAST_H

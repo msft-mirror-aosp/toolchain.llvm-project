@@ -18,7 +18,7 @@ type, which is a specialization of ``chrono::time_point`` for the
   trivial-clock is an implementation-defined type that satisfies the
   Cpp17TrivialClock requirements ([time.clock.req]) and that is capable of
   representing and measuring file time values. Implementations should ensure
-  that the resolution and range of file_­time_­type reflect the operating
+  that the resolution and range of file_time_type reflect the operating
   system dependent resolution and range of file time values.
 
 
@@ -153,7 +153,7 @@ We should also consider the opposite problem of having a ``file_time_type``
 that is able to represent a larger range than ``timespec``. At least in
 this case ``last_write_time`` can be used to get and set all possible values
 supported by the underlying filesystem; meaning ``last_write_time(p)`` will
-never throw a overflow error when retrieving a value.
+never throw an overflow error when retrieving a value.
 
 However, this introduces a new problem, where users are allowed to attempt to
 create a time point beyond what the filesystem can represent. Two particular

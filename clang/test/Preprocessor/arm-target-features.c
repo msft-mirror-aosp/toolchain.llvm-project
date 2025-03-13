@@ -88,8 +88,8 @@
 // CHECK-V8R: #define __ARM_FEATURE_NUMERIC_MAXMIN 1
 // CHECK-V8R-NOT: #define __ARM_FP 0x
 
-// RUN: %clang -target armv8r-none-linux-gnueabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V8R-ALLOW-FP-INSTR %s
-// RUN: %clang -target armv8r-none-linux-gnueabihf -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V8R-ALLOW-FP-INSTR %s
+// RUN: %clang -target armv8r-none-linux-gnueabi -mcpu=cortex-r52 -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V8R-ALLOW-FP-INSTR %s
+// RUN: %clang -target armv8r-none-linux-gnueabihf -mcpu=cortex-r52 -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V8R-ALLOW-FP-INSTR %s
 // CHECK-V8R-ALLOW-FP-INSTR: #define __ARMEL__ 1
 // CHECK-V8R-ALLOW-FP-INSTR: #define __ARM_ARCH 8
 // CHECK-V8R-ALLOW-FP-INSTR: #define __ARM_ARCH_8R__ 1
@@ -132,6 +132,30 @@
 // CHECK-V7VE-DEFAULT-ABI-SOFT: #define __ARM_ARCH_EXT_IDIV__ 1
 // CHECK-V7VE-DEFAULT-ABI-SOFT: #define __ARM_FP 0xc
 
+// RUN: %clang -target x86_64-apple-macosx10.10 -arch armv7 -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-DARWIN-V7 %s
+// CHECK-DARWIN-V7: #define __ARMEL__ 1
+// CHECK-DARWIN-V7: #define __ARM_ARCH 7
+// CHECK-DARWIN-V7: #define __ARM_ARCH_7A__ 1
+// CHECK-DARWIN-V7-NOT: __ARM_FEATURE_CRC32
+// CHECK-DARWIN-V7-NOT: __ARM_FEATURE_NUMERIC_MAXMIN
+// CHECK-DARWIN-V7-NOT: __ARM_FEATURE_DIRECTED_ROUNDING
+// CHECK-DARWIN-V7: #define __ARM_FP 0xc
+// CHECK-DARWIN-V7: #define __ARM_NEON 1
+// CHECK-DARWIN-V7: #define __ARM_NEON_FP 0x4
+// CHECK-DARWIN-V7: #define __ARM_NEON__ 1
+
+// RUN: %clang -target armv7-windows -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-WINDOWS-V7 %s
+// CHECK-WINDOWS-V7: #define __ARMEL__ 1
+// CHECK-WINDOWS-V7: #define __ARM_ARCH 7
+// CHECK-WINDOWS-V7: #define __ARM_ARCH_7A__ 1
+// CHECK-WINDOWS-V7-NOT: __ARM_FEATURE_CRC32
+// CHECK-WINDOWS-V7-NOT: __ARM_FEATURE_NUMERIC_MAXMIN
+// CHECK-WINDOWS-V7-NOT: __ARM_FEATURE_DIRECTED_ROUNDING
+// CHECK-WINDOWS-V7: #define __ARM_FP 0xe
+// CHECK-WINDOWS-V7: #define __ARM_NEON 1
+// CHECK-WINDOWS-V7: #define __ARM_NEON_FP 0x6
+// CHECK-WINDOWS-V7: #define __ARM_NEON__ 1
+
 // RUN: %clang -target x86_64-apple-macosx10.10 -arch armv7s -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V7S %s
 // CHECK-V7S: #define __ARMEL__ 1
 // CHECK-V7S: #define __ARM_ARCH 7
@@ -140,6 +164,14 @@
 // CHECK-V7S-NOT: __ARM_FEATURE_NUMERIC_MAXMIN
 // CHECK-V7S-NOT: __ARM_FEATURE_DIRECTED_ROUNDING
 // CHECK-V7S: #define __ARM_FP 0xe
+// CHECK-V7S: #define __ARM_NEON 1
+// CHECK-V7S: #define __ARM_NEON_FP 0x6
+// CHECK-V7S: #define __ARM_NEON__ 1
+
+// RUN: %clang -target arm-arm-none-eabi -march=armv7-m -mfloat-abi=soft -x c -E -dM %s | FileCheck -match-full-lines --check-prefix=CHECK-VFP-FP %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv7-m -mfloat-abi=softfp -x c -E -dM %s | FileCheck -match-full-lines --check-prefix=CHECK-VFP-FP %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv7-m -mfloat-abi=hard -x c -E -dM %s | FileCheck -match-full-lines --check-prefix=CHECK-VFP-FP %s
+// CHECK-VFP-FP: #define __VFP_FP__ 1
 
 // RUN: %clang -target armv8a -mfloat-abi=hard -x c -E -dM %s | FileCheck -match-full-lines --check-prefix=CHECK-V8-BAREHF %s
 // CHECK-V8-BAREHF: #define __ARMEL__ 1
@@ -262,7 +294,7 @@
 // CHECK-DEFS:#define __ARM_SIZEOF_WCHAR_T 4
 
 // RUN: %clang -target arm-none-linux-gnu -fno-math-errno -fno-signed-zeros\
-// RUN:        -fno-trapping-math -fassociative-math -freciprocal-math\
+// RUN:        -fno-trapping-math -fassociative-math -freciprocal-math -fapprox-func\
 // RUN:        -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-FASTMATH %s
 // RUN: %clang -target arm-none-linux-gnu -ffast-math -x c -E -dM %s -o -\
 // RUN:        | FileCheck -match-full-lines --check-prefix=CHECK-FASTMATH %s
@@ -829,6 +861,9 @@
 // CHECK-V82A: #define __ARM_FEATURE_QRDMX 1
 // CHECK-V82A: #define __ARM_FP 0xe
 
+// RUN: %clang -target armv7-apple-driverkit21.0 -x c %s -dM -E -o - | FileCheck -match-full-lines --check-prefix=CHECK-DRIVERKIT %s
+// CHECK-DRIVERKIT-NOT: #define __ARM_PCS_VFP 1
+
 // RUN: %clang -target armv8.3a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V83A %s
 // CHECK-V83A: #define __ARM_ARCH 8
 // CHECK-V83A: #define __ARM_ARCH_8_3A__ 1
@@ -849,11 +884,132 @@
 // CHECK-V86A: #define __ARM_ARCH_8_6A__ 1
 // CHECK-V86A: #define __ARM_ARCH_PROFILE 'A'
 
+// RUN: %clang -target armv8.7a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V87A %s
+// CHECK-V87A: #define __ARM_ARCH 8
+// CHECK-V87A: #define __ARM_ARCH_8_7A__ 1
+// CHECK-V87A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv8.8a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V88A %s
+// CHECK-V88A: #define __ARM_ARCH 8
+// CHECK-V88A: #define __ARM_ARCH_8_8A__ 1
+// CHECK-V88A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv8.9a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V89A %s
+// CHECK-V89A: #define __ARM_ARCH 8
+// CHECK-V89A: #define __ARM_ARCH_8_9A__ 1
+// CHECK-V89A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv9a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V9A %s
+// CHECK-V9A: #define __ARM_ARCH 9
+// CHECK-V9A: #define __ARM_ARCH_9A__ 1
+// CHECK-V9A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv9.1a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V91A %s
+// CHECK-V91A: #define __ARM_ARCH 9
+// CHECK-V91A: #define __ARM_ARCH_9_1A__ 1
+// CHECK-V91A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv9.2a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V92A %s
+// CHECK-V92A: #define __ARM_ARCH 9
+// CHECK-V92A: #define __ARM_ARCH_9_2A__ 1
+// CHECK-V92A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv9.3a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V93A %s
+// CHECK-V93A: #define __ARM_ARCH 9
+// CHECK-V93A: #define __ARM_ARCH_9_3A__ 1
+// CHECK-V93A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv9.4a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V94A %s
+// CHECK-V94A: #define __ARM_ARCH 9
+// CHECK-V94A: #define __ARM_ARCH_9_4A__ 1
+// CHECK-V94A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv9.5a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V95A %s
+// CHECK-V95A: #define __ARM_ARCH 9
+// CHECK-V95A: #define __ARM_ARCH_9_5A__ 1
+// CHECK-V95A: #define __ARM_ARCH_PROFILE 'A'
+
+// RUN: %clang -target armv9.6a-none-none-eabi -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-V96A %s
+// CHECK-V96A: #define __ARM_ARCH 9
+// CHECK-V96A: #define __ARM_ARCH_9_6A__ 1
+// CHECK-V96A: #define __ARM_ARCH_PROFILE 'A'
+
 // RUN: %clang -target arm-none-none-eabi -march=armv7-m -mfpu=softvfp -x c -E -dM %s -o - | FileCheck --check-prefix=CHECK-SOFTVFP %s
 // CHECK-SOFTVFP-NOT: #define __ARM_FP 0x
+
+// Test Armv8.1-M PACBTI
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-NOBTI,CHECK-NOPAC %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=bti -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-BTI,CHECK-NOPAC %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=pac-ret -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC,CHECK-NOBTI %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=pac-ret+b-key -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC,CHECK-NOBTI %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=pac-ret+leaf -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC-LEAF,CHECK-NOBTI %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=pac-ret+b-key+leaf -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC-LEAF,CHECK-NOBTI %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=bti+pac-ret -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC,CHECK-BTI %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=bti+pac-ret+b-key -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC,CHECK-BTI %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=bti+pac-ret+leaf -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC-LEAF,CHECK-BTI %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -mbranch-protection=bti+pac-ret+b-key+leaf -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PAC-LEAF,CHECK-BTI %s
+// CHECK-NOBTI-NOT: #define __ARM_FEATURE_BTI_DEFAULT
+// CHECK-NOPAC-NOT: #define __ARM_FEATURE_PAC_DEFAULT
+// CHECK-BTI: #define __ARM_FEATURE_BTI_DEFAULT 1
+// CHECK-PAC: #define __ARM_FEATURE_PAC_DEFAULT 1
+// CHECK-PAC-LEAF: #define __ARM_FEATURE_PAC_DEFAULT 5
+
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-NOBTI-EXT,CHECK-NOPAC-EXT %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv7-m+pacbti -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-PACBTI-EXT %s
+// CHECK-NOBTI-EXT-NOT: #define __ARM_FEATURE_BTI 1
+// CHECK-NOPAC-EXT-NOT: #define __ARM_FEATURE_PAUTH 1
+// CHECK-PACBTI-EXT: #define __ARM_FEATURE_BTI 1
+// CHECK-PACBTI-EXT: #define __ARM_FEATURE_PAUTH 1
 
 // ================== Check BFloat16 Extensions.
 // RUN: %clang -target arm-arm-none-eabi -march=armv8.6-a+bf16 -x c -E -dM %s -o - 2>&1 | FileCheck -check-prefix=CHECK-BFLOAT %s
 // CHECK-BFLOAT: #define __ARM_BF16_FORMAT_ALTERNATIVE 1
 // CHECK-BFLOAT: #define __ARM_FEATURE_BF16 1
 // CHECK-BFLOAT: #define __ARM_FEATURE_BF16_VECTOR_ARITHMETIC 1
+
+// Check crypto feature test macros
+// RUN: %clang -target arm-arm-none-eabi -march=armv8-a+crypto -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-CRYPTO %s
+// CHECK-CRYPTO: #define __ARM_ARCH_PROFILE 'A'
+// CHECK-CRYPTO: #define __ARM_FEATURE_AES 1
+// CHECK-CRYPTO: #define __ARM_FEATURE_CRYPTO 1
+// CHECK-CRYPTO: #define __ARM_FEATURE_SHA2 1
+// RUN: %clang -target arm-arm-none-eabi -march=armv8-a+nocrypto -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-NOCRYPTO %s
+// CHECK-NOCRYPTO: #define __ARM_ARCH_PROFILE 'A'
+// CHECK-NOCRYPTO-NOT: #define __ARM_FEATURE_AES 1
+// CHECK-NOCRYPTO-NOT: #define __ARM_FEATURE_CRYPTO 1
+// CHECK-NOCRYPTO-NOT: #define __ARM_FEATURE_SHA2 1
+// RUN: %clang -target arm-arm-none-eabi -march=armv8-a+aes+nosha2 -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-AES %s
+// CHECK-AES: #define __ARM_ARCH_PROFILE 'A'
+// CHECK-AES: #define __ARM_FEATURE_AES 1
+// CHECK-AES-NOT: #define __ARM_FEATURE_CRYPTO 1
+// CHECK-AES-NOT: #define __ARM_FEATURE_SHA2 1
+// RUN: %clang -target arm-arm-none-eabi -march=armv8-a+noaes+sha2 -x c -E -dM %s -o - | FileCheck -match-full-lines --check-prefix=CHECK-SHA2 %s
+// CHECK-SHA2: #define __ARM_ARCH_PROFILE 'A'
+// CHECK-SHA2-NOT: #define __ARM_FEATURE_AES 1
+// CHECK-SHA2-NOT: #define __ARM_FEATURE_CRYPTO 1
+// CHECK-SHA2: #define __ARM_FEATURE_SHA2 1
+
+// ================== Check default macros for Armv8.1-A and later
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-BEFORE-V83   %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.2-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-BEFORE-V83   %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.3-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.4-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.5-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.6-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.7-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.8-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv9-a   -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv9.1-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv9.2-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// RUN: %clang -target arm-arm-none-eabi -march=armv9.3-a -x c -E -dM %s -o - | FileCheck --check-prefixes=CHECK-V81-OR-LATER,CHECK-V83-OR-LATER %s
+// CHECK-V83-OR-LATER: __ARM_FEATURE_COMPLEX 1
+// CHECK-V81-OR-LATER: __ARM_FEATURE_QRDMX 1
+// CHECK-BEFORE-V83-NOT: __ARM_FEATURE_COMPLEX 1
+
+// Check if MVE floating-point feature is disabled (-mve.fp) during explicit fpv5-d16 or fpv5-sp-d16
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main+mve.fp -mfpu=fpv5-d16 -x c -E -dM %s -o - | FileCheck -check-prefix=CHECK-MVE1 %s
+// CHECK-MVE1: #define __ARM_FEATURE_MVE 1
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main+mve.fp -mfpu=fpv5-sp-d16 -x c -E -dM %s -o - | FileCheck -check-prefix=CHECK-MVE1_2 %s
+// CHECK-MVE1_2: #define __ARM_FEATURE_MVE 1
+// RUN: %clang -target arm-arm-none-eabi -march=armv8.1-m.main+mve.fp -x c -E -dM %s -o - | FileCheck -check-prefix=CHECK-MVE3 %s
+// CHECK-MVE3: #define __ARM_FEATURE_MVE 3

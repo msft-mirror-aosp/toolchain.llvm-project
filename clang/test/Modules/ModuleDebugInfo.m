@@ -1,3 +1,4 @@
+// UNSUPPORTED: target={{.*}}-zos{{.*}}, target={{.*}}-aix{{.*}}
 // Test that debug info is emitted for an Objective-C module and
 // a precompiled header.
 
@@ -38,6 +39,7 @@
 
 // CHECK: !DICompositeType(tag: DW_TAG_structure_type, name: "FwdDecl",
 // CHECK-SAME:             scope: ![[MODULE]],
+// CHECK-SAME:             runtimeLang: DW_LANG_ObjC
 
 // CHECK: !DICompositeType(tag: DW_TAG_structure_type, name: "ObjCClass",
 // CHECK-SAME:             scope: ![[MODULE]],

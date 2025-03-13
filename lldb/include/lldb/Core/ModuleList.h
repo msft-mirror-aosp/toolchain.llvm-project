@@ -27,8 +27,8 @@
 #include <mutex>
 #include <vector>
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 
 namespace lldb_private {
 class ConstString;
@@ -45,6 +45,27 @@ class Target;
 class TypeList;
 class UUID;
 class VariableList;
+struct ModuleFunctionSearchOptions;
+
+static constexpr OptionEnumValueElement g_auto_download_enum_values[] = {
+    {
+        lldb::eSymbolDownloadOff,
+        "off",
+        "Disable automatically downloading symbols.",
+    },
+    {
+        lldb::eSymbolDownloadBackground,
+        "background",
+        "Download symbols in the background for images as they appear in the "
+        "backtrace.",
+    },
+    {
+        lldb::eSymbolDownloadForeground,
+        "foreground",
+        "Download symbols in the foreground for images as they appear in the "
+        "backtrace.",
+    },
+};
 
 class ModuleListProperties : public Properties {
   mutable llvm::sys::RWMutex m_symlink_paths_mutex;
@@ -56,9 +77,20 @@ public:
   ModuleListProperties();
 
   FileSpec GetClangModulesCachePath() const;
-  bool SetClangModulesCachePath(llvm::StringRef path);
+  bool SetClangModulesCachePath(const FileSpec &path);
   bool GetEnableExternalLookup() const;
   bool SetEnableExternalLookup(bool new_value);
+  bool GetEnableLLDBIndexCache() const;
+  bool SetEnableLLDBIndexCache(bool new_value);
+  uint64_t GetLLDBIndexCacheMaxByteSize();
+  uint64_t GetLLDBIndexCacheMaxPercent();
+  uint64_t GetLLDBIndexCacheExpirationDays();
+  FileSpec GetLLDBIndexCachePath() const;
+  bool SetLLDBIndexCachePath(const FileSpec &path);
+
+  bool GetLoadSymbolOnDemand();
+
+  lldb::SymbolDownload GetSymbolAutoDownload() const;
 
   PathMappingList GetSymlinkMappings() const;
 };
@@ -158,7 +190,7 @@ public:
   ///     ModulesDidLoad may be deferred when adding multiple Modules
   ///     to the Target, but it must be called at the end,
   ///     before resuming execution.
-  bool AppendIfNeeded(const lldb::ModuleSP &module_sp, bool notify = true);
+  bool AppendIfNeeded(const lldb::ModuleSP &new_module, bool notify = true);
 
   void Append(const ModuleList &module_list);
 
@@ -237,20 +269,6 @@ public:
   /// \see ModuleList::GetSize()
   Module *GetModulePointerAtIndex(size_t idx) const;
 
-  /// Get the module pointer for the module at index \a idx without acquiring
-  /// the ModuleList mutex.  This MUST already have been acquired with
-  /// ModuleList::GetMutex and locked for this call to be safe.
-  ///
-  /// \param[in] idx
-  ///     An index into this module collection.
-  ///
-  /// \return
-  ///     A pointer to a Module which can by nullptr if \a idx is out
-  ///     of range.
-  ///
-  /// \see ModuleList::GetSize()
-  Module *GetModulePointerAtIndexUnlocked(size_t idx) const;
-
   /// Find compile units by partial or full path.
   ///
   /// Finds all compile units that match \a path in all of the modules and
@@ -266,7 +284,7 @@ public:
 
   /// \see Module::FindFunctions ()
   void FindFunctions(ConstString name, lldb::FunctionNameType name_type_mask,
-                     bool include_symbols, bool include_inlines,
+                     const ModuleFunctionSearchOptions &options,
                      SymbolContextList &sc_list) const;
 
   /// \see Module::FindFunctionSymbols ()
@@ -275,8 +293,9 @@ public:
                            SymbolContextList &sc_list);
 
   /// \see Module::FindFunctions ()
-  void FindFunctions(const RegularExpression &name, bool include_symbols,
-                     bool include_inlines, SymbolContextList &sc_list);
+  void FindFunctions(const RegularExpression &name,
+                     const ModuleFunctionSearchOptions &options,
+                     SymbolContextList &sc_list);
 
   /// Find global and static variables by name.
   ///
@@ -342,26 +361,22 @@ public:
                                        lldb::SymbolType symbol_type,
                                        SymbolContextList &sc_list) const;
 
-  /// Find types by name.
+  /// Find types using a type-matching object that contains all search
+  /// parameters.
   ///
   /// \param[in] search_first
   ///     If non-null, this module will be searched before any other
   ///     modules.
   ///
-  /// \param[in] name
-  ///     The name of the type we are looking for.
+  /// \param[in] query
+  ///     A type matching object that contains all of the details of the type
+  ///     search.
   ///
-  /// \param[in] max_matches
-  ///     Allow the number of matches to be limited to \a
-  ///     max_matches. Specify UINT32_MAX to get all possible matches.
-  ///
-  /// \param[out] types
-  ///     A type list gets populated with any matches.
-  ///
-  void FindTypes(Module *search_first, ConstString name,
-                 bool name_is_fully_qualified, size_t max_matches,
-                 llvm::DenseSet<SymbolFile *> &searched_symbol_files,
-                 TypeList &types) const;
+  /// \param[in] results
+  ///     Any matching types will be populated into the \a results object using
+  ///     TypeMap::InsertUnique(...).
+  void FindTypes(Module *search_first, const TypeQuery &query,
+                 lldb_private::TypeResults &results) const;
 
   bool FindSourceFile(const FileSpec &orig_spec, FileSpec &new_spec) const;
 
@@ -442,7 +457,7 @@ public:
   bool IsEmpty() const { return !GetSize(); }
 
   bool LoadScriptingResourcesInTarget(Target *target, std::list<Status> &errors,
-                                      Stream *feedback_stream = nullptr,
+                                      Stream &feedback_stream,
                                       bool continue_on_error = true);
 
   static ModuleListProperties &GetGlobalModuleListProperties();
@@ -460,12 +475,30 @@ public:
   static void FindSharedModules(const ModuleSpec &module_spec,
                                 ModuleList &matching_module_list);
 
+  static lldb::ModuleSP FindSharedModule(const UUID &uuid);
+
   static size_t RemoveOrphanSharedModules(bool mandatory);
 
   static bool RemoveSharedModuleIfOrphaned(const Module *module_ptr);
 
+  /// Applies 'callback' to each module in this ModuleList.
+  /// If 'callback' returns false, iteration terminates.
+  /// The 'module_sp' passed to 'callback' is guaranteed to
+  /// be non-null.
+  ///
+  /// This function is thread-safe.
   void ForEach(std::function<bool(const lldb::ModuleSP &module_sp)> const
                    &callback) const;
+
+  /// Returns true if 'callback' returns true for one of the modules
+  /// in this ModuleList.
+  ///
+  /// This function is thread-safe.
+  bool AnyOf(
+      std::function<bool(lldb_private::Module &module)> const &callback) const;
+
+  /// Atomically swaps the contents of this module list with \a other.
+  void Swap(ModuleList &other);
 
 protected:
   // Class typedefs.
@@ -485,17 +518,19 @@ protected:
   collection m_modules; ///< The collection of modules.
   mutable std::recursive_mutex m_modules_mutex;
 
-  Notifier *m_notifier;
+  Notifier *m_notifier = nullptr;
 
 public:
   typedef LockingAdaptedIterable<collection, lldb::ModuleSP, vector_adapter,
                                  std::recursive_mutex>
       ModuleIterable;
-  ModuleIterable Modules() { return ModuleIterable(m_modules, GetMutex()); }
+  ModuleIterable Modules() const {
+    return ModuleIterable(m_modules, GetMutex());
+  }
 
   typedef AdaptedIterable<collection, lldb::ModuleSP, vector_adapter>
       ModuleIterableNoLocking;
-  ModuleIterableNoLocking ModulesNoLocking() {
+  ModuleIterableNoLocking ModulesNoLocking() const {
     return ModuleIterableNoLocking(m_modules);
   }
 };

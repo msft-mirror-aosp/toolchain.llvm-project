@@ -17,7 +17,6 @@
 #include "MCTargetDesc/HexagonMCInstrInfo.h"
 #include "MCTargetDesc/HexagonMCTargetDesc.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/SMLoc.h"
 #include <set>
 #include <utility>
@@ -78,11 +77,15 @@ class HexagonMCChecker {
 
   void init();
   void init(MCInst const &);
-  void initReg(MCInst const &, unsigned, unsigned &PredReg, bool &isTrue);
+  void initReg(MCInst const &, MCRegister, MCRegister &PredReg, bool &isTrue);
 
-  bool registerUsed(unsigned Register);
+  bool registerUsed(MCRegister Register);
+
+  /// \return a tuple of: pointer to the producer instruction or nullptr if
+  /// none was found, the operand index, and the PredicateInfo for the
+  /// producer.
   std::tuple<MCInst const *, unsigned, HexagonMCInstrInfo::PredicateInfo>
-  registerProducer(unsigned Register,
+  registerProducer(MCRegister Register,
                    HexagonMCInstrInfo::PredicateInfo Predicated);
 
   // Checks performed.
@@ -99,13 +102,10 @@ class HexagonMCChecker {
   bool checkHWLoop();
   bool checkCOFMax1();
   bool checkLegalVecRegPair();
+  bool checkValidTmpDst();
+  bool checkHVXAccum();
 
   static void compoundRegisterMap(unsigned &);
-
-  bool isPredicateRegister(unsigned R) const {
-    return (Hexagon::P0 == R || Hexagon::P1 == R || Hexagon::P2 == R ||
-            Hexagon::P3 == R);
-  }
 
   bool isLoopRegister(unsigned R) const {
     return (Hexagon::SA0 == R || Hexagon::LC0 == R || Hexagon::SA1 == R ||

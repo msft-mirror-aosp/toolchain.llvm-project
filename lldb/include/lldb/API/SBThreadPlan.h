@@ -11,20 +11,22 @@
 
 #include "lldb/API/SBDefines.h"
 
-#include <stdio.h>
+#include <cstdio>
+
+namespace lldb_private {
+namespace python {
+class SWIGBridge;
+}
+} // namespace lldb_private
 
 namespace lldb {
 
 class LLDB_API SBThreadPlan {
 
-  friend class lldb_private::ThreadPlan;
-
 public:
   SBThreadPlan();
 
   SBThreadPlan(const lldb::SBThreadPlan &threadPlan);
-
-  SBThreadPlan(const lldb::ThreadPlanSP &lldb_object_sp);
 
   SBThreadPlan(lldb::SBThread &thread, const char *class_name);
 
@@ -60,6 +62,9 @@ public:
   /// eStopReasonSignal        1     unix signal number
   /// eStopReasonException     N     exception data
   /// eStopReasonExec          0
+  /// eStopReasonFork          1     pid of the child process
+  /// eStopReasonVFork         1     pid of the child process
+  /// eStopReasonVForkDone     0
   /// eStopReasonPlanComplete  0
   uint64_t GetStopReasonDataAtIndex(uint32_t idx);
 
@@ -110,6 +115,11 @@ public:
   SBThreadPlan QueueThreadPlanForStepScripted(const char *script_class_name,
                                               lldb::SBStructuredData &args_data,
                                               SBError &error);
+
+protected:
+  friend class lldb_private::python::SWIGBridge;
+
+  SBThreadPlan(const lldb::ThreadPlanSP &lldb_object_sp);
 
 private:
   friend class SBBreakpoint;

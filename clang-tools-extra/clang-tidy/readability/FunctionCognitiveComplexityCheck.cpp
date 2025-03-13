@@ -20,12 +20,13 @@
 #include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
-#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/STLForwardCompat.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <array>
 #include <cassert>
+#include <optional>
 #include <stack>
 #include <tuple>
 #include <type_traits>
@@ -33,9 +34,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace readability {
+namespace clang::tidy::readability {
 namespace {
 
 struct CognitiveComplexity final {
@@ -43,7 +42,7 @@ struct CognitiveComplexity final {
   // For details you can look at the Specification at
   // https://www.sonarsource.com/docs/CognitiveComplexity.pdf
   // or user-facing docs at
-  // http://clang.llvm.org/extra/clang-tidy/checks/readability-function-cognitive-complexity.html
+  // http://clang.llvm.org/extra/clang-tidy/checks/readability/function-cognitive-complexity.html
   // Here are all the possible reasons:
   enum Criteria : uint8_t {
     None = 0U,
@@ -86,7 +85,7 @@ struct CognitiveComplexity final {
   };
 
   // The helper struct used to record one increment occurrence, with all the
-  // details nessesary.
+  // details necessary.
   struct Detail {
     const SourceLocation Loc;     // What caused the increment?
     const unsigned short Nesting; // How deeply nested is Loc located?
@@ -102,8 +101,8 @@ struct CognitiveComplexity final {
     std::pair<unsigned, unsigned short> process() const {
       assert(C != Criteria::None && "invalid criteria");
 
-      unsigned MsgId;           // The id of the message to output.
-      unsigned short Increment; // How much of an increment?
+      unsigned MsgId = 0;           // The id of the message to output.
+      unsigned short Increment = 0; // How much of an increment?
 
       if (C == Criteria::All) {
         Increment = 1 + Nesting;
@@ -127,7 +126,7 @@ struct CognitiveComplexity final {
   // Limit of 25 is the "upstream"'s default.
   static constexpr unsigned DefaultLimit = 25U;
 
-  // Based on the publicly-avaliable numbers for some big open-source projects
+  // Based on the publicly-available numbers for some big open-source projects
   // https://sonarcloud.io/projects?languages=c%2Ccpp&size=5   we can estimate:
   // value ~20 would result in no allocs for 98% of functions, ~12 for 96%, ~10
   // for 91%, ~8 for 88%, ~6 for 84%, ~4 for 77%, ~2 for 64%, and ~1 for 37%.
@@ -169,19 +168,13 @@ static const std::array<const StringRef, 4> Msgs = {{
 // Criteria is a bitset, thus a few helpers are needed.
 CognitiveComplexity::Criteria operator|(CognitiveComplexity::Criteria LHS,
                                         CognitiveComplexity::Criteria RHS) {
-  return static_cast<CognitiveComplexity::Criteria>(
-      static_cast<std::underlying_type<CognitiveComplexity::Criteria>::type>(
-          LHS) |
-      static_cast<std::underlying_type<CognitiveComplexity::Criteria>::type>(
-          RHS));
+  return static_cast<CognitiveComplexity::Criteria>(llvm::to_underlying(LHS) |
+                                                    llvm::to_underlying(RHS));
 }
 CognitiveComplexity::Criteria operator&(CognitiveComplexity::Criteria LHS,
                                         CognitiveComplexity::Criteria RHS) {
-  return static_cast<CognitiveComplexity::Criteria>(
-      static_cast<std::underlying_type<CognitiveComplexity::Criteria>::type>(
-          LHS) &
-      static_cast<std::underlying_type<CognitiveComplexity::Criteria>::type>(
-          RHS));
+  return static_cast<CognitiveComplexity::Criteria>(llvm::to_underlying(LHS) &
+                                                    llvm::to_underlying(RHS));
 }
 CognitiveComplexity::Criteria &operator|=(CognitiveComplexity::Criteria &LHS,
                                           CognitiveComplexity::Criteria RHS) {
@@ -202,8 +195,8 @@ void CognitiveComplexity::account(SourceLocation Loc, unsigned short Nesting,
   Details.emplace_back(Loc, Nesting, C);
   const Detail &D = Details.back();
 
-  unsigned MsgId;
-  unsigned short Increase;
+  unsigned MsgId = 0;
+  unsigned short Increase = 0;
   std::tie(MsgId, Increase) = D.process();
 
   Total += Increase;
@@ -213,24 +206,30 @@ class FunctionASTVisitor final
     : public RecursiveASTVisitor<FunctionASTVisitor> {
   using Base = RecursiveASTVisitor<FunctionASTVisitor>;
 
+  // If set to true, macros are ignored during analysis.
+  const bool IgnoreMacros;
+
   // The current nesting level (increased by Criteria::IncrementNesting).
   unsigned short CurrentNestingLevel = 0;
 
   // Used to efficiently know the last type of the binary sequence operator
   // that was encountered. It would make sense for the function call to start
   // the new sequence, thus it is a stack.
-  using OBO = Optional<BinaryOperator::Opcode>;
+  using OBO = std::optional<BinaryOperator::Opcode>;
   std::stack<OBO, SmallVector<OBO, 4>> BinaryOperatorsStack;
 
 public:
-  bool TraverseStmtWithIncreasedNestingLevel(Stmt *Node) {
+  explicit FunctionASTVisitor(const bool IgnoreMacros)
+      : IgnoreMacros(IgnoreMacros) {}
+
+  bool traverseStmtWithIncreasedNestingLevel(Stmt *Node) {
     ++CurrentNestingLevel;
     bool ShouldContinue = Base::TraverseStmt(Node);
     --CurrentNestingLevel;
     return ShouldContinue;
   }
 
-  bool TraverseDeclWithIncreasedNestingLevel(Decl *Node) {
+  bool traverseDeclWithIncreasedNestingLevel(Decl *Node) {
     ++CurrentNestingLevel;
     bool ShouldContinue = Base::TraverseDecl(Node);
     --CurrentNestingLevel;
@@ -242,9 +241,8 @@ public:
       return Base::TraverseIfStmt(Node);
 
     {
-      CognitiveComplexity::Criteria Reasons;
-
-      Reasons = CognitiveComplexity::Criteria::None;
+      CognitiveComplexity::Criteria Reasons =
+          CognitiveComplexity::Criteria::None;
 
       // "If" increases cognitive complexity.
       Reasons |= CognitiveComplexity::Criteria::Increment;
@@ -272,15 +270,15 @@ public:
       if (!TraverseStmt(Node->getCond()))
         return false;
     } else {
-      if (!TraverseStmtWithIncreasedNestingLevel(Node->getInit()))
+      if (!traverseStmtWithIncreasedNestingLevel(Node->getInit()))
         return false;
 
-      if (!TraverseStmtWithIncreasedNestingLevel(Node->getCond()))
+      if (!traverseStmtWithIncreasedNestingLevel(Node->getCond()))
         return false;
     }
 
     // "Then" always increases nesting level.
-    if (!TraverseStmtWithIncreasedNestingLevel(Node->getThen()))
+    if (!traverseStmtWithIncreasedNestingLevel(Node->getThen()))
       return false;
 
     if (!Node->getElse())
@@ -290,9 +288,8 @@ public:
       return TraverseIfStmt(E, true);
 
     {
-      CognitiveComplexity::Criteria Reasons;
-
-      Reasons = CognitiveComplexity::Criteria::None;
+      CognitiveComplexity::Criteria Reasons =
+          CognitiveComplexity::Criteria::None;
 
       // "Else" increases cognitive complexity.
       Reasons |= CognitiveComplexity::Criteria::Increment;
@@ -305,7 +302,7 @@ public:
     }
 
     // "Else" always increases nesting level.
-    return TraverseStmtWithIncreasedNestingLevel(Node->getElse());
+    return traverseStmtWithIncreasedNestingLevel(Node->getElse());
   }
 
 // The currently-being-processed stack entry, which is always the top.
@@ -329,7 +326,8 @@ public:
 
     // We might encounter a function call, which starts a new sequence, thus
     // we need to save the current previous binary operator.
-    const Optional<BinaryOperator::Opcode> BinOpCopy(CurrentBinaryOperator);
+    const std::optional<BinaryOperator::Opcode> BinOpCopy(
+        CurrentBinaryOperator);
 
     // Record the operator that we are currently processing and traverse it.
     CurrentBinaryOperator = Op->getOpcode();
@@ -363,6 +361,9 @@ public:
   bool TraverseStmt(Stmt *Node) {
     if (!Node)
       return Base::TraverseStmt(Node);
+
+    if (IgnoreMacros && Node->getBeginLoc().isMacroID())
+      return true;
 
     // Three following switch()'es have huge duplication, but it is better to
     // keep them separate, to simplify comparing them with the Specification.
@@ -435,8 +436,7 @@ public:
       // A little beautification.
       // For conditional operator "cond ? true : false" point at the "?"
       // symbol.
-      ConditionalOperator *COp = dyn_cast<ConditionalOperator>(Node);
-      Location = COp->getQuestionLoc();
+      Location = cast<ConditionalOperator>(Node)->getQuestionLoc();
     }
 
     // If we have found any reasons, let's account it.
@@ -447,7 +447,7 @@ public:
     if (!(Reasons & CognitiveComplexity::Criteria::IncrementNesting))
       return Base::TraverseStmt(Node);
 
-    return TraverseStmtWithIncreasedNestingLevel(Node);
+    return traverseStmtWithIncreasedNestingLevel(Node);
   }
 
   // The parameter MainAnalyzedFunction is needed to differentiate between the
@@ -481,7 +481,7 @@ public:
     CC.account(Node->getBeginLoc(), CurrentNestingLevel,
                CognitiveComplexity::Criteria::IncrementNesting);
 
-    return TraverseDeclWithIncreasedNestingLevel(Node);
+    return traverseDeclWithIncreasedNestingLevel(Node);
   }
 
   CognitiveComplexity CC;
@@ -492,42 +492,62 @@ public:
 FunctionCognitiveComplexityCheck::FunctionCognitiveComplexityCheck(
     StringRef Name, ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context),
-      Threshold(Options.get("Threshold", CognitiveComplexity::DefaultLimit)) {}
+      Threshold(Options.get("Threshold", CognitiveComplexity::DefaultLimit)),
+      DescribeBasicIncrements(Options.get("DescribeBasicIncrements", true)),
+      IgnoreMacros(Options.get("IgnoreMacros", false)) {}
 
 void FunctionCognitiveComplexityCheck::storeOptions(
     ClangTidyOptions::OptionMap &Opts) {
   Options.store(Opts, "Threshold", Threshold);
+  Options.store(Opts, "DescribeBasicIncrements", DescribeBasicIncrements);
+  Options.store(Opts, "IgnoreMacros", IgnoreMacros);
 }
 
 void FunctionCognitiveComplexityCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(
       functionDecl(isDefinition(),
-                   unless(anyOf(isDefaulted(), isDeleted(), isImplicit(),
-                                isInstantiated(), isWeak())))
+                   unless(anyOf(isDefaulted(), isDeleted(), isWeak())))
           .bind("func"),
       this);
+  Finder->addMatcher(lambdaExpr().bind("lambda"), this);
 }
 
 void FunctionCognitiveComplexityCheck::check(
     const MatchFinder::MatchResult &Result) {
-  const auto *Func = Result.Nodes.getNodeAs<FunctionDecl>("func");
-  assert(Func->hasBody() && "The matchers should only match the functions that "
-                            "have user-provided body.");
 
-  FunctionASTVisitor Visitor;
-  Visitor.TraverseDecl(const_cast<FunctionDecl *>(Func), true);
+  FunctionASTVisitor Visitor(IgnoreMacros);
+  SourceLocation Loc;
+
+  const auto *TheDecl = Result.Nodes.getNodeAs<FunctionDecl>("func");
+  const auto *TheLambdaExpr = Result.Nodes.getNodeAs<LambdaExpr>("lambda");
+  if (TheDecl) {
+    assert(TheDecl->hasBody() &&
+           "The matchers should only match the functions that "
+           "have user-provided body.");
+    Loc = TheDecl->getLocation();
+    Visitor.TraverseDecl(const_cast<FunctionDecl *>(TheDecl), true);
+  } else {
+    Loc = TheLambdaExpr->getBeginLoc();
+    Visitor.TraverseLambdaExpr(const_cast<LambdaExpr *>(TheLambdaExpr));
+  }
 
   if (Visitor.CC.Total <= Threshold)
     return;
 
-  diag(Func->getLocation(),
-       "function %0 has cognitive complexity of %1 (threshold %2)")
-      << Func << Visitor.CC.Total << Threshold;
+  if (TheDecl)
+    diag(Loc, "function %0 has cognitive complexity of %1 (threshold %2)")
+        << TheDecl << Visitor.CC.Total << Threshold;
+  else
+    diag(Loc, "lambda has cognitive complexity of %0 (threshold %1)")
+        << Visitor.CC.Total << Threshold;
+
+  if (!DescribeBasicIncrements)
+    return;
 
   // Output all the basic increments of complexity.
   for (const auto &Detail : Visitor.CC.Details) {
-    unsigned MsgId;          // The id of the message to output.
-    unsigned short Increase; // How much of an increment?
+    unsigned MsgId = 0;          // The id of the message to output.
+    unsigned short Increase = 0; // How much of an increment?
     std::tie(MsgId, Increase) = Detail.process();
     assert(MsgId < Msgs.size() && "MsgId should always be valid");
     // Increase, on the other hand, can be 0.
@@ -537,6 +557,4 @@ void FunctionCognitiveComplexityCheck::check(
   }
 }
 
-} // namespace readability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::readability

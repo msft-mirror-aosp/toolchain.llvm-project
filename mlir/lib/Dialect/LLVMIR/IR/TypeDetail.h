@@ -69,10 +69,11 @@ public:
   class Key {
   public:
     /// Constructs a key for an identified struct.
-    Key(StringRef name, bool opaque)
-        : name(name), identified(true), packed(false), opaque(opaque) {}
+    Key(StringRef name, bool opaque, ArrayRef<Type> types = std::nullopt)
+        : types(types), name(name), identified(true), packed(false),
+          opaque(opaque) {}
     /// Constructs a key for a literal struct.
-    Key(ArrayRef<LLVMType> types, bool packed)
+    Key(ArrayRef<Type> types, bool packed)
         : types(types), identified(false), packed(packed), opaque(false) {}
 
     /// Checks a specific property of the struct.
@@ -91,14 +92,21 @@ public:
     /// Returns the identifier of a key for identified structs.
     StringRef getIdentifier() const {
       assert(isIdentified() &&
-             "non-identified struct key canont have an identifier");
+             "non-identified struct key cannot have an identifier");
       return name;
     }
 
     /// Returns the list of type contained in the key of a literal struct.
-    ArrayRef<LLVMType> getTypeList() const {
+    ArrayRef<Type> getTypeList() const {
       assert(!isIdentified() &&
              "identified struct key cannot have a type list");
+      return types;
+    }
+
+    /// Returns the list of type contained in an identified struct.
+    ArrayRef<Type> getIdentifiedStructBody() const {
+      assert(isIdentified() &&
+             "requested struct body on a non-identified struct");
       return types;
     }
 
@@ -123,8 +131,7 @@ public:
     /// Compares two keys.
     bool operator==(const Key &other) const {
       if (isIdentified())
-        return other.isIdentified() &&
-               other.getIdentifier().equals(getIdentifier());
+        return other.isIdentified() && other.getIdentifier() == getIdentifier();
 
       return !other.isIdentified() && other.isPacked() == isPacked() &&
              other.getTypeList() == getTypeList();
@@ -138,7 +145,7 @@ public:
     }
 
   private:
-    ArrayRef<LLVMType> types;
+    ArrayRef<Type> types;
     StringRef name;
     bool identified;
     bool packed;
@@ -153,18 +160,18 @@ public:
   }
 
   /// Returns the list of types (partially) identifying a literal struct.
-  ArrayRef<LLVMType> getTypeList() const {
+  ArrayRef<Type> getTypeList() const {
     // If this triggers, use getIdentifiedStructBody() instead.
     assert(!isIdentified() && "requested typelist on an identified struct");
-    return ArrayRef<LLVMType>(static_cast<const LLVMType *>(keyPtr), keySize());
+    return ArrayRef<Type>(static_cast<const Type *>(keyPtr), keySize());
   }
 
   /// Returns the list of types contained in an identified struct.
-  ArrayRef<LLVMType> getIdentifiedStructBody() const {
+  ArrayRef<Type> getIdentifiedStructBody() const {
     // If this triggers, use getTypeList() instead.
     assert(isIdentified() &&
            "requested struct body on a non-identified struct");
-    return ArrayRef<LLVMType>(identifiedBodyArray, identifiedBodySize());
+    return ArrayRef<Type>(identifiedBodyArray, identifiedBodySize());
   }
 
   /// Checks whether the struct is identified.
@@ -199,7 +206,7 @@ public:
   /// as initialized and can no longer be mutated.
   LLVMStructTypeStorage(const KeyTy &key) {
     if (!key.isIdentified()) {
-      ArrayRef<LLVMType> types = key.getTypeList();
+      ArrayRef<Type> types = key.getTypeList();
       keyPtr = static_cast<const void *>(types.data());
       setKeySize(types.size());
       llvm::Bitfield::set<KeyFlagPacked>(keySizeAndFlags, key.isPacked());
@@ -219,8 +226,8 @@ public:
                                            key.isOpaque());
   }
 
-  /// Hook into the type unquing infrastructure.
-  bool operator==(const KeyTy &other) const { return getKey() == other; };
+  /// Hook into the type uniquing infrastructure.
+  bool operator==(const KeyTy &other) const { return getAsKey() == other; };
   static llvm::hash_code hashKey(const KeyTy &key) { return key.hashValue(); }
   static LLVMStructTypeStorage *construct(TypeStorageAllocator &allocator,
                                           const KeyTy &key) {
@@ -232,7 +239,7 @@ public:
   /// initialized, succeeds only if the body is equal to the current body. Fails
   /// if the struct is marked as intentionally opaque. The struct will be marked
   /// as initialized as a result of this operation and can no longer be changed.
-  LogicalResult mutate(TypeStorageAllocator &allocator, ArrayRef<LLVMType> body,
+  LogicalResult mutate(TypeStorageAllocator &allocator, ArrayRef<Type> body,
                        bool packed) {
     if (!isIdentified())
       return failure();
@@ -244,11 +251,18 @@ public:
                                                 true);
     llvm::Bitfield::set<MutableFlagPacked>(identifiedBodySizeAndFlags, packed);
 
-    ArrayRef<LLVMType> typesInAllocator = allocator.copyInto(body);
+    ArrayRef<Type> typesInAllocator = allocator.copyInto(body);
     identifiedBodyArray = typesInAllocator.data();
     setIdentifiedBodySize(typesInAllocator.size());
 
     return success();
+  }
+
+  /// Returns the key for the current storage.
+  Key getAsKey() const {
+    if (isIdentified())
+      return Key(getIdentifier(), isOpaque(), getIdentifiedStructBody());
+    return Key(getTypeList(), isPacked());
   }
 
 private:
@@ -269,13 +283,6 @@ private:
   /// Sets the number of types contained in an identified struct.
   void setIdentifiedBodySize(unsigned value) {
     llvm::Bitfield::set<MutableSize>(identifiedBodySizeAndFlags, value);
-  }
-
-  /// Returns the key for the current storage.
-  Key getKey() const {
-    if (isIdentified())
-      return Key(getIdentifier(), isOpaque());
-    return Key(getTypeList(), isPacked());
   }
 
   /// Bitfield elements for `keyAndSizeFlags`:
@@ -310,7 +317,7 @@ private:
   const void *keyPtr = nullptr;
 
   /// Pointer to the first type contained in an identified struct.
-  const LLVMType *identifiedBodyArray = nullptr;
+  const Type *identifiedBodyArray = nullptr;
 
   /// Size of the uniquing key combined with identified/literal and
   /// packedness bits. Must only be used through the Key* bitfields.
@@ -320,107 +327,35 @@ private:
   /// mutable flags. Must only be used through the Mutable* bitfields.
   unsigned identifiedBodySizeAndFlags = 0;
 };
+} // end namespace detail
+} // end namespace LLVM
 
-//===----------------------------------------------------------------------===//
-// LLVMFunctionTypeStorage.
-//===----------------------------------------------------------------------===//
-
-/// Type storage for LLVM dialect function types. These are uniqued using the
-/// list of types they contain and the vararg bit.
-struct LLVMFunctionTypeStorage : public TypeStorage {
-  using KeyTy = std::tuple<LLVMType, ArrayRef<LLVMType>, bool>;
-
-  /// Construct a storage from the given components. The list is expected to be
-  /// allocated in the context.
-  LLVMFunctionTypeStorage(LLVMType result, ArrayRef<LLVMType> arguments,
-                          bool variadic)
-      : argumentTypes(arguments) {
-    returnTypeAndVariadic.setPointerAndInt(result, variadic);
+/// Allow walking and replacing the subelements of a LLVMStructTypeStorage key.
+template <>
+struct AttrTypeSubElementHandler<LLVM::detail::LLVMStructTypeStorage::Key> {
+  static void walk(const LLVM::detail::LLVMStructTypeStorage::Key &param,
+                   AttrTypeImmediateSubElementWalker &walker) {
+    if (param.isIdentified())
+      walker.walkRange(param.getIdentifiedStructBody());
+    else
+      walker.walkRange(param.getTypeList());
   }
+  static FailureOr<LLVM::detail::LLVMStructTypeStorage::Key>
+  replace(const LLVM::detail::LLVMStructTypeStorage::Key &param,
+          AttrSubElementReplacements &attrRepls,
+          TypeSubElementReplacements &typeRepls) {
+    // TODO: It's not clear how we support replacing sub-elements of mutable
+    // types.
+    if (param.isIdentified())
+      return failure();
 
-  /// Hook into the type uniquing infrastructure.
-  static LLVMFunctionTypeStorage *construct(TypeStorageAllocator &allocator,
-                                            const KeyTy &key) {
-    return new (allocator.allocate<LLVMFunctionTypeStorage>())
-        LLVMFunctionTypeStorage(std::get<0>(key),
-                                allocator.copyInto(std::get<1>(key)),
-                                std::get<2>(key));
+    return LLVM::detail::LLVMStructTypeStorage::Key(
+        typeRepls.take_front(param.getTypeList().size()), param.isPacked());
   }
-
-  static unsigned hashKey(const KeyTy &key) {
-    // LLVM doesn't like hashing bools in tuples.
-    return llvm::hash_combine(std::get<0>(key), std::get<1>(key),
-                              static_cast<int>(std::get<2>(key)));
-  }
-
-  bool operator==(const KeyTy &key) const {
-    return std::make_tuple(getReturnType(), getArgumentTypes(), isVariadic()) ==
-           key;
-  }
-
-  /// Returns the list of function argument types.
-  ArrayRef<LLVMType> getArgumentTypes() const { return argumentTypes; }
-
-  /// Checks whether the function type is variadic.
-  bool isVariadic() const { return returnTypeAndVariadic.getInt(); }
-
-  /// Returns the function result type.
-  LLVMType getReturnType() const { return returnTypeAndVariadic.getPointer(); }
-
-private:
-  /// Function result type packed with the variadic bit.
-  llvm::PointerIntPair<LLVMType, 1, bool> returnTypeAndVariadic;
-  /// Argument types.
-  ArrayRef<LLVMType> argumentTypes;
 };
 
-//===----------------------------------------------------------------------===//
-// LLVMIntegerTypeStorage.
-//===----------------------------------------------------------------------===//
-
-/// Storage type for LLVM dialect integer types. These are uniqued by bitwidth.
-struct LLVMIntegerTypeStorage : public TypeStorage {
-  using KeyTy = unsigned;
-
-  LLVMIntegerTypeStorage(unsigned width) : bitwidth(width) {}
-
-  static LLVMIntegerTypeStorage *construct(TypeStorageAllocator &allocator,
-                                           const KeyTy &key) {
-    return new (allocator.allocate<LLVMIntegerTypeStorage>())
-        LLVMIntegerTypeStorage(key);
-  }
-
-  bool operator==(const KeyTy &key) const { return key == bitwidth; }
-
-  unsigned bitwidth;
-};
-
-//===----------------------------------------------------------------------===//
-// LLVMPointerTypeStorage.
-//===----------------------------------------------------------------------===//
-
-/// Storage type for LLVM dialect pointer types. These are uniqued by a pair of
-/// element type and address space.
-struct LLVMPointerTypeStorage : public TypeStorage {
-  using KeyTy = std::tuple<LLVMType, unsigned>;
-
-  LLVMPointerTypeStorage(const KeyTy &key)
-      : pointeeType(std::get<0>(key)), addressSpace(std::get<1>(key)) {}
-
-  static LLVMPointerTypeStorage *construct(TypeStorageAllocator &allocator,
-                                           const KeyTy &key) {
-    return new (allocator.allocate<LLVMPointerTypeStorage>())
-        LLVMPointerTypeStorage(key);
-  }
-
-  bool operator==(const KeyTy &key) const {
-    return std::make_tuple(pointeeType, addressSpace) == key;
-  }
-
-  LLVMType pointeeType;
-  unsigned addressSpace;
-};
-
+namespace LLVM {
+namespace detail {
 //===----------------------------------------------------------------------===//
 // LLVMTypeAndSizeStorage.
 //===----------------------------------------------------------------------===//
@@ -429,7 +364,7 @@ struct LLVMPointerTypeStorage : public TypeStorage {
 /// number: arrays, fixed and scalable vectors. The actual semantics of the
 /// type is defined by its kind.
 struct LLVMTypeAndSizeStorage : public TypeStorage {
-  using KeyTy = std::tuple<LLVMType, unsigned>;
+  using KeyTy = std::tuple<Type, unsigned>;
 
   LLVMTypeAndSizeStorage(const KeyTy &key)
       : elementType(std::get<0>(key)), numElements(std::get<1>(key)) {}
@@ -444,12 +379,12 @@ struct LLVMTypeAndSizeStorage : public TypeStorage {
     return std::make_tuple(elementType, numElements) == key;
   }
 
-  LLVMType elementType;
+  Type elementType;
   unsigned numElements;
 };
 
-} // end namespace detail
-} // end namespace LLVM
-} // end namespace mlir
+} // namespace detail
+} // namespace LLVM
+} // namespace mlir
 
 #endif // DIALECT_LLVMIR_IR_TYPEDETAIL_H

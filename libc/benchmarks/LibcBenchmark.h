@@ -32,18 +32,15 @@
 
 #include "benchmark/benchmark.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace llvm {
 namespace libc_benchmarks {
-
-// Makes sure the binary was compiled in release mode and that frequency
-// governor is set on performance.
-void checkRequirements();
 
 using Duration = std::chrono::duration<double>;
 
@@ -102,7 +99,7 @@ struct BenchmarkState {
 struct BenchmarkResult {
   BenchmarkStatus TerminationStatus = BenchmarkStatus::Running;
   Duration BestGuess = {};
-  llvm::Optional<llvm::SmallVector<BenchmarkState, 16>> MaybeBenchmarkLog;
+  std::optional<llvm::SmallVector<BenchmarkState, 16>> MaybeBenchmarkLog;
 };
 
 // Stores information about a cache in the host memory system.
@@ -214,7 +211,7 @@ BenchmarkResult benchmark(const BenchmarkOptions &Options,
     // Measuring this Batch.
     const auto StartTime = Clock.now();
     for (const auto Parameter : Batch) {
-      const auto Production = foo(Parameter);
+      auto Production = foo(Parameter);
       benchmark::DoNotOptimize(Production);
     }
     const auto EndTime = Clock.now();
@@ -275,21 +272,25 @@ public:
   using difference_type = ssize_t;
   using size_type = size_t;
 
-  class const_iterator
-      : public std::iterator<std::input_iterator_tag, T, ssize_t> {
+  class const_iterator {
+    using iterator_category = std::input_iterator_tag;
     llvm::ArrayRef<T> Array;
     size_t Index;
+    size_t Offset;
 
   public:
     explicit const_iterator(llvm::ArrayRef<T> Array, size_t Index = 0)
-        : Array(Array), Index(Index) {}
+        : Array(Array), Index(Index), Offset(Index % Array.size()) {}
     const_iterator &operator++() {
       ++Index;
+      ++Offset;
+      if (Offset == Array.size())
+        Offset = 0;
       return *this;
     }
     bool operator==(const_iterator Other) const { return Index == Other.Index; }
     bool operator!=(const_iterator Other) const { return !(*this == Other); }
-    const T &operator*() const { return Array[Index % Array.size()]; }
+    const T &operator*() const { return Array[Offset]; }
   };
 
   CircularArrayRef(llvm::ArrayRef<T> Array, size_t Size)
@@ -317,6 +318,10 @@ template <typename T, size_t N>
 CircularArrayRef<T> cycle(const std::array<T, N> &Container, size_t Size) {
   return {llvm::ArrayRef<T>(Container.cbegin(), Container.cend()), Size};
 }
+
+// Makes sure the binary was compiled in release mode and that frequency
+// governor is set on performance.
+void checkRequirements();
 
 } // namespace libc_benchmarks
 } // namespace llvm

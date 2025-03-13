@@ -159,7 +159,7 @@ __typeof blur y;  // expected-error {{use of undeclared identifier 'blur'; did y
 }
 
 namespace PR22092 {
-a = b ? : 0;  // expected-error {{C++ requires a type specifier for all declarations}} \
+a = b ? : 0;  // expected-error {{a type specifier is required for all declarations}} \
               // expected-error-re {{use of undeclared identifier 'b'{{$}}}}
 }
 
@@ -207,15 +207,6 @@ void f() { int a = Unknown::b(c); }  // expected-error {{use of undeclared ident
 namespace PR23350 {
 int z = 1 ? N : ;  // expected-error {{expected expression}}
 // expected-error-re@-1 {{use of undeclared identifier 'N'{{$}}}}
-}
-
-namespace noSecondaryDiags {
-void abcc(); // expected-note {{'abcc' declared here}}
-
-void test() {
-  // Verify the secondary diagnostic ".. convertible to 'bool'" is suppressed.
-  if (abc()) {} // expected-error {{use of undeclared identifier 'abc'; did you mean 'abcc'?}}
-}
 }
 
 // PR 23285. This test must be at the end of the file to avoid additional,

@@ -1,5 +1,5 @@
-; RUN: not llvm-as < %s 2>&1 | FileCheck %s
+; RUN: not llvm-as --disable-output %s 2>&1 | FileCheck -DFILE=%s %s
 
-; i16777216 is the smallest integer type that can't be represented in LLVM IR
-@i2 = common global i16777216 0, align 4
-; CHECK: expected type
+; i8388609 is the smallest integer type that can't be represented in LLVM IR
+; CHECK: [[FILE]]:[[@LINE+1]]:21: error: bitwidth for integer type out of range
+@i2 = common global i8388609 0, align 4

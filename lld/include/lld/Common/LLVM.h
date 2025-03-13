@@ -44,20 +44,20 @@ class WasmSymbol;
 } // namespace object
 
 namespace wasm {
-struct WasmEvent;
-struct WasmEventType;
+struct WasmTag;
 struct WasmFunction;
 struct WasmGlobal;
 struct WasmGlobalType;
+struct WasmInitExpr;
+struct WasmLimits;
 struct WasmRelocation;
 struct WasmSignature;
+struct WasmTable;
+struct WasmTableType;
 } // namespace wasm
 } // namespace llvm
 
 namespace lld {
-llvm::raw_ostream &outs();
-llvm::raw_ostream &errs();
-
 // Casting operators.
 using llvm::cast;
 using llvm::cast_or_null;
@@ -83,13 +83,16 @@ using llvm::object::WasmObjectFile;
 using llvm::object::WasmSection;
 using llvm::object::WasmSegment;
 using llvm::object::WasmSymbol;
-using llvm::wasm::WasmEvent;
-using llvm::wasm::WasmEventType;
 using llvm::wasm::WasmFunction;
 using llvm::wasm::WasmGlobal;
 using llvm::wasm::WasmGlobalType;
+using llvm::wasm::WasmInitExpr;
+using llvm::wasm::WasmLimits;
 using llvm::wasm::WasmRelocation;
 using llvm::wasm::WasmSignature;
+using llvm::wasm::WasmTable;
+using llvm::wasm::WasmTableType;
+using llvm::wasm::WasmTag;
 } // end namespace lld.
 
 namespace std {

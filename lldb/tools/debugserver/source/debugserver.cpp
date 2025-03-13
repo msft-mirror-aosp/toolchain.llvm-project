@@ -8,8 +8,8 @@
 
 #include <arpa/inet.h>
 #include <asl.h>
+#include <cerrno>
 #include <crt_externs.h>
-#include <errno.h>
 #include <getopt.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -368,7 +368,7 @@ RNBRunLoopMode RNBRunLoopLaunchAttaching(RNBRemote *remote,
   DNBLogThreadedIf(LOG_RNB_MINIMAL, "%s Attaching to pid %i...", __FUNCTION__,
                    attach_pid);
   char err_str[1024];
-  pid = DNBProcessAttach(attach_pid, NULL, ctx.GetUnmaskSignals(), err_str,
+  pid = DNBProcessAttach(attach_pid, NULL, ctx.GetIgnoredExceptions(), err_str,
                          sizeof(err_str));
   g_pid = pid;
 
@@ -526,10 +526,6 @@ RNBRunLoopMode RNBRunLoopInferiorExecuting(RNBRemote *remote) {
       // packets
       event_mask &= ~RNBContext::event_proc_stdio_available;
       event_mask &= ~RNBContext::event_proc_profile_data;
-      // When we enable async structured data packets over another logical
-      // channel,
-      // this can be relaxed.
-      event_mask &= ~RNBContext::event_darwin_log_data_available;
     }
 
     // We want to make sure we consume all process state changes and have
@@ -556,10 +552,6 @@ RNBRunLoopMode RNBRunLoopInferiorExecuting(RNBRemote *remote) {
         remote->SendAsyncProfileData();
       }
 
-      if (set_events & RNBContext::event_darwin_log_data_available) {
-        remote->SendAsyncDarwinLogData();
-      }
-
       if (set_events & RNBContext::event_read_packet_available) {
         // handleReceivedPacket will take care of resetting the
         // event_read_packet_available events when there are no more...
@@ -583,29 +575,34 @@ RNBRunLoopMode RNBRunLoopInferiorExecuting(RNBRemote *remote) {
       }
 
       if (set_events & RNBContext::event_proc_thread_exiting) {
+        DNBLog("debugserver's process monitoring thread has exited.");
         mode = eRNBRunLoopModeExit;
       }
 
       if (set_events & RNBContext::event_read_thread_exiting) {
         // Out remote packet receiving thread exited, exit for now.
+        DNBLog(
+            "debugserver's packet communication to lldb has been shut down.");
         if (ctx.HasValidProcessID()) {
+          nub_process_t pid = ctx.ProcessID();
           // TODO: We should add code that will leave the current process
           // in its current state and listen for another connection...
           if (ctx.ProcessStateRunning()) {
             if (ctx.GetDetachOnError()) {
-              DNBLog("debugserver's event read thread is exiting, detaching "
-                     "from the inferior process.");
-              DNBProcessDetach(ctx.ProcessID());
+              DNBLog("debugserver has a valid PID %d, it is still running. "
+                     "detaching from the inferior process.",
+                     pid);
+              DNBProcessDetach(pid);
             } else {
-              DNBLog("debugserver's event read thread is exiting, killing the "
-                     "inferior process.");
-              DNBProcessKill(ctx.ProcessID());
+              DNBLog("debugserver killing the inferior process, pid %d.", pid);
+              DNBProcessKill(pid);
             }
           } else {
             if (ctx.GetDetachOnError()) {
-              DNBLog("debugserver's event read thread is exiting, detaching "
-                     "from the inferior process.");
-              DNBProcessDetach(ctx.ProcessID());
+              DNBLog("debugserver has a valid PID %d but it may no longer "
+                     "be running, detaching from the inferior process.",
+                     pid);
+              DNBProcessDetach(pid);
             }
           }
         }
@@ -762,35 +759,6 @@ static int ConnectRemote(RNBRemote *remote, const char *host, int port,
   return 1;
 }
 
-// ASL Logging callback that can be registered with DNBLogSetLogCallback
-void ASLLogCallback(void *baton, uint32_t flags, const char *format,
-                    va_list args) {
-  if (format == NULL)
-    return;
-  static aslmsg g_aslmsg = NULL;
-  if (g_aslmsg == NULL) {
-    g_aslmsg = ::asl_new(ASL_TYPE_MSG);
-    char asl_key_sender[PATH_MAX];
-    snprintf(asl_key_sender, sizeof(asl_key_sender), "com.apple.%s-%s",
-             DEBUGSERVER_PROGRAM_NAME, DEBUGSERVER_VERSION_STR);
-    ::asl_set(g_aslmsg, ASL_KEY_SENDER, asl_key_sender);
-  }
-
-  int asl_level;
-  if (flags & DNBLOG_FLAG_FATAL)
-    asl_level = ASL_LEVEL_CRIT;
-  else if (flags & DNBLOG_FLAG_ERROR)
-    asl_level = ASL_LEVEL_ERR;
-  else if (flags & DNBLOG_FLAG_WARNING)
-    asl_level = ASL_LEVEL_WARNING;
-  else if (flags & DNBLOG_FLAG_VERBOSE)
-    asl_level = ASL_LEVEL_WARNING; // ASL_LEVEL_INFO;
-  else
-    asl_level = ASL_LEVEL_WARNING; // ASL_LEVEL_DEBUG;
-
-  ::asl_vlog(NULL, g_aslmsg, asl_level, format, args);
-}
-
 // FILE based Logging callback that can be registered with
 // DNBLogSetLogCallback
 void FileLogCallback(void *baton, uint32_t flags, const char *format,
@@ -804,8 +772,11 @@ void FileLogCallback(void *baton, uint32_t flags, const char *format,
 }
 
 void show_version_and_exit(int exit_code) {
-  printf("%s-%s for %s.\n", DEBUGSERVER_PROGRAM_NAME, DEBUGSERVER_VERSION_STR,
-         RNB_ARCH);
+  const char *in_translation = "";
+  if (DNBDebugserverIsTranslated())
+    in_translation = " (running under translation)";
+  printf("%s-%s for %s%s.\n", DEBUGSERVER_PROGRAM_NAME, DEBUGSERVER_VERSION_STR,
+         RNB_ARCH, in_translation);
   exit(exit_code);
 }
 
@@ -944,6 +915,13 @@ int main(int argc, char *argv[]) {
   sigemptyset(&sigset);
   sigaddset(&sigset, SIGCHLD);
   sigprocmask(SIG_BLOCK, &sigset, NULL);
+
+  // Set up DNB logging by default. If the user passes different log flags or a
+  // log file, these settings will be modified after processing the command line
+  // arguments.
+  if (auto log_callback = OsLogger::GetLogFunction())
+    DNBLogSetLogCallback(log_callback, nullptr);
+  DNBLogSetLogMask(/*log_flags*/ 0);
 
   g_remoteSP = std::make_shared<RNBRemote>();
 
@@ -1104,21 +1082,30 @@ int main(int argc, char *argv[]) {
       if (optarg && optarg[0]) {
         if (strcasecmp(optarg, "auto") == 0)
           g_launch_flavor = eLaunchFlavorDefault;
-        else if (strcasestr(optarg, "posix") == optarg)
+        else if (strcasestr(optarg, "posix") == optarg) {
+          DNBLog(
+              "[LaunchAttach] launch flavor is posix_spawn via cmdline option");
           g_launch_flavor = eLaunchFlavorPosixSpawn;
-        else if (strcasestr(optarg, "fork") == optarg)
+        } else if (strcasestr(optarg, "fork") == optarg)
           g_launch_flavor = eLaunchFlavorForkExec;
 #ifdef WITH_SPRINGBOARD
-        else if (strcasestr(optarg, "spring") == optarg)
+        else if (strcasestr(optarg, "spring") == optarg) {
+          DNBLog(
+              "[LaunchAttach] launch flavor is SpringBoard via cmdline option");
           g_launch_flavor = eLaunchFlavorSpringBoard;
+        }
 #endif
 #ifdef WITH_BKS
-        else if (strcasestr(optarg, "backboard") == optarg)
+        else if (strcasestr(optarg, "backboard") == optarg) {
+          DNBLog("[LaunchAttach] launch flavor is BKS via cmdline option");
           g_launch_flavor = eLaunchFlavorBKS;
+        }
 #endif
 #ifdef WITH_FBS
-        else if (strcasestr(optarg, "frontboard") == optarg)
+        else if (strcasestr(optarg, "frontboard") == optarg) {
+          DNBLog("[LaunchAttach] launch flavor is FBS via cmdline option");
           g_launch_flavor = eLaunchFlavorFBS;
+        }
 #endif
 
         else {
@@ -1266,7 +1253,7 @@ int main(int argc, char *argv[]) {
       break;
 
     case 'U':
-      ctx.SetUnmaskSignals(true);
+      ctx.AddDefaultIgnoredExceptions();
       break;
 
     case '2':
@@ -1309,27 +1296,13 @@ int main(int argc, char *argv[]) {
   // It is ok for us to set NULL as the logfile (this will disable any logging)
 
   if (log_file != NULL) {
+    DNBLog("debugserver is switching to logging to a file.");
     DNBLogSetLogCallback(FileLogCallback, log_file);
     // If our log file was set, yet we have no log flags, log everything!
     if (log_flags == 0)
       log_flags = LOG_ALL | LOG_RNB_ALL;
-
-    DNBLogSetLogMask(log_flags);
-  } else {
-    // Enable DNB logging
-
-    // if os_log() support is available, log through that.
-    auto log_callback = OsLogger::GetLogFunction();
-    if (log_callback) {
-      DNBLogSetLogCallback(log_callback, nullptr);
-      DNBLog("debugserver will use os_log for internal logging.");
-    } else {
-      // Fall back to ASL support.
-      DNBLogSetLogCallback(ASLLogCallback, NULL);
-      DNBLog("debugserver will use ASL for internal logging.");
-    }
-    DNBLogSetLogMask(log_flags);
   }
+  DNBLogSetLogMask(log_flags);
 
   if (DNBLogEnabled()) {
     for (i = 0; i < argc; i++)
@@ -1339,8 +1312,12 @@ int main(int argc, char *argv[]) {
   // as long as we're dropping remotenub in as a replacement for gdbserver,
   // explicitly note that this is not gdbserver.
 
-  RNBLogSTDOUT("%s-%s %sfor %s.\n", DEBUGSERVER_PROGRAM_NAME,
-               DEBUGSERVER_VERSION_STR, compile_options.c_str(), RNB_ARCH);
+  const char *in_translation = "";
+  if (DNBDebugserverIsTranslated())
+    in_translation = " (running under translation)";
+  RNBLogSTDOUT("%s-%s %sfor %s%s.\n", DEBUGSERVER_PROGRAM_NAME,
+               DEBUGSERVER_VERSION_STR, compile_options.c_str(), RNB_ARCH,
+               in_translation);
 
   std::string host;
   int port = INT32_MAX;
@@ -1398,6 +1375,7 @@ int main(int argc, char *argv[]) {
         dup2(null, STDOUT_FILENO);
         dup2(null, STDERR_FILENO);
       } else if (g_applist_opt != 0) {
+        DNBLog("debugserver running in --applist mode");
         // List all applications we are able to see
         std::string applist_plist;
         int err = ListApplications(applist_plist, false, false);
@@ -1455,6 +1433,7 @@ int main(int argc, char *argv[]) {
             mode = eRNBRunLoopModeExit;
           } else if (g_applist_opt != 0) {
             // List all applications we are able to see
+            DNBLog("debugserver running in applist mode under lockdown");
             std::string applist_plist;
             if (ListApplications(applist_plist, false, false) == 0) {
               DNBLogDebug("Task list: %s", applist_plist.c_str());
@@ -1559,7 +1538,7 @@ int main(int argc, char *argv[]) {
 
         RNBLogSTDOUT("Attaching to process %s...\n", attach_pid_name.c_str());
         nub_process_t pid = DNBProcessAttachByName(
-            attach_pid_name.c_str(), timeout_ptr, ctx.GetUnmaskSignals(),
+            attach_pid_name.c_str(), timeout_ptr, ctx.GetIgnoredExceptions(),
             err_str, sizeof(err_str));
         g_pid = pid;
         if (pid == INVALID_NUB_PROCESS) {
@@ -1631,6 +1610,8 @@ int main(int argc, char *argv[]) {
           const char *proc_name = "<unknown>";
           if (ctx.ArgumentCount() > 0)
             proc_name = ctx.ArgumentAtIndex(0);
+          DNBLog("[LaunchAttach] Successfully launched %s (pid = %d).\n",
+                 proc_name, ctx.ProcessID());
           RNBLogSTDOUT("Got a connection, launched process %s (pid = %d).\n",
                        proc_name, ctx.ProcessID());
         }

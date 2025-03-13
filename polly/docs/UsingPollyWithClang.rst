@@ -8,7 +8,7 @@ optimize C/C++ code during compilation.
 
 .. warning::
 
-  Warning: clang/LLVM/Polly need to be in sync (compiled from the same SVN
+  Warning: clang/LLVM/Polly need to be in sync (compiled from the same
   revision).
 
 Make Polly available from Clang
@@ -101,7 +101,7 @@ polly, after SSA transformation, loop canonicalization, inlining and
 other passes.
 
 Thereafter, any Polly pass can be run over 'before-polly.ll' using the
-'opt' tool.  To found out which Polly passes are active in the standard
+'opt' tool.  To find out which Polly passes are active in the standard
 pipeline, see the output of
 
 .. code-block:: console

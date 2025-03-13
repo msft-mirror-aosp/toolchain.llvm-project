@@ -5,9 +5,9 @@
 # RUN: echo "A B 100" > %t.call_graph
 # RUN: echo "A C 40" >> %t.call_graph
 # RUN: echo "C D 61" >> %t.call_graph
-# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph -o %t.out -icf=all
+# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph --call-graph-profile-sort=hfsort -o %t.out -icf=all
 # RUN: llvm-readobj --symbols %t.out | FileCheck %s
-# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph -o %t2.out
+# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph --call-graph-profile-sort=hfsort -o %t2.out
 # RUN: llvm-readobj --symbols %t2.out | FileCheck %s --check-prefix=NOICF
 
     .section    .text.D,"ax",@progbits
@@ -34,20 +34,20 @@ A:
     mov $42, %rax
     retq
 
-# CHECK:          Name: A
-# CHECK-NEXT:     Value: 0x201120
-# CHECK:          Name: B
-# CHECK-NEXT:     Value: 0x201130
-# CHECK:          Name: C
-# CHECK-NEXT:     Value: 0x201128
 # CHECK:          Name: D
 # CHECK-NEXT:     Value: 0x201128
+# CHECK:          Name: C
+# CHECK-NEXT:     Value: 0x201128
+# CHECK:          Name: B
+# CHECK-NEXT:     Value: 0x201130
+# CHECK:          Name: A
+# CHECK-NEXT:     Value: 0x201120
 
-# NOICF:          Name: A
-# NOICF-NEXT:     Value: 0x201120
-# NOICF:          Name: B
-# NOICF-NEXT:     Value: 0x201128
-# NOICF:          Name: C
-# NOICF-NEXT:     Value: 0x201130
 # NOICF:          Name: D
 # NOICF-NEXT:     Value: 0x201138
+# NOICF:          Name: C
+# NOICF-NEXT:     Value: 0x201130
+# NOICF:          Name: B
+# NOICF-NEXT:     Value: 0x201128
+# NOICF:          Name: A
+# NOICF-NEXT:     Value: 0x201120

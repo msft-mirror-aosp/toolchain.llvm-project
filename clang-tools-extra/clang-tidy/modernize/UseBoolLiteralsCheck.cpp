@@ -13,9 +13,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace modernize {
+namespace clang::tidy::modernize {
 
 UseBoolLiteralsCheck::UseBoolLiteralsCheck(StringRef Name,
                                            ClangTidyContext *Context)
@@ -29,7 +27,7 @@ void UseBoolLiteralsCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
 void UseBoolLiteralsCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(
       traverse(
-          ast_type_traits::TK_AsIs,
+          TK_AsIs,
           implicitCastExpr(
               has(ignoringParenImpCasts(integerLiteral().bind("literal"))),
               hasImplicitDestinationType(qualType(booleanType())),
@@ -38,7 +36,7 @@ void UseBoolLiteralsCheck::registerMatchers(MatchFinder *Finder) {
       this);
 
   Finder->addMatcher(
-      traverse(ast_type_traits::TK_AsIs,
+      traverse(TK_AsIs,
                conditionalOperator(
                    hasParent(implicitCastExpr(
                        hasImplicitDestinationType(qualType(booleanType())),
@@ -74,6 +72,4 @@ void UseBoolLiteralsCheck::check(const MatchFinder::MatchResult &Result) {
         Expression->getSourceRange(), LiteralBooleanValue ? "true" : "false");
 }
 
-} // namespace modernize
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::modernize

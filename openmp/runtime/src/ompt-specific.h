@@ -20,11 +20,15 @@
  * forward declarations
  ****************************************************************************/
 
+/// Entrypoint used by libomptarget to register callbacks in libomp, if not
+/// done already
+void __ompt_force_initialization();
+
 void __ompt_team_assign_id(kmp_team_t *team, ompt_data_t ompt_pid);
 void __ompt_thread_assign_wait_id(void *variable);
 
-void __ompt_lw_taskteam_init(ompt_lw_taskteam_t *lwt, kmp_info_t *thr,
-                             int gtid, ompt_data_t *ompt_pid, void *codeptr);
+void __ompt_lw_taskteam_init(ompt_lw_taskteam_t *lwt, kmp_info_t *thr, int gtid,
+                             ompt_data_t *ompt_pid, void *codeptr);
 
 void __ompt_lw_taskteam_link(ompt_lw_taskteam_t *lwt, kmp_info_t *thr,
                              int on_heap, bool always = false);
@@ -32,6 +36,10 @@ void __ompt_lw_taskteam_link(ompt_lw_taskteam_t *lwt, kmp_info_t *thr,
 void __ompt_lw_taskteam_unlink(kmp_info_t *thr);
 
 ompt_team_info_t *__ompt_get_teaminfo(int depth, int *size);
+
+ompt_data_t *__ompt_get_task_data();
+
+ompt_data_t *__ompt_get_target_task_data();
 
 ompt_task_info_t *__ompt_get_task_info_object(int depth);
 
@@ -57,12 +65,12 @@ ompt_sync_region_t __ompt_get_barrier_kind(enum barrier_type, kmp_info_t *);
  * macros
  ****************************************************************************/
 
-#define OMPT_CUR_TASK_INFO(thr) (&(thr->th.th_current_task->ompt_task_info))
+#define OMPT_CUR_TASK_INFO(thr) (&((thr)->th.th_current_task->ompt_task_info))
 #define OMPT_CUR_TASK_DATA(thr)                                                \
-  (&(thr->th.th_current_task->ompt_task_info.task_data))
-#define OMPT_CUR_TEAM_INFO(thr) (&(thr->th.th_team->t.ompt_team_info))
+  (&((thr)->th.th_current_task->ompt_task_info.task_data))
+#define OMPT_CUR_TEAM_INFO(thr) (&((thr)->th.th_team->t.ompt_team_info))
 #define OMPT_CUR_TEAM_DATA(thr)                                                \
-  (&(thr->th.th_team->t.ompt_team_info.parallel_data))
+  (&((thr)->th.th_team->t.ompt_team_info.parallel_data))
 
 #define OMPT_HAVE_WEAK_ATTRIBUTE KMP_HAVE_WEAK_ATTRIBUTE
 #define OMPT_HAVE_PSAPI KMP_HAVE_PSAPI
@@ -85,9 +93,20 @@ inline void *__ompt_load_return_address(int gtid) {
 #define OMPT_LOAD_RETURN_ADDRESS(gtid) __ompt_load_return_address(gtid)
 #define OMPT_LOAD_OR_GET_RETURN_ADDRESS(gtid)                                  \
   ((ompt_enabled.enabled && gtid >= 0 && __kmp_threads[gtid] &&                \
-      __kmp_threads[gtid]->th.ompt_thread_info.return_address)?                \
-      __ompt_load_return_address(gtid):                                        \
-      __builtin_return_address(0))
+    __kmp_threads[gtid]->th.ompt_thread_info.return_address)                   \
+       ? __ompt_load_return_address(gtid)                                      \
+       : __builtin_return_address(0))
+
+#define OMPT_GET_DISPATCH_CHUNK(chunk, lb, ub, incr)                           \
+  do {                                                                         \
+    if (incr > 0) {                                                            \
+      chunk.start = static_cast<uint64_t>(lb);                                 \
+      chunk.iterations = static_cast<uint64_t>(((ub) - (lb)) / (incr) + 1);    \
+    } else {                                                                   \
+      chunk.start = static_cast<uint64_t>(ub);                                 \
+      chunk.iterations = static_cast<uint64_t>(((lb) - (ub)) / -(incr) + 1);   \
+    }                                                                          \
+  } while (0)
 
 //******************************************************************************
 // inline functions
@@ -103,11 +122,31 @@ inline kmp_info_t *ompt_get_thread() {
 }
 
 inline void ompt_set_thread_state(kmp_info_t *thread, ompt_state_t state) {
-  thread->th.ompt_thread_info.state = state;
+  if (thread)
+    thread->th.ompt_thread_info.state = state;
 }
 
 inline const char *ompt_get_runtime_version() {
   return &__kmp_version_lib_ver[KMP_VERSION_MAGIC_LEN];
+}
+
+inline ompt_work_t ompt_get_work_schedule(enum sched_type schedule) {
+  switch (SCHEDULE_WITHOUT_MODIFIERS(schedule)) {
+  case kmp_sch_static_chunked:
+  case kmp_sch_static_balanced:
+  case kmp_sch_static_greedy:
+    return ompt_work_loop_static;
+  case kmp_sch_dynamic_chunked:
+  case kmp_sch_static_steal:
+    return ompt_work_loop_dynamic;
+  case kmp_sch_guided_iterative_chunked:
+  case kmp_sch_guided_analytical_chunked:
+  case kmp_sch_guided_chunked:
+  case kmp_sch_guided_simd:
+    return ompt_work_loop_guided;
+  default:
+    return ompt_work_loop_other;
+  }
 }
 
 class OmptReturnAddressGuard {

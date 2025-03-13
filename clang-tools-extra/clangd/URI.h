@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_PATHURI_H
-#define LLVM_CLANG_TOOLS_EXTRA_CLANGD_PATHURI_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_URI_H
+#define LLVM_CLANG_TOOLS_EXTRA_CLANGD_URI_H
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -133,4 +133,8 @@ typedef llvm::Registry<URIScheme> URISchemeRegistry;
 } // namespace clangd
 } // namespace clang
 
-#endif // LLVM_CLANG_TOOLS_EXTRA_CLANGD_PATHURI_H
+namespace llvm {
+extern template class Registry<clang::clangd::URIScheme>;
+} // namespace llvm
+
+#endif // LLVM_CLANG_TOOLS_EXTRA_CLANGD_URI_H

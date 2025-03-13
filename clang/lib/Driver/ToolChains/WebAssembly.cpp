@@ -8,15 +8,18 @@
 
 #include "WebAssembly.h"
 #include "CommonArgs.h"
+#include "Gnu.h"
 #include "clang/Basic/Version.h"
 #include "clang/Config/config.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Driver/Options.h"
+#include "llvm/Config/llvm-config.h" // for LLVM_VERSION_STRING
+#include "llvm/Option/ArgList.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Option/ArgList.h"
+#include "llvm/Support/VirtualFileSystem.h"
 
 using namespace clang::driver;
 using namespace clang::driver::tools;
@@ -26,9 +29,9 @@ using namespace llvm::opt;
 
 /// Following the conventions in https://wiki.debian.org/Multiarch/Tuples,
 /// we remove the vendor field to form the multiarch triple.
-static std::string getMultiarchTriple(const Driver &D,
-                                      const llvm::Triple &TargetTriple,
-                                      StringRef SysRoot) {
+std::string WebAssembly::getMultiarchTriple(const Driver &D,
+                                            const llvm::Triple &TargetTriple,
+                                            StringRef SysRoot) const {
     return (TargetTriple.getArchName() + "-" +
             TargetTriple.getOSAndEnvironmentName()).str();
 }
@@ -42,14 +45,28 @@ std::string wasm::Linker::getLinkerPath(const ArgList &Args) const {
           llvm::sys::fs::can_execute(UseLinker))
         return std::string(UseLinker);
 
-      // Accept 'lld', and 'ld' as aliases for the default linker
-      if (UseLinker != "lld" && UseLinker != "ld")
+      // Interpret 'lld' as explicitly requesting `wasm-ld`, so look for that
+      // linker. Note that for `wasm32-wasip2` this overrides the default linker
+      // of `wasm-component-ld`.
+      if (UseLinker == "lld") {
+        return ToolChain.GetProgramPath("wasm-ld");
+      }
+
+      // Allow 'ld' as an alias for the default linker
+      if (UseLinker != "ld")
         ToolChain.getDriver().Diag(diag::err_drv_invalid_linker_name)
             << A->getAsString(Args);
     }
   }
 
   return ToolChain.GetProgramPath(ToolChain.getDefaultLinker());
+}
+
+static bool TargetBuildsComponents(const llvm::Triple &TargetTriple) {
+  // WASIp2 and above are all based on components, so test for WASI but exclude
+  // the original `wasi` target in addition to the `wasip1` name.
+  return TargetTriple.isOSWASI() && TargetTriple.getOSName() != "wasip1" &&
+         TargetTriple.getOSName() != "wasi";
 }
 
 void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
@@ -63,7 +80,7 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   ArgStringList CmdArgs;
 
   CmdArgs.push_back("-m");
-  if (getToolChain().getTriple().isArch64Bit())
+  if (ToolChain.getTriple().isArch64Bit())
     CmdArgs.push_back("wasm64");
   else
     CmdArgs.push_back("wasm32");
@@ -71,30 +88,65 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_s))
     CmdArgs.push_back("--strip-all");
 
-  Args.AddAllArgs(CmdArgs, options::OPT_L);
-  Args.AddAllArgs(CmdArgs, options::OPT_u);
+  // On `wasip2` the default linker is `wasm-component-ld` which wraps the
+  // execution of `wasm-ld`. Find `wasm-ld` and pass it as an argument of where
+  // to find it to avoid it needing to hunt and rediscover or search `PATH` for
+  // where it is.
+  if (llvm::sys::path::stem(Linker).ends_with_insensitive(
+          "wasm-component-ld")) {
+    CmdArgs.push_back("--wasm-ld-path");
+    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetProgramPath("wasm-ld")));
+  }
+
+  Args.addAllArgs(CmdArgs, {options::OPT_L, options::OPT_u});
+
   ToolChain.AddFilePathLibArgs(Args, CmdArgs);
 
-  const char *Crt1 = "crt1.o";
-  const char *Entry = NULL;
+  bool IsCommand = true;
+  const char *Crt1;
+  const char *Entry = nullptr;
+
+  // When -shared is specified, use the reactor exec model unless
+  // specified otherwise.
+  if (Args.hasArg(options::OPT_shared))
+    IsCommand = false;
+
   if (const Arg *A = Args.getLastArg(options::OPT_mexec_model_EQ)) {
     StringRef CM = A->getValue();
     if (CM == "command") {
-      // Use default values.
+      IsCommand = true;
     } else if (CM == "reactor") {
-      Crt1 = "crt1-reactor.o";
-      Entry = "_initialize";
+      IsCommand = false;
     } else {
       ToolChain.getDriver().Diag(diag::err_drv_invalid_argument_to_option)
           << CM << A->getOption().getName();
     }
   }
+
+  if (IsCommand) {
+    // If crt1-command.o exists, it supports new-style commands, so use it.
+    // Otherwise, use the old crt1.o. This is a temporary transition measure.
+    // Once WASI libc no longer needs to support LLVM versions which lack
+    // support for new-style command, it can make crt1.o the same as
+    // crt1-command.o. And once LLVM no longer needs to support WASI libc
+    // versions before that, it can switch to using crt1-command.o.
+    Crt1 = "crt1.o";
+    if (ToolChain.GetFilePath("crt1-command.o") != "crt1-command.o")
+      Crt1 = "crt1-command.o";
+  } else {
+    Crt1 = "crt1-reactor.o";
+    Entry = "_initialize";
+  }
+
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles))
     CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(Crt1)));
   if (Entry) {
     CmdArgs.push_back(Args.MakeArgString("--entry"));
     CmdArgs.push_back(Args.MakeArgString(Entry));
   }
+
+  if (Args.hasArg(options::OPT_shared))
+    CmdArgs.push_back(Args.MakeArgString("-shared"));
 
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
@@ -111,17 +163,38 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     AddRunTimeLibs(ToolChain, ToolChain.getDriver(), CmdArgs, Args);
   }
 
+  ToolChain.addProfileRTLibs(Args, CmdArgs);
+
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
+
+  // Don't use wasm-opt by default on `wasip2` as it doesn't have support for
+  // components at this time. Retain the historical default otherwise, though,
+  // of running `wasm-opt` by default.
+  bool WasmOptDefault = !TargetBuildsComponents(ToolChain.getTriple());
+  bool RunWasmOpt = Args.hasFlag(options::OPT_wasm_opt,
+                                 options::OPT_no_wasm_opt, WasmOptDefault);
+
+  // If wasm-opt is enabled and optimizations are happening look for the
+  // `wasm-opt` program. If it's not found auto-disable it.
+  std::string WasmOptPath;
+  if (RunWasmOpt && Args.getLastArg(options::OPT_O_Group)) {
+    WasmOptPath = ToolChain.GetProgramPath("wasm-opt");
+    if (WasmOptPath == "wasm-opt") {
+      WasmOptPath = {};
+    }
+  }
+
+  if (!WasmOptPath.empty()) {
+    CmdArgs.push_back("--keep-section=target_features");
+  }
 
   C.addCommand(std::make_unique<Command>(JA, *this,
                                          ResponseFileSupport::AtFileCurCP(),
                                          Linker, CmdArgs, Inputs, Output));
 
-  // When optimizing, if wasm-opt is available, run it.
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
-    auto WasmOptPath = getToolChain().GetProgramPath("wasm-opt");
-    if (WasmOptPath != "wasm-opt") {
+    if (!WasmOptPath.empty()) {
       StringRef OOpt = "s";
       if (A->getOption().matches(options::OPT_O4) ||
           A->getOption().matches(options::OPT_Ofast))
@@ -133,13 +206,13 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
       if (OOpt != "0") {
         const char *WasmOpt = Args.MakeArgString(WasmOptPath);
-        ArgStringList CmdArgs;
-        CmdArgs.push_back(Output.getFilename());
-        CmdArgs.push_back(Args.MakeArgString(llvm::Twine("-O") + OOpt));
-        CmdArgs.push_back("-o");
-        CmdArgs.push_back(Output.getFilename());
+        ArgStringList OptArgs;
+        OptArgs.push_back(Output.getFilename());
+        OptArgs.push_back(Args.MakeArgString(llvm::Twine("-O") + OOpt));
+        OptArgs.push_back("-o");
+        OptArgs.push_back(Output.getFilename());
         C.addCommand(std::make_unique<Command>(
-            JA, *this, ResponseFileSupport::AtFileCurCP(), WasmOpt, CmdArgs,
+            JA, *this, ResponseFileSupport::AtFileCurCP(), WasmOpt, OptArgs,
             Inputs, Output));
       }
     }
@@ -160,7 +233,7 @@ WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
 
   assert(Triple.isArch32Bit() != Triple.isArch64Bit());
 
-  getProgramPaths().push_back(getDriver().getInstalledDir());
+  getProgramPaths().push_back(getDriver().Dir);
 
   auto SysRoot = getDriver().SysRoot;
   if (getTriple().getOS() == llvm::Triple::UnknownOS) {
@@ -183,6 +256,12 @@ WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
   }
 }
 
+const char *WebAssembly::getDefaultLinker() const {
+  if (TargetBuildsComponents(getTriple()))
+    return "wasm-component-ld";
+  return "wasm-ld";
+}
+
 bool WebAssembly::IsMathErrnoDefault() const { return false; }
 
 bool WebAssembly::IsObjCNonFragileABIDefault() const { return true; }
@@ -191,11 +270,11 @@ bool WebAssembly::UseObjCMixedDispatch() const { return true; }
 
 bool WebAssembly::isPICDefault() const { return false; }
 
-bool WebAssembly::isPIEDefault() const { return false; }
+bool WebAssembly::isPIEDefault(const llvm::opt::ArgList &Args) const {
+  return false;
+}
 
 bool WebAssembly::isPICDefaultForced() const { return false; }
-
-bool WebAssembly::IsIntegratedAssemblerDefault() const { return true; }
 
 bool WebAssembly::hasBlocksRuntime() const { return false; }
 
@@ -265,32 +344,100 @@ void WebAssembly::addClangTargetOptions(const ArgList &DriverArgs,
     }
   }
 
-  if (DriverArgs.getLastArg(options::OPT_fwasm_exceptions)) {
-    // '-fwasm-exceptions' is not compatible with '-mno-exception-handling'
+  bool HasBannedIncompatibleOptionsForWasmEHSjLj = false;
+  bool HasEnabledFeaturesForWasmEHSjLj = false;
+
+  // Bans incompatible options for Wasm EH / SjLj. We don't allow using
+  // different modes for EH and SjLj.
+  auto BanIncompatibleOptionsForWasmEHSjLj = [&](StringRef CurOption) {
+    if (HasBannedIncompatibleOptionsForWasmEHSjLj)
+      return;
+    HasBannedIncompatibleOptionsForWasmEHSjLj = true;
     if (DriverArgs.hasFlag(options::OPT_mno_exception_handing,
                            options::OPT_mexception_handing, false))
       getDriver().Diag(diag::err_drv_argument_not_allowed_with)
-          << "-fwasm-exceptions"
-          << "-mno-exception-handling";
-    // '-fwasm-exceptions' is not compatible with '-mno-reference-types'
-    if (DriverArgs.hasFlag(options::OPT_mno_reference_types,
-                           options::OPT_mexception_handing, false))
+          << CurOption << "-mno-exception-handling";
+    // The standardized Wasm EH spec requires multivalue and reference-types.
+    if (DriverArgs.hasFlag(options::OPT_mno_multivalue,
+                           options::OPT_mmultivalue, false))
       getDriver().Diag(diag::err_drv_argument_not_allowed_with)
-          << "-fwasm-exceptions"
-          << "-mno-reference-types";
-    // '-fwasm-exceptions' is not compatible with
-    // '-mllvm -enable-emscripten-cxx-exceptions'
+          << CurOption << "-mno-multivalue";
+    if (DriverArgs.hasFlag(options::OPT_mno_reference_types,
+                           options::OPT_mreference_types, false))
+      getDriver().Diag(diag::err_drv_argument_not_allowed_with)
+          << CurOption << "-mno-reference-types";
+
     for (const Arg *A : DriverArgs.filtered(options::OPT_mllvm)) {
-      if (StringRef(A->getValue(0)) == "-enable-emscripten-cxx-exceptions")
-        getDriver().Diag(diag::err_drv_argument_not_allowed_with)
-            << "-fwasm-exceptions"
-            << "-mllvm -enable-emscripten-cxx-exceptions";
+      for (const auto *Option :
+           {"-enable-emscripten-cxx-exceptions", "-enable-emscripten-sjlj",
+            "-emscripten-cxx-exceptions-allowed"}) {
+        if (StringRef(A->getValue(0)) == Option)
+          getDriver().Diag(diag::err_drv_argument_not_allowed_with)
+              << CurOption << Option;
+      }
     }
-    // '-fwasm-exceptions' implies exception-handling and reference-types
+  };
+
+  // Enable necessary features for Wasm EH / SjLj in the backend.
+  auto EnableFeaturesForWasmEHSjLj = [&]() {
+    if (HasEnabledFeaturesForWasmEHSjLj)
+      return;
+    HasEnabledFeaturesForWasmEHSjLj = true;
     CC1Args.push_back("-target-feature");
     CC1Args.push_back("+exception-handling");
+    // The standardized Wasm EH spec requires multivalue and reference-types.
+    CC1Args.push_back("-target-feature");
+    CC1Args.push_back("+multivalue");
     CC1Args.push_back("-target-feature");
     CC1Args.push_back("+reference-types");
+    // Backend needs '-exception-model=wasm' to use Wasm EH instructions
+    CC1Args.push_back("-exception-model=wasm");
+  };
+
+  if (DriverArgs.getLastArg(options::OPT_fwasm_exceptions)) {
+    BanIncompatibleOptionsForWasmEHSjLj("-fwasm-exceptions");
+    EnableFeaturesForWasmEHSjLj();
+    // Backend needs -wasm-enable-eh to enable Wasm EH
+    CC1Args.push_back("-mllvm");
+    CC1Args.push_back("-wasm-enable-eh");
+  }
+
+  for (const Arg *A : DriverArgs.filtered(options::OPT_mllvm)) {
+    StringRef Opt = A->getValue(0);
+    if (Opt.starts_with("-emscripten-cxx-exceptions-allowed")) {
+      // '-mllvm -emscripten-cxx-exceptions-allowed' should be used with
+      // '-mllvm -enable-emscripten-cxx-exceptions'
+      bool EmEHArgExists = false;
+      for (const Arg *A : DriverArgs.filtered(options::OPT_mllvm)) {
+        if (StringRef(A->getValue(0)) == "-enable-emscripten-cxx-exceptions") {
+          EmEHArgExists = true;
+          break;
+        }
+      }
+      if (!EmEHArgExists)
+        getDriver().Diag(diag::err_drv_argument_only_allowed_with)
+            << "-mllvm -emscripten-cxx-exceptions-allowed"
+            << "-mllvm -enable-emscripten-cxx-exceptions";
+
+      // Prevent functions specified in -emscripten-cxx-exceptions-allowed list
+      // from being inlined before reaching the wasm backend.
+      StringRef FuncNamesStr = Opt.split('=').second;
+      SmallVector<StringRef, 4> FuncNames;
+      FuncNamesStr.split(FuncNames, ',');
+      for (auto Name : FuncNames) {
+        CC1Args.push_back("-mllvm");
+        CC1Args.push_back(DriverArgs.MakeArgString("--force-attribute=" + Name +
+                                                   ":noinline"));
+      }
+    }
+
+    for (const auto *Option :
+         {"-wasm-enable-eh", "-wasm-enable-sjlj", "-wasm-use-legacy-eh"}) {
+      if (Opt.starts_with(Option)) {
+        BanIncompatibleOptionsForWasmEHSjLj(Option);
+        EnableFeaturesForWasmEHSjLj();
+      }
+    }
   }
 }
 
@@ -302,7 +449,11 @@ ToolChain::CXXStdlibType
 WebAssembly::GetCXXStdlibType(const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
     StringRef Value = A->getValue();
-    if (Value != "libc++")
+    if (Value == "libc++")
+      return ToolChain::CST_Libcxx;
+    else if (Value == "libstdc++")
+      return ToolChain::CST_Libstdcxx;
+    else
       getDriver().Diag(diag::err_drv_invalid_stdlib_name)
           << A->getAsString(Args);
   }
@@ -348,17 +499,18 @@ void WebAssembly::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
 
 void WebAssembly::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                                ArgStringList &CC1Args) const {
-  if (!DriverArgs.hasArg(options::OPT_nostdlibinc) &&
-      !DriverArgs.hasArg(options::OPT_nostdincxx)) {
-    if (getTriple().getOS() != llvm::Triple::UnknownOS) {
-      const std::string MultiarchTriple =
-          getMultiarchTriple(getDriver(), getTriple(), getDriver().SysRoot);
-      addSystemInclude(DriverArgs, CC1Args,
-                       getDriver().SysRoot + "/include/" + MultiarchTriple +
-                           "/c++/v1");
-    }
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/include/c++/v1");
+
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc, options::OPT_nostdinc,
+                        options::OPT_nostdincxx))
+    return;
+
+  switch (GetCXXStdlibType(DriverArgs)) {
+  case ToolChain::CST_Libcxx:
+    addLibCxxIncludePaths(DriverArgs, CC1Args);
+    break;
+  case ToolChain::CST_Libstdcxx:
+    addLibStdCXXIncludePaths(DriverArgs, CC1Args);
+    break;
   }
 }
 
@@ -368,10 +520,13 @@ void WebAssembly::AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
   switch (GetCXXStdlibType(Args)) {
   case ToolChain::CST_Libcxx:
     CmdArgs.push_back("-lc++");
+    if (Args.hasArg(options::OPT_fexperimental_library))
+      CmdArgs.push_back("-lc++experimental");
     CmdArgs.push_back("-lc++abi");
     break;
   case ToolChain::CST_Libstdcxx:
-    llvm_unreachable("invalid stdlib name");
+    CmdArgs.push_back("-lstdc++");
+    break;
   }
 }
 
@@ -380,9 +535,86 @@ SanitizerMask WebAssembly::getSupportedSanitizers() const {
   if (getTriple().isOSEmscripten()) {
     Res |= SanitizerKind::Vptr | SanitizerKind::Leak | SanitizerKind::Address;
   }
+  // -fsanitize=function places two words before the function label, which are
+  // -unsupported.
+  Res &= ~SanitizerKind::Function;
   return Res;
 }
 
 Tool *WebAssembly::buildLinker() const {
   return new tools::wasm::Linker(*this);
+}
+
+void WebAssembly::addLibCxxIncludePaths(
+    const llvm::opt::ArgList &DriverArgs,
+    llvm::opt::ArgStringList &CC1Args) const {
+  const Driver &D = getDriver();
+  std::string SysRoot = computeSysRoot();
+  std::string LibPath = SysRoot + "/include";
+  const std::string MultiarchTriple =
+      getMultiarchTriple(D, getTriple(), SysRoot);
+  bool IsKnownOs = (getTriple().getOS() != llvm::Triple::UnknownOS);
+
+  std::string Version = detectLibcxxVersion(LibPath);
+  if (Version.empty())
+    return;
+
+  // First add the per-target include path if the OS is known.
+  if (IsKnownOs) {
+    std::string TargetDir = LibPath + "/" + MultiarchTriple + "/c++/" + Version;
+    addSystemInclude(DriverArgs, CC1Args, TargetDir);
+  }
+
+  // Second add the generic one.
+  addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version);
+}
+
+void WebAssembly::addLibStdCXXIncludePaths(
+    const llvm::opt::ArgList &DriverArgs,
+    llvm::opt::ArgStringList &CC1Args) const {
+  // We cannot use GCCInstallationDetector here as the sysroot usually does
+  // not contain a full GCC installation.
+  // Instead, we search the given sysroot for /usr/include/xx, similar
+  // to how we do it for libc++.
+  const Driver &D = getDriver();
+  std::string SysRoot = computeSysRoot();
+  std::string LibPath = SysRoot + "/include";
+  const std::string MultiarchTriple =
+      getMultiarchTriple(D, getTriple(), SysRoot);
+  bool IsKnownOs = (getTriple().getOS() != llvm::Triple::UnknownOS);
+
+  // This is similar to detectLibcxxVersion()
+  std::string Version;
+  {
+    std::error_code EC;
+    Generic_GCC::GCCVersion MaxVersion =
+        Generic_GCC::GCCVersion::Parse("0.0.0");
+    SmallString<128> Path(LibPath);
+    llvm::sys::path::append(Path, "c++");
+    for (llvm::vfs::directory_iterator LI = getVFS().dir_begin(Path, EC), LE;
+         !EC && LI != LE; LI = LI.increment(EC)) {
+      StringRef VersionText = llvm::sys::path::filename(LI->path());
+      if (VersionText[0] != 'v') {
+        auto Version = Generic_GCC::GCCVersion::Parse(VersionText);
+        if (Version > MaxVersion)
+          MaxVersion = Version;
+      }
+    }
+    if (MaxVersion.Major > 0)
+      Version = MaxVersion.Text;
+  }
+
+  if (Version.empty())
+    return;
+
+  // First add the per-target include path if the OS is known.
+  if (IsKnownOs) {
+    std::string TargetDir = LibPath + "/c++/" + Version + "/" + MultiarchTriple;
+    addSystemInclude(DriverArgs, CC1Args, TargetDir);
+  }
+
+  // Second add the generic one.
+  addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version);
+  // Third the backward one.
+  addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version + "/backward");
 }

@@ -21,6 +21,7 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Frontend/ASTUnit.h"
+#include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -185,7 +186,12 @@ public:
   virtual bool usesPreprocessorOnly() const = 0;
 
   /// For AST-based actions, the kind of translation unit we're handling.
-  virtual TranslationUnitKind getTranslationUnitKind() { return TU_Complete; }
+  virtual TranslationUnitKind getTranslationUnitKind() {
+    // The ASTContext, if exists, knows the exact TUKind of the frondend.
+    if (Instance && Instance->hasASTContext())
+      return Instance->getASTContext().TUKind;
+    return TU_Complete;
+  }
 
   /// Does this action support use with PCH?
   virtual bool hasPCHSupport() const { return true; }
@@ -234,7 +240,7 @@ public:
 
   /// Perform any per-file post processing, deallocate per-file
   /// objects, and run statistics and output file cleanup code.
-  void EndSourceFile();
+  virtual void EndSourceFile();
 
   /// @}
 };
@@ -270,17 +276,18 @@ public:
                          const std::vector<std::string> &arg) = 0;
 
   enum ActionType {
-    Cmdline,             ///< Action is determined by the cc1 command-line
-    ReplaceAction,       ///< Replace the main action
-    AddBeforeMainAction, ///< Execute the action before the main action
-    AddAfterMainAction   ///< Execute the action after the main action
+    CmdlineBeforeMainAction, ///< Execute the action before the main action if
+                             ///< on the command line
+    CmdlineAfterMainAction,  ///< Execute the action after the main action if on
+                             ///< the command line
+    ReplaceAction,           ///< Replace the main action
+    AddBeforeMainAction,     ///< Execute the action before the main action
+    AddAfterMainAction       ///< Execute the action after the main action
   };
   /// Get the action type for this plugin
   ///
-  /// \return The action type. If the type is Cmdline then by default the
-  /// plugin does nothing and what it does is determined by the cc1
-  /// command-line.
-  virtual ActionType getActionType() { return Cmdline; }
+  /// \return The action type. By default we use CmdlineAfterMainAction.
+  virtual ActionType getActionType() { return CmdlineAfterMainAction; }
 };
 
 /// Abstract base class to use for preprocessor-based frontend actions.
@@ -302,15 +309,16 @@ public:
 /// some existing action's behavior. It implements every virtual method in
 /// the FrontendAction interface by forwarding to the wrapped action.
 class WrapperFrontendAction : public FrontendAction {
+protected:
   std::unique_ptr<FrontendAction> WrappedAction;
 
-protected:
   bool PrepareToExecuteAction(CompilerInstance &CI) override;
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef InFile) override;
   bool BeginInvocation(CompilerInstance &CI) override;
   bool BeginSourceFileAction(CompilerInstance &CI) override;
   void ExecuteAction() override;
+  void EndSourceFile() override;
   void EndSourceFileAction() override;
   bool shouldEraseOutputFiles() override;
 

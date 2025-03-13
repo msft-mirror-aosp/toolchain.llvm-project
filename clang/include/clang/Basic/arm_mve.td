@@ -193,7 +193,7 @@ multiclass FMA<bit add> {
     def sq_m_n: Intrinsic<Vector, (args Vector:$m1, Vector:$m2,
                                         unpromoted<Scalar>:$addend_s,
                                         Predicate:$pred),
-                          (seq (splat $addend_s):$addend, pred_cg)>;
+                          (select $pred, (seq (splat $addend_s):$addend, unpred_cg), $m1)>;
   }
 }
 
@@ -575,7 +575,7 @@ defm vmaxnmavq: Reduction<Scalar, "maxnmav", [Scalar, Vector]>;
 }
 
 foreach half = [ "b", "t" ] in {
-  defvar halfconst = !if(!eq(half, "b"), 0, 1);
+  defvar halfconst = !ne(half, "b");
 
   let params = [f32], pnt = PNT_None in {
     def vcvt#half#q_f16: Intrinsic<
@@ -753,8 +753,8 @@ let params = T.Float in {
   defm: compare<"ne", fcmp_ne>;
   defm: compare<"gt", fcmp_gt>;
   defm: compare<"ge", fcmp_ge>;
-  defm: compare<"lt", fcmp_lt>;
-  defm: compare<"le", fcmp_le>;
+  defm: compare<"lt", fcmp_ult>;
+  defm: compare<"le", fcmp_ule>;
 }
 
 let params = T.Signed in {
@@ -1153,8 +1153,7 @@ defm vshlltq : vshll_imm<1>;
 
 multiclass DyadicImmShift<Type outtype, Immediate imm, string intname = NAME,
                           dag extraargs = (?)> {
-  defvar intparams = !if(!eq(!cast<string>(outtype), !cast<string>(Vector)),
-                         [Vector], [outtype, Vector]);
+  defvar intparams = !if(!eq(outtype, Vector), [Vector], [outtype, Vector]);
 
   def q_n: Intrinsic<
       outtype, (args outtype:$a, Vector:$b, imm:$sh),
@@ -1271,13 +1270,13 @@ defm sqrshr: ScalarSaturatingShiftReg<s32, s64>;
 def lsll: LongScalarShift<u64, (args s32:$sh), (IRInt<"lsll"> $lo, $hi, $sh)>;
 def asrl: LongScalarShift<s64, (args s32:$sh), (IRInt<"asrl"> $lo, $hi, $sh)>;
 
-multiclass vadcsbc {
+multiclass vadcsbc<dag initial_carry_in> {
   def q: Intrinsic<Vector, (args Vector:$a, Vector:$b, Ptr<uint>:$carry),
       (seq (IRInt<NAME, [Vector]> $a, $b, (shl (load $carry), 29)):$pair,
            (store (and 1, (lshr (xval $pair, 1), 29)), $carry),
            (xval $pair, 0))>;
   def iq: Intrinsic<Vector, (args Vector:$a, Vector:$b, Ptr<uint>:$carry),
-      (seq (IRInt<NAME, [Vector]> $a, $b, 0):$pair,
+      (seq (IRInt<NAME, [Vector]> $a, $b, initial_carry_in):$pair,
            (store (and 1, (lshr (xval $pair, 1), 29)), $carry),
            (xval $pair, 0))>;
   def q_m: Intrinsic<Vector, (args Vector:$inactive, Vector:$a, Vector:$b,
@@ -1289,13 +1288,13 @@ multiclass vadcsbc {
   def iq_m: Intrinsic<Vector, (args Vector:$inactive, Vector:$a, Vector:$b,
                                     Ptr<uint>:$carry, Predicate:$pred),
       (seq (IRInt<NAME # "_predicated", [Vector, Predicate]> $inactive, $a, $b,
-               0, $pred):$pair,
+               initial_carry_in, $pred):$pair,
            (store (and 1, (lshr (xval $pair, 1), 29)), $carry),
            (xval $pair, 0))>;
 }
 let params = T.Int32 in {
-  defm vadc: vadcsbc;
-  defm vsbc: vadcsbc;
+  defm vadc: vadcsbc<(u32 0)>;
+  defm vsbc: vadcsbc<(shl 1, 29)>;
 }
 
 let params = T.Int in {
@@ -1529,12 +1528,7 @@ let params = T.Usual in {
 foreach desttype = T.All in {
   // We want a vreinterpretq between every pair of supported vector types
   // _except_ that there shouldn't be one from a type to itself.
-  //
-  // So this foldl expression implements what you'd write in Python as
-  // [srctype for srctype in T.All if srctype != desttype]
-  let params = !foldl([]<Type>, T.All, tlist, srctype, !listconcat(tlist,
-      !if(!eq(!cast<string>(desttype),!cast<string>(srctype)),[],[srctype])))
-  in {
+  let params = !filter(srctype, T.All, !ne(srctype, desttype)) in {
     def "vreinterpretq_" # desttype: Intrinsic<
         VecOf<desttype>, (args Vector:$x), (vreinterpret $x, VecOf<desttype>)>;
   }
@@ -1543,7 +1537,7 @@ foreach desttype = T.All in {
 let params = T.All in {
   let pnt = PNT_None in {
     def vcreateq: Intrinsic<Vector, (args u64:$a, u64:$b),
-        (bitcast (ielt_const (ielt_const (undef VecOf<u64>), $a, 0),
+        (vreinterpret (ielt_const (ielt_const (undef VecOf<u64>), $a, 0),
                              $b, 1), Vector)>;
     def vuninitializedq: Intrinsic<Vector, (args), (undef Vector)>;
   }
@@ -1576,8 +1570,9 @@ foreach desttype = !listconcat(T.Int16, T.Int32, T.Float) in {
   defvar is_dest_float = !eq(desttype.kind, "f");
   defvar is_dest_unsigned = !eq(desttype.kind, "u");
   // First immediate operand of the LLVM intrinsic
-  defvar unsigned_flag = !if(is_dest_float, (unsignedflag Scalar),
-                             !if(is_dest_unsigned, V.True, V.False));
+  defvar unsigned_flag = !cond(is_dest_float: (unsignedflag Scalar),
+                               is_dest_unsigned: V.True,
+                               true: V.False);
   // For float->int conversions _n and _x_n intrinsics are not polymorphic
   // because the signedness of the destination type cannot be inferred.
   defvar pnt_nx = !if(is_dest_float, PNT_2Type, PNT_None);

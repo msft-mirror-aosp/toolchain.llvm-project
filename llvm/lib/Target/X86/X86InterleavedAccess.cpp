@@ -18,21 +18,18 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/VectorUtils.h"
-#include "llvm/IR/Constants.h"
+#include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/MachineValueType.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <cstdint>
 
 using namespace llvm;
 
@@ -44,8 +41,8 @@ namespace {
 ///  E.g. A group of interleaving access loads (Factor = 2; accessing every
 ///       other element)
 ///        %wide.vec = load <8 x i32>, <8 x i32>* %ptr
-///        %v0 = shuffle <8 x i32> %wide.vec, <8 x i32> undef, <0, 2, 4, 6>
-///        %v1 = shuffle <8 x i32> %wide.vec, <8 x i32> undef, <1, 3, 5, 7>
+///        %v0 = shuffle <8 x i32> %wide.vec, <8 x i32> poison, <0, 2, 4, 6>
+///        %v1 = shuffle <8 x i32> %wide.vec, <8 x i32> poison, <1, 3, 5, 7>
 class X86InterleavedAccessGroup {
   /// Reference to the wide-load instruction of an interleaved access
   /// group.
@@ -112,7 +109,7 @@ public:
                                      const X86Subtarget &STarget,
                                      IRBuilder<> &B)
       : Inst(I), Shuffles(Shuffs), Indices(Ind), Factor(F), Subtarget(STarget),
-        DL(Inst->getModule()->getDataLayout()), Builder(B) {}
+        DL(Inst->getDataLayout()), Builder(B) {}
 
   /// Returns true if this interleaved access group can be lowered into
   /// x86-specific instructions/intrinsics, false otherwise.
@@ -193,29 +190,25 @@ void X86InterleavedAccessGroup::decompose(
 
   // Decompose the load instruction.
   LoadInst *LI = cast<LoadInst>(VecInst);
-  Type *VecBaseTy, *VecBasePtrTy;
-  Value *VecBasePtr;
+  Type *VecBaseTy;
   unsigned int NumLoads = NumSubVectors;
   // In the case of stride 3 with a vector of 32 elements load the information
   // in the following way:
   // [0,1...,VF/2-1,VF/2+VF,VF/2+VF+1,...,2VF-1]
   unsigned VecLength = DL.getTypeSizeInBits(VecWidth);
+  Value *VecBasePtr = LI->getPointerOperand();
   if (VecLength == 768 || VecLength == 1536) {
     VecBaseTy = FixedVectorType::get(Type::getInt8Ty(LI->getContext()), 16);
-    VecBasePtrTy = VecBaseTy->getPointerTo(LI->getPointerAddressSpace());
-    VecBasePtr = Builder.CreateBitCast(LI->getPointerOperand(), VecBasePtrTy);
     NumLoads = NumSubVectors * (VecLength / 384);
   } else {
     VecBaseTy = SubVecTy;
-    VecBasePtrTy = VecBaseTy->getPointerTo(LI->getPointerAddressSpace());
-    VecBasePtr = Builder.CreateBitCast(LI->getPointerOperand(), VecBasePtrTy);
   }
   // Generate N loads of T type.
   assert(VecBaseTy->getPrimitiveSizeInBits().isKnownMultipleOf(8) &&
          "VecBaseTy's size must be a multiple of 8");
   const Align FirstAlignment = LI->getAlign();
   const Align SubsequentAlignment = commonAlignment(
-      FirstAlignment, VecBaseTy->getPrimitiveSizeInBits().getFixedSize() / 8);
+      FirstAlignment, VecBaseTy->getPrimitiveSizeInBits().getFixedValue() / 8);
   Align Alignment = FirstAlignment;
   for (unsigned i = 0; i < NumLoads; i++) {
     // TODO: Support inbounds GEP.
@@ -264,10 +257,10 @@ static void genShuffleBland(MVT VT, ArrayRef<int> Mask,
   assert(VT.getSizeInBits() >= 256 &&
          "This function doesn't accept width smaller then 256");
   unsigned NumOfElm = VT.getVectorNumElements();
-  for (unsigned i = 0; i < Mask.size(); i++)
-    Out.push_back(Mask[i] + LowOffset);
-  for (unsigned i = 0; i < Mask.size(); i++)
-    Out.push_back(Mask[i] + HighOffset + NumOfElm);
+  for (int I : Mask)
+    Out.push_back(I + LowOffset);
+  for (int I : Mask)
+    Out.push_back(I + HighOffset + NumOfElm);
 }
 
 // reorderSubVector returns the data to is the original state. And de-facto is
@@ -295,8 +288,7 @@ static void reorderSubVector(MVT VT, SmallVectorImpl<Value *> &TransposedMatrix,
 
   if (VecElems == 16) {
     for (unsigned i = 0; i < Stride; i++)
-      TransposedMatrix[i] = Builder.CreateShuffleVector(
-          Vec[i], UndefValue::get(Vec[i]->getType()), VPShuf);
+      TransposedMatrix[i] = Builder.CreateShuffleVector(Vec[i], VPShuf);
     return;
   }
 
@@ -424,8 +416,8 @@ void X86InterleavedAccessGroup::interleave8bitStride4(
     return;
   }
 
-  reorderSubVector(VT, TransposedMatrix, VecOut, makeArrayRef(Concat, 16),
-                   NumOfElm, 4, Builder);
+  reorderSubVector(VT, TransposedMatrix, VecOut, ArrayRef(Concat, 16), NumOfElm,
+                   4, Builder);
 }
 
 //  createShuffleStride returns shuffle mask of size N.
@@ -535,7 +527,7 @@ static void concatSubVector(Value **Vec, ArrayRef<Instruction *> InVec,
   for (unsigned j = 0; j < VecElems / 32; j++)
     for (int i = 0; i < 3; i++)
       Vec[i + j * 3] = Builder.CreateShuffleVector(
-          InVec[j * 6 + i], InVec[j * 6 + i + 3], makeArrayRef(Concat, 32));
+          InVec[j * 6 + i], InVec[j * 6 + i + 3], ArrayRef(Concat, 32));
 
   if (VecElems == 32)
     return;
@@ -577,8 +569,7 @@ void X86InterleavedAccessGroup::deinterleave8bitStride3(
   // Vec[2]= b5 b6 b7 c5 c6 c7 a6 a7
 
   for (int i = 0; i < 3; i++)
-    Vec[i] = Builder.CreateShuffleVector(
-        Vec[i], UndefValue::get(Vec[0]->getType()), VPShuf);
+    Vec[i] = Builder.CreateShuffleVector(Vec[i], VPShuf);
 
   // TempVector[0]= a6 a7 a0 a1 a2 b0 b1 b2
   // TempVector[1]= c0 c1 c2 c3 c4 a3 a4 a5
@@ -600,10 +591,8 @@ void X86InterleavedAccessGroup::deinterleave8bitStride3(
   // TransposedMatrix[1]= b0 b1 b2 b3 b4 b5 b6 b7
   // TransposedMatrix[2]= c0 c1 c2 c3 c4 c5 c6 c7
 
-  Value *TempVec = Builder.CreateShuffleVector(
-      Vec[1], UndefValue::get(Vec[1]->getType()), VPAlign3);
-  TransposedMatrix[0] = Builder.CreateShuffleVector(
-      Vec[0], UndefValue::get(Vec[1]->getType()), VPAlign2);
+  Value *TempVec = Builder.CreateShuffleVector(Vec[1], VPAlign3);
+  TransposedMatrix[0] = Builder.CreateShuffleVector(Vec[0], VPAlign2);
   TransposedMatrix[1] = VecElems == 8 ? Vec[2] : TempVec;
   TransposedMatrix[2] = VecElems == 8 ? TempVec : Vec[2];
 }
@@ -660,10 +649,8 @@ void X86InterleavedAccessGroup::interleave8bitStride3(
   // Vec[1]= c5 c6 c7 c0 c1 c2 c3 c4
   // Vec[2]= b0 b1 b2 b3 b4 b5 b6 b7
 
-  Vec[0] = Builder.CreateShuffleVector(
-      InVec[0], UndefValue::get(InVec[0]->getType()), VPAlign2);
-  Vec[1] = Builder.CreateShuffleVector(
-      InVec[1], UndefValue::get(InVec[1]->getType()), VPAlign3);
+  Vec[0] = Builder.CreateShuffleVector(InVec[0], VPAlign2);
+  Vec[1] = Builder.CreateShuffleVector(InVec[1], VPAlign3);
   Vec[2] = InVec[2];
 
   // Vec[0]= a6 a7 a0 a1 a2 b0 b1 b2
@@ -699,25 +686,25 @@ void X86InterleavedAccessGroup::transpose_4x4(
 
   // dst = src1[0,1],src2[0,1]
   static constexpr int IntMask1[] = {0, 1, 4, 5};
-  ArrayRef<int> Mask = makeArrayRef(IntMask1, 4);
+  ArrayRef<int> Mask = ArrayRef(IntMask1, 4);
   Value *IntrVec1 = Builder.CreateShuffleVector(Matrix[0], Matrix[2], Mask);
   Value *IntrVec2 = Builder.CreateShuffleVector(Matrix[1], Matrix[3], Mask);
 
   // dst = src1[2,3],src2[2,3]
   static constexpr int IntMask2[] = {2, 3, 6, 7};
-  Mask = makeArrayRef(IntMask2, 4);
+  Mask = ArrayRef(IntMask2, 4);
   Value *IntrVec3 = Builder.CreateShuffleVector(Matrix[0], Matrix[2], Mask);
   Value *IntrVec4 = Builder.CreateShuffleVector(Matrix[1], Matrix[3], Mask);
 
   // dst = src1[0],src2[0],src1[2],src2[2]
   static constexpr int IntMask3[] = {0, 4, 2, 6};
-  Mask = makeArrayRef(IntMask3, 4);
+  Mask = ArrayRef(IntMask3, 4);
   TransposedMatrix[0] = Builder.CreateShuffleVector(IntrVec1, IntrVec2, Mask);
   TransposedMatrix[2] = Builder.CreateShuffleVector(IntrVec3, IntrVec4, Mask);
 
   // dst = src1[1],src2[1],src1[3],src2[3]
   static constexpr int IntMask4[] = {1, 5, 3, 7};
-  Mask = makeArrayRef(IntMask4, 4);
+  Mask = ArrayRef(IntMask4, 4);
   TransposedMatrix[1] = Builder.CreateShuffleVector(IntrVec1, IntrVec2, Mask);
   TransposedMatrix[3] = Builder.CreateShuffleVector(IntrVec3, IntrVec4, Mask);
 }
@@ -730,29 +717,33 @@ bool X86InterleavedAccessGroup::lowerIntoOptimizedSequence() {
   auto *ShuffleTy = cast<FixedVectorType>(Shuffles[0]->getType());
 
   if (isa<LoadInst>(Inst)) {
-    // Try to generate target-sized register(/instruction).
-    decompose(Inst, Factor, ShuffleTy, DecomposedVectors);
-
     auto *ShuffleEltTy = cast<FixedVectorType>(Inst->getType());
     unsigned NumSubVecElems = ShuffleEltTy->getNumElements() / Factor;
-    // Perform matrix-transposition in order to compute interleaved
-    // results by generating some sort of (optimized) target-specific
-    // instructions.
-
     switch (NumSubVecElems) {
     default:
       return false;
     case 4:
-      transpose_4x4(DecomposedVectors, TransposedVectors);
-      break;
     case 8:
     case 16:
     case 32:
     case 64:
-      deinterleave8bitStride3(DecomposedVectors, TransposedVectors,
-                              NumSubVecElems);
+      if (ShuffleTy->getNumElements() != NumSubVecElems)
+        return false;
       break;
     }
+
+    // Try to generate target-sized register(/instruction).
+    decompose(Inst, Factor, ShuffleTy, DecomposedVectors);
+
+    // Perform matrix-transposition in order to compute interleaved
+    // results by generating some sort of (optimized) target-specific
+    // instructions.
+
+    if (NumSubVecElems == 4)
+      transpose_4x4(DecomposedVectors, TransposedVectors);
+    else
+      deinterleave8bitStride3(DecomposedVectors, TransposedVectors,
+                              NumSubVecElems);
 
     // Now replace the unoptimized-interleaved-vectors with the
     // transposed-interleaved vectors.
@@ -843,7 +834,7 @@ bool X86TargetLowering::lowerInterleavedStore(StoreInst *SI,
   for (unsigned i = 0; i < Factor; i++)
     Indices.push_back(Mask[i]);
 
-  ArrayRef<ShuffleVectorInst *> Shuffles = makeArrayRef(SVI);
+  ArrayRef<ShuffleVectorInst *> Shuffles = ArrayRef(SVI);
 
   // Create an interleaved access group.
   IRBuilder<> Builder(SI);

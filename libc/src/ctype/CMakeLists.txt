@@ -1,9 +1,3 @@
-add_header_library(
-  ctype_utils
-  HDRS
-    ctype_utils.h
-)
-
 add_entrypoint_object(
   isalnum
   SRCS
@@ -11,7 +5,8 @@ add_entrypoint_object(
   HDRS
     isalnum.h
   DEPENDS
-    .ctype_utils
+    libc.include.ctype
+    libc.src.__support.ctype_utils
 )
 
 add_entrypoint_object(
@@ -21,7 +16,15 @@ add_entrypoint_object(
   HDRS
     isalpha.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
+)
+
+add_entrypoint_object(
+  isascii
+  SRCS
+    isascii.cpp
+  HDRS
+    isascii.h
 )
 
 add_entrypoint_object(
@@ -47,7 +50,7 @@ add_entrypoint_object(
   HDRS
     isdigit.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
 )
 
 add_entrypoint_object(
@@ -57,7 +60,7 @@ add_entrypoint_object(
   HDRS
     isgraph.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
 )
 
 add_entrypoint_object(
@@ -67,7 +70,7 @@ add_entrypoint_object(
   HDRS
     islower.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
 )
 
 add_entrypoint_object(
@@ -85,7 +88,7 @@ add_entrypoint_object(
   HDRS
     ispunct.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
 )
 
 add_entrypoint_object(
@@ -103,7 +106,7 @@ add_entrypoint_object(
   HDRS
     isupper.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
 )
 
 add_entrypoint_object(
@@ -113,7 +116,7 @@ add_entrypoint_object(
   HDRS
     isxdigit.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
 )
 
 add_entrypoint_object(
@@ -123,7 +126,15 @@ add_entrypoint_object(
   HDRS
     tolower.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
+)
+
+add_entrypoint_object(
+  toascii
+  SRCS
+    toascii.cpp
+  HDRS
+    toascii.h
 )
 
 add_entrypoint_object(
@@ -133,5 +144,161 @@ add_entrypoint_object(
   HDRS
     toupper.h
   DEPENDS
-    .ctype_utils
+    libc.src.__support.ctype_utils
+)
+
+# Do not build the locale versions in overlay mode.
+if(NOT LLVM_LIBC_FULL_BUILD)
+  return()
+endif()
+
+add_entrypoint_object(
+  isalnum_l
+  SRCS
+    isalnum_l.cpp
+  HDRS
+    isalnum_l.h
+  DEPENDS
+    libc.include.ctype
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isalpha_l
+  SRCS
+    isalpha_l.cpp
+  HDRS
+    isalpha_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isblank_l
+  SRCS
+    isblank_l.cpp
+  HDRS
+    isblank_l.h
+  DEPENDS
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  iscntrl_l
+  SRCS
+    iscntrl_l.cpp
+  HDRS
+    iscntrl_l.h
+  DEPENDS
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isdigit_l
+  SRCS
+    isdigit_l.cpp
+  HDRS
+    isdigit_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isgraph_l
+  SRCS
+    isgraph_l.cpp
+  HDRS
+    isgraph_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  islower_l
+  SRCS
+    islower_l.cpp
+  HDRS
+    islower_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isprint_l
+  SRCS
+    isprint_l.cpp
+  HDRS
+    isprint_l.h
+  DEPENDS
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  ispunct_l
+  SRCS
+    ispunct_l.cpp
+  HDRS
+    ispunct_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isspace_l
+  SRCS
+    isspace_l.cpp
+  HDRS
+    isspace_l.h
+  DEPENDS
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isupper_l
+  SRCS
+    isupper_l.cpp
+  HDRS
+    isupper_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  isxdigit_l
+  SRCS
+    isxdigit_l.cpp
+  HDRS
+    isxdigit_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  tolower_l
+  SRCS
+    tolower_l.cpp
+  HDRS
+    tolower_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
+)
+
+add_entrypoint_object(
+  toupper_l
+  SRCS
+    toupper_l.cpp
+  HDRS
+    toupper_l.h
+  DEPENDS
+    libc.src.__support.ctype_utils
+    libc.hdr.types.locale_t
 )

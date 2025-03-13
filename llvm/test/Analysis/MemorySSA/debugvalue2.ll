@@ -1,4 +1,4 @@
-; RUN: opt -disable-basic-aa -enable-new-pm=0 -print-memoryssa -disable-output %s 2>&1 | FileCheck %s
+; RUN: opt -passes='print<memoryssa>' -disable-output %s 2>&1 | FileCheck %s
 
 ; Note that the test crashes the MemorySSA verification when doing loop-rotate,
 ; if debuginfo is modelled in MemorySSA, due to the fact that MemorySSA is not
@@ -8,7 +8,7 @@ target triple = "x86_64-unknown-linux-gnu"
 
 ; CHECK-LABEL: @overflow_iter_var
 ; CHECK-NOT: MemoryDef
-define void @overflow_iter_var() !dbg !11 {
+define void @overflow_iter_var(i1 %arg) !dbg !11 {
 entry:
   call void @llvm.dbg.value(metadata i16 0, metadata !16, metadata !DIExpression()), !dbg !18
   br label %for.cond
@@ -16,10 +16,10 @@ entry:
 for.cond:                                         ; preds = %for.body, %entry
   call void @llvm.dbg.value(metadata i16 0, metadata !16, metadata !DIExpression()), !dbg !18
   call void @llvm.dbg.value(metadata i16 undef, metadata !20, metadata !DIExpression()), !dbg !21
-  br i1 undef, label %for.end, label %for.body
+  br i1 %arg, label %for.end, label %for.body
 
 for.body:                                         ; preds = %for.cond
-  %0 = load i16, i16* undef, align 1
+  %0 = load i16, ptr undef, align 1
   br label %for.cond
 
 for.end:                                          ; preds = %for.cond

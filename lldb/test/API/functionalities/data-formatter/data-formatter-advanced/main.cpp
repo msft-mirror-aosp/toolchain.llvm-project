@@ -1,6 +1,7 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
+#include <string>
 
 struct i_am_cool
 {
@@ -128,6 +129,9 @@ int main (int argc, const char * argv[])
 {
     
     int iAmInt = 9;
+    const int constInt = 42;
+    volatile int volatileInt = 43;
+    const volatile int constVolatileInt = 44;
     
     i_am_cool cool_boy(1,0.5,3);
     i_am_cooler cooler_boy(1,2,0.1,0.2,'A','B');
@@ -141,7 +145,8 @@ int main (int argc, const char * argv[])
     cool_array[2].character = 'Q';
     
     int int_array[] = {1,2,3,4,5};
-    
+    const int const_int_array[] = {11, 12, 13, 14, 15};
+
     IWrapPointers wrapper;
         
     *int_array = -1;
@@ -160,6 +165,17 @@ int main (int argc, const char * argv[])
     Simple a_simple_object(3,0.14,'E');
     
     VeryLong a_long_guy;
-    
+
+    std::string some_string = "012345678901234567890123456789"
+                              "012345678901234567890123456789"
+                              "012345678901234567890123456789"
+                              "012345678901234567890123456789";
+    char const *some_cstring = some_string.c_str();
+
+    char const some_carr[] = "012345678901234567890123456789"
+                             "012345678901234567890123456789"
+                             "012345678901234567890123456789"
+                             "012345678901234567890123456789";
+
     return 0; // Set break point at this line.
 }

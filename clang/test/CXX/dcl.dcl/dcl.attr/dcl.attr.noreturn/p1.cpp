@@ -14,7 +14,7 @@ template <typename T> void a4 [[noreturn]] () { return; } // expected-warning {{
                                                           // expected-warning@-1 {{function 'a4<long>' declared 'noreturn' should not return}}
 void a4_test() { a4<long>(); } // expected-note {{in instantiation of function template specialization 'a4<long>' requested here}}
 
-[[noreturn, noreturn]] void b() { throw 0; } // expected-error {{attribute 'noreturn' cannot appear multiple times in an attribute specifier}}
+[[noreturn, noreturn]] void b() { throw 0; } // ok
 [[noreturn]] [[noreturn]] void b2() { throw 0; } // ok
 
 [[noreturn()]] void c(); // expected-error {{attribute 'noreturn' cannot have an argument list}}
@@ -24,8 +24,8 @@ int d2 [[noreturn]]; // expected-error {{'noreturn' attribute only applies to fu
 
 [[noreturn]] int e() { b2(); } // ok
 
-int f(); // expected-note {{declaration missing '[[noreturn]]' attribute is here}}
-[[noreturn]] int f(); // expected-error {{function declared '[[noreturn]]' after its first declaration}}
+int f(); // expected-note {{previous declaration is here}}
+[[noreturn]] int f(); // expected-error {{'noreturn' attribute does not appear on the first declaration}}
 int f();
 
 [[noreturn]] int g();
@@ -48,4 +48,21 @@ void check() {
   test_type(f);
   test_type(g);
   test_type(h); // expected-note {{instantiation}}
+}
+
+namespace GH63009 {
+struct S1 {
+  [[noreturn]] S1() { throw int {}; }
+};
+struct S2 {
+  [[noreturn]] ~S2() { throw int {}; }
+};
+
+int test_no_return_constructor() { S1(); } // ok
+int test_no_return_destructor() { S2(); } // ok
+
+int main() {
+  test_no_return_constructor();
+  test_no_return_destructor();
+}
 }

@@ -8,16 +8,7 @@
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17
 
-// This test relies on P0482 being fixed, which isn't in
-// older Apple dylibs
-//
-// XFAIL: with_system_cxx_lib=macosx10.15
-// XFAIL: with_system_cxx_lib=macosx10.14
-// XFAIL: with_system_cxx_lib=macosx10.13
-// XFAIL: with_system_cxx_lib=macosx10.12
-// XFAIL: with_system_cxx_lib=macosx10.11
-// XFAIL: with_system_cxx_lib=macosx10.10
-// XFAIL: with_system_cxx_lib=macosx10.9 
+// XFAIL: availability-char8_t_support-missing
 
 // <locale>
 

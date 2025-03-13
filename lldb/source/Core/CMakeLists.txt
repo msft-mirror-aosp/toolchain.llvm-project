@@ -10,30 +10,31 @@ set(LLDB_CURSES_LIBS)
 set(LLDB_LIBEDIT_LIBS)
 
 if (LLDB_ENABLE_CURSES)
-  list(APPEND LLDB_CURSES_LIBS ${CURSES_LIBRARIES} ${PANEL_LIBRARIES})
-  if(LLVM_ENABLE_TERMINFO)
-    list(APPEND LLDB_CURSES_LIBS ${TERMINFO_LIB})
-  endif()
+  list(APPEND LLDB_CURSES_LIBS ${PANEL_LIBRARIES} ${CURSES_LIBRARIES})
   if (LLVM_BUILD_STATIC)
     list(APPEND LLDB_CURSES_LIBS gpm)
   endif()
 endif()
 
+# TODO: Add property `NO_PLUGIN_DEPENDENCIES` to lldbCore
 add_lldb_library(lldbCore
   Address.cpp
   AddressRange.cpp
+  AddressRangeListImpl.cpp
   AddressResolver.cpp
   AddressResolverFileLine.cpp
-  AddressResolverName.cpp
   Communication.cpp
+  DataFileCache.cpp
   Debugger.cpp
+  DebuggerEvents.cpp
+  Declaration.cpp
   Disassembler.cpp
   DumpDataExtractor.cpp
   DumpRegisterValue.cpp
+  DumpRegisterInfo.cpp
   DynamicLoader.cpp
   EmulateInstruction.cpp
   FileLineResolver.cpp
-  FileSpecList.cpp
   FormatEntity.cpp
   Highlighter.cpp
   IOHandler.cpp
@@ -44,27 +45,16 @@ add_lldb_library(lldbCore
   ModuleList.cpp
   Opcode.cpp
   PluginManager.cpp
+  Progress.cpp
   RichManglingContext.cpp
   SearchFilter.cpp
   Section.cpp
+  SourceLocationSpec.cpp
   SourceManager.cpp
   StreamAsynchronousIO.cpp
-  StreamFile.cpp
+  ThreadedCommunication.cpp
   UserSettingsController.cpp
   Value.cpp
-  ValueObject.cpp
-  ValueObjectCast.cpp
-  ValueObjectChild.cpp
-  ValueObjectConstResult.cpp
-  ValueObjectConstResultCast.cpp
-  ValueObjectConstResultChild.cpp
-  ValueObjectConstResultImpl.cpp
-  ValueObjectDynamicValue.cpp
-  ValueObjectList.cpp
-  ValueObjectMemory.cpp
-  ValueObjectRegister.cpp
-  ValueObjectSyntheticFilter.cpp
-  ValueObjectVariable.cpp
 
   DEPENDS
     clang-tablegen-targets
@@ -78,6 +68,7 @@ add_lldb_library(lldbCore
     lldbSymbol
     lldbTarget
     lldbUtility
+    lldbValueObject
     lldbPluginCPlusPlusLanguage
     lldbPluginObjCLanguage
     ${LLDB_CURSES_LIBS}
@@ -88,6 +79,7 @@ add_lldb_library(lldbCore
   LINK_COMPONENTS
     Support
     Demangle
+    TargetParser
   )
 
 add_dependencies(lldbCore
@@ -97,10 +89,6 @@ add_dependencies(lldbCore
 # Needed to properly resolve references in a debug build.
 # TODO: Remove once we have better layering
 set_target_properties(lldbCore PROPERTIES LINK_INTERFACE_MULTIPLICITY 5)
-
-if (LLDB_ENABLE_LIBEDIT)
-  target_include_directories(lldbCore PRIVATE ${LibEdit_INCLUDE_DIRS})
-endif()
 
 if (LLDB_ENABLE_CURSES)
   target_include_directories(lldbCore PRIVATE ${CURSES_INCLUDE_DIRS})

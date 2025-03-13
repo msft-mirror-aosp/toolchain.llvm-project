@@ -13,9 +13,9 @@
 #ifndef LLDB_TOOLS_DEBUGSERVER_SOURCE_PTHREADMUTEX_H
 #define LLDB_TOOLS_DEBUGSERVER_SOURCE_PTHREADMUTEX_H
 
-#include <assert.h>
+#include <cassert>
+#include <cstdint>
 #include <pthread.h>
-#include <stdint.h>
 
 //#define DEBUG_PTHREAD_MUTEX_DEADLOCKS 1
 
@@ -78,13 +78,13 @@ public:
   };
 
   PThreadMutex() {
-    int err;
+    [[maybe_unused]] int err;
     err = ::pthread_mutex_init(&m_mutex, NULL);
     assert(err == 0);
   }
 
   PThreadMutex(int type) {
-    int err;
+    [[maybe_unused]] int err;
     ::pthread_mutexattr_t attr;
     err = ::pthread_mutexattr_init(&attr);
     assert(err == 0);
@@ -97,7 +97,7 @@ public:
   }
 
   ~PThreadMutex() {
-    int err;
+    [[maybe_unused]] int err;
     err = ::pthread_mutex_destroy(&m_mutex);
     if (err != 0) {
       err = Unlock();

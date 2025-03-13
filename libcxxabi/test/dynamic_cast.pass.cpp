@@ -1,4 +1,4 @@
-//===------------------------- dynamic_cast.pass.cpp ----------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,7 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-// XFAIL: gcc-7, gcc-8, gcc-9
+// This test requires PR33425, PR33487 and PR33439.
+// XFAIL: using-built-library-before-llvm-9
 
 #include <cassert>
 
@@ -14,7 +15,7 @@
 // bases.
 #if defined(__clang__)
 #   pragma clang diagnostic ignored "-Winaccessible-base"
-#elif defined(__GNUC__) && (__GNUC__ >= 10)
+#elif defined(__GNUC__)
 #   pragma GCC diagnostic ignored "-Winaccessible-base"
 #endif
 

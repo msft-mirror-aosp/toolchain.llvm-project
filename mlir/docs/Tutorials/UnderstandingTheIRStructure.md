@@ -1,11 +1,11 @@
 # Understanding the IR Structure
 
 The MLIR Language Reference describes the
-[High Level Structure](../LangRef/#high-level-structure), this document
+[High Level Structure](../LangRef.md/#high-level-structure), this document
 illustrates this structure through examples, and introduces at the same time the
 C++ APIs involved in manipulating it.
 
-We will implement a [pass](../PassManagement/#operation-pass) that traverses any
+We will implement a [pass](../PassManagement.md/#operation-pass) that traverses any
 MLIR input and prints the entity inside the IR. A pass (or in general almost any
 piece of IR) is always rooted with an operation. Most of the time the top-level
 operation is a `ModuleOp`, the MLIR `PassManager` is actually limited to
@@ -40,8 +40,8 @@ the nested regions and print them individually:
     if (!op->getAttrs().empty()) {
       printIndent() << op->getAttrs().size() << " attributes:\n";
       for (NamedAttribute attr : op->getAttrs())
-        printIndent() << " - '" << attr.first << "' : '" << attr.second
-                      << "'\n";
+        printIndent() << " - '" << attr.getName() << "' : '"
+                      << attr.getValue() << "'\n";
     }
 
     // Recurse into each of the regions attached to the operation.
@@ -86,7 +86,7 @@ Finally, a `Block` has a list of arguments, and holds a list of `Operation`s:
 ```
 
 The code for the pass is available
-[here in the repo](https://github.com/llvm/llvm-project/blob/master/mlir/test/lib/IR/TestPrintNesting.cpp)
+[here in the repo](https://github.com/llvm/llvm-project/blob/main/mlir/test/lib/IR/TestPrintNesting.cpp)
 and can be exercised with `mlir-opt -test-print-nesting`.
 
 ### Example
@@ -96,13 +96,13 @@ with `mlir-opt -test-print-nesting -allow-unregistered-dialect
 llvm-project/mlir/test/IR/print-ir-nesting.mlir`:
 
 ```mlir
-"module"() ( {
-  %0:4 = "dialect.op1"() {"attribute name" = 42 : i32} : () -> (i1, i16, i32, i64)
+"builtin.module"() ( {
+  %results:4 = "dialect.op1"() {"attribute name" = 42 : i32} : () -> (i1, i16, i32, i64)
   "dialect.op2"() ( {
-    "dialect.innerop1"(%0#0, %0#1) : (i1, i16) -> ()
+    "dialect.innerop1"(%results#0, %results#1) : (i1, i16) -> ()
   },  {
     "dialect.innerop2"() : () -> ()
-    "dialect.innerop3"(%0#0, %0#2, %0#3)[^bb1, ^bb2] : (i1, i32, i64) -> ()
+    "dialect.innerop3"(%results#0, %results#2, %results#3)[^bb1, ^bb2] : (i1, i32, i64) -> ()
   ^bb1(%1: i32):  // pred: ^bb0
     "dialect.innerop4"() : () -> ()
     "dialect.innerop5"() : () -> ()
@@ -110,22 +110,23 @@ llvm-project/mlir/test/IR/print-ir-nesting.mlir`:
     "dialect.innerop6"() : () -> ()
     "dialect.innerop7"() : () -> ()
   }) {"other attribute" = 42 : i64} : () -> ()
-  "module_terminator"() : () -> ()
 }) : () -> ()
 ```
 
 And will yield the following output:
 
 ```
-visiting op: 'module' with 0 operands and 0 results
+visiting op: 'builtin.module' with 0 operands and 0 results
  1 nested regions:
   Region with 1 blocks:
-    Block with 0 arguments, 0 successors, and 3 operations
+    Block with 0 arguments, 0 successors, and 2 operations
       visiting op: 'dialect.op1' with 0 operands and 4 results
       1 attributes:
        - 'attribute name' : '42 : i32'
        0 nested regions:
       visiting op: 'dialect.op2' with 0 operands and 0 results
+      1 attributes:
+       - 'other attribute' : '42 : i64'
        2 nested regions:
         Region with 1 blocks:
           Block with 0 arguments, 0 successors, and 1 operations
@@ -147,11 +148,9 @@ visiting op: 'module' with 0 operands and 0 results
              0 nested regions:
             visiting op: 'dialect.innerop7' with 0 operands and 0 results
              0 nested regions:
-      visiting op: 'module_terminator' with 0 operands and 0 results
-       0 nested regions:
 ```
 
-## Other IR Traversal Methods.
+## Other IR Traversal Methods
 
 In many cases, unwrapping the recursive structure of the IR is cumbersome and
 you may be interested in using other helpers.
@@ -194,7 +193,7 @@ Operation, for example the following will apply the callback only on `LinalgOp`
 operations nested inside the function:
 
 ```c++
-  getFunction.walk([](LinalgOp linalgOp) {
+  getFunction().walk([](LinalgOp linalgOp) {
     // process LinalgOp `linalgOp`.
   });
 ```
@@ -219,7 +218,7 @@ does not satisfy a criteria:
 
 Another relationship in the IR is the one that links a `Value` with its users.
 As defined in the
-[language reference](https://mlir.llvm.org/docs/LangRef/#high-level-structure),
+[language reference](../LangRef.md/#high-level-structure),
 each Value is either a `BlockArgument` or the result of exactly one `Operation`
 (an `Operation` can have multiple results, each of them is a separate `Value`).
 The users of a `Value` are `Operation`s, through their arguments: each
@@ -273,7 +272,7 @@ results and print informations about them:
 ```
 
 The illustrating code for this pass is available
-[here in the repo](https://github.com/llvm/llvm-project/blob/master/mlir/test/lib/IR/TestPrintDefUse.cpp)
+[here in the repo](https://github.com/llvm/llvm-project/blob/main/mlir/test/lib/IR/TestPrintDefUse.cpp)
 and can be exercised with `mlir-opt -test-print-defuse`.
 
 The chaining of `Value`s and their uses can be viewed as following:

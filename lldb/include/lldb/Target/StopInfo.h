@@ -17,7 +17,7 @@
 
 namespace lldb_private {
 
-class StopInfo {
+class StopInfo : public std::enable_shared_from_this<StopInfo> {
   friend class Process::ProcessEventData;
   friend class ThreadPlanBase;
 
@@ -25,7 +25,7 @@ public:
   // Constructors and Destructors
   StopInfo(Thread &thread, uint64_t value);
 
-  virtual ~StopInfo() {}
+  virtual ~StopInfo() = default;
 
   bool IsValid() const;
 
@@ -77,7 +77,24 @@ public:
       m_description.clear();
   }
 
+  /// This gives the StopInfo a chance to suggest a stack frame to select.
+  /// Passing true for inlined_stack will request changes to the inlined
+  /// call stack.  Passing false will request changes to the real stack
+  /// frame.  The inlined stack gets adjusted before we call into the thread
+  /// plans so they can reason based on the correct values.  The real stack
+  /// adjustment is handled after the frame recognizers get a chance to adjust
+  /// the frame.
+  virtual std::optional<uint32_t>
+  GetSuggestedStackFrameIndex(bool inlined_stack) {
+    return {};
+  }
+
   virtual bool IsValidForOperatingSystemThread(Thread &thread) { return true; }
+
+  /// A Continue operation can result in a false stop event
+  /// before any execution has happened. We need to detect this
+  /// and silently continue again one more time.
+  virtual bool WasContinueInterrupted(Thread &thread) { return false; }
 
   // Sometimes the thread plan logic will know that it wants a given stop to
   // stop or not, regardless of what the ordinary logic for that StopInfo would
@@ -109,13 +126,18 @@ public:
   static lldb::StopInfoSP CreateStopReasonWithBreakpointSiteID(
       Thread &thread, lldb::break_id_t break_id, bool should_stop);
 
-  static lldb::StopInfoSP CreateStopReasonWithWatchpointID(
-      Thread &thread, lldb::break_id_t watch_id,
-      lldb::addr_t watch_hit_addr = LLDB_INVALID_ADDRESS);
+  static lldb::StopInfoSP
+  CreateStopReasonWithWatchpointID(Thread &thread, lldb::break_id_t watch_id,
+                                   bool silently_continue = false);
 
   static lldb::StopInfoSP
   CreateStopReasonWithSignal(Thread &thread, int signo,
-                             const char *description = nullptr);
+                             const char *description = nullptr,
+                             std::optional<int> code = std::nullopt);
+
+  static lldb::StopInfoSP
+  CreateStopReasonWithInterrupt(Thread &thread, int signo,
+                                const char *description);
 
   static lldb::StopInfoSP CreateStopReasonToTrace(Thread &thread);
 
@@ -128,6 +150,19 @@ public:
   CreateStopReasonWithException(Thread &thread, const char *description);
 
   static lldb::StopInfoSP CreateStopReasonWithExec(Thread &thread);
+
+  static lldb::StopInfoSP
+  CreateStopReasonProcessorTrace(Thread &thread, const char *description);
+
+  static lldb::StopInfoSP CreateStopReasonFork(Thread &thread,
+                                               lldb::pid_t child_pid,
+                                               lldb::tid_t child_tid);
+
+  static lldb::StopInfoSP CreateStopReasonVFork(Thread &thread,
+                                                lldb::pid_t child_pid,
+                                                lldb::tid_t child_tid);
+
+  static lldb::StopInfoSP CreateStopReasonVForkDone(Thread &thread);
 
   static lldb::ValueObjectSP
   GetReturnValueObject(lldb::StopInfoSP &stop_info_sp);

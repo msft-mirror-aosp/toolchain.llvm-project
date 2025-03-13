@@ -16,6 +16,7 @@
 
 #include <set>
 #include <cassert>
+#include <iterator>
 
 #include "test_macros.h"
 #include "MoveOnly.h"
@@ -27,7 +28,7 @@ int main(int, char**)
 {
     {
         typedef MoveOnly V;
-        typedef test_compare<std::less<MoveOnly> > C;
+        typedef test_less<MoveOnly> C;
         typedef test_allocator<V> A;
         typedef std::set<MoveOnly, C, A> M;
         typedef std::move_iterator<V*> I;
@@ -65,7 +66,7 @@ int main(int, char**)
     }
     {
         typedef MoveOnly V;
-        typedef test_compare<std::less<MoveOnly> > C;
+        typedef test_less<MoveOnly> C;
         typedef test_allocator<V> A;
         typedef std::set<MoveOnly, C, A> M;
         typedef std::move_iterator<V*> I;
@@ -103,7 +104,7 @@ int main(int, char**)
     }
     {
         typedef MoveOnly V;
-        typedef test_compare<std::less<MoveOnly> > C;
+        typedef test_less<MoveOnly> C;
         typedef other_allocator<V> A;
         typedef std::set<MoveOnly, C, A> M;
         typedef std::move_iterator<V*> I;
@@ -159,7 +160,7 @@ int main(int, char**)
             V(3),
             V(3)
             };
-            const size_t num = sizeof(a1)/sizeof(a1[0]);
+            const std::size_t num = sizeof(a1)/sizeof(a1[0]);
             assert(Counter_base::gConstructed == num);
 
             M m1(I(a1), I(a1+num), C(), A());

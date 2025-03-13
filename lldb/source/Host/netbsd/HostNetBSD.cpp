@@ -6,14 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <cstdio>
 #include <dlfcn.h>
 #include <execinfo.h>
-#include <stdio.h>
 #include <sys/proc.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
 
-#include <limits.h>
+#include <climits>
 
 #include <kvm.h>
 #include <sys/exec.h>
@@ -25,6 +25,7 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Endian.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NameMatches.h"
 #include "lldb/Utility/ProcessInfo.h"
@@ -32,11 +33,7 @@
 #include "lldb/Utility/StreamString.h"
 
 #include "llvm/Object/ELF.h"
-#include "llvm/Support/Host.h"
-
-extern "C" {
-extern char **environ;
-}
+#include "llvm/TargetParser/Host.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -44,8 +41,6 @@ using namespace lldb_private;
 namespace lldb_private {
 class ProcessLaunchInfo;
 }
-
-Environment Host::GetEnvironment() { return Environment(environ); }
 
 static bool GetNetBSDProcessArgs(const ProcessInstanceInfoMatch *match_info_ptr,
                                  ProcessInstanceInfo &process_info) {
@@ -101,7 +96,7 @@ static bool GetNetBSDProcessArgs(const ProcessInstanceInfoMatch *match_info_ptr,
 }
 
 static bool GetNetBSDProcessCPUType(ProcessInstanceInfo &process_info) {
-  Log *log = GetLogIfAllCategoriesSet(LIBLLDB_LOG_HOST);
+  Log *log = GetLog(LLDBLog::Host);
 
   if (process_info.ProcessIDIsValid()) {
     auto buffer_sp = FileSystem::Instance().CreateDataBuffer(
@@ -109,7 +104,8 @@ static bool GetNetBSDProcessCPUType(ProcessInstanceInfo &process_info) {
     if (buffer_sp) {
       uint8_t exe_class =
           llvm::object::getElfArchType(
-              {buffer_sp->GetChars(), size_t(buffer_sp->GetByteSize())})
+              {reinterpret_cast<const char *>(buffer_sp->GetBytes()),
+               size_t(buffer_sp->GetByteSize())})
               .first;
 
       switch (exe_class) {
@@ -267,5 +263,5 @@ bool Host::GetProcessInfo(lldb::pid_t pid, ProcessInstanceInfo &process_info) {
 }
 
 Status Host::ShellExpandArguments(ProcessLaunchInfo &launch_info) {
-  return Status("unimplemented");
+  return Status::FromErrorString("unimplemented");
 }

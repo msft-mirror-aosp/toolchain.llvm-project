@@ -1,4 +1,5 @@
-; RUN: llc -verify-machineinstrs -mcpu=pwr7 -mattr=-altivec -mtriple powerpc-ibm-aix-xcoff -filetype=obj -o %t.o < %s
+; RUN: llc -verify-machineinstrs -mcpu=pwr7 -mattr=-altivec -mtriple powerpc-ibm-aix-xcoff \
+; RUN:     -xcoff-traceback-table=false -filetype=obj -o %t.o < %s
 ; RUN: llvm-readobj  --symbols %t.o | FileCheck %s
 
 define void @foo() {
@@ -11,8 +12,28 @@ entry:
 ; CHECK-NEXT: Arch: powerpc
 ; CHECK-NEXT: AddressSize: 32bit
 ; CHECK:        Symbol {
+; CHECK-NEXT:     Index: 0
+; CHECK-NEXT:     Name: .file
+; CHECK-NEXT:     Value (SymbolTableIndex): 0x0
+; CHECK-NEXT:     Section: N_DEBUG
+; CHECK-NEXT:     Source Language ID: TB_CPLUSPLUS (0x9)
+; CHECK-NEXT:     CPU Version ID: TCPU_PWR7 (0x18)
+; CHECK-NEXT:     StorageClass: C_FILE (0x67)
+; CHECK-NEXT:     NumberOfAuxEntries: 2
+; CHECK-NEXT:     File Auxiliary Entry {
+; CHECK-NEXT:       Index: 1
+; CHECK-NEXT:       Name:
+; CHECK-NEXT:       Type: XFT_FN (0x0)
+; CHECK-NEXT:     }
+; CHECK-NEXT:     File Auxiliary Entry {
+; CHECK-NEXT:       Index: 2
+; CHECK-NEXT:       Name: LLVM
+; CHECK-NEXT:       Type: XFT_CV (0x2)
+; CHECK-NEXT:     }
+; CHECK-NEXT:   }
+; CHECK-NEXT:   Symbol {
 ; CHECK-NEXT:     Index: [[#Index:]]
-; CHECK-NEXT:     Name: .text
+; CHECK-NEXT:     Name:
 ; CHECK-NEXT:     Value (RelocatableAddress): 0x0
 ; CHECK-NEXT:     Section: .text
 ; CHECK-NEXT:     Type: 0x0
@@ -23,7 +44,7 @@ entry:
 ; CHECK-NEXT:       SectionLen: 4
 ; CHECK-NEXT:       ParameterHashIndex: 0x0
 ; CHECK-NEXT:       TypeChkSectNum: 0x0
-; CHECK-NEXT:       SymbolAlignmentLog2: 4
+; CHECK-NEXT:       SymbolAlignmentLog2: 5
 ; CHECK-NEXT:       SymbolType: XTY_SD (0x1)
 ; CHECK-NEXT:       StorageMappingClass: XMC_PR (0x0)
 ; CHECK-NEXT:       StabInfoIndex: 0x0

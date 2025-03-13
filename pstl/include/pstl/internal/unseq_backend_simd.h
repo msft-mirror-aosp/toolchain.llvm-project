@@ -65,7 +65,7 @@ template <class _Index, class _DifferenceType, class _Pred>
 bool
 __simd_or(_Index __first, _DifferenceType __n, _Pred __pred) noexcept
 {
-#if _PSTL_EARLYEXIT_PRESENT
+#if defined(_PSTL_EARLYEXIT_PRESENT)
     _DifferenceType __i;
     _PSTL_PRAGMA_VECTOR_UNALIGNED
     _PSTL_PRAGMA_SIMD_EARLYEXIT
@@ -105,7 +105,7 @@ template <class _Index, class _DifferenceType, class _Compare>
 _Index
 __simd_first(_Index __first, _DifferenceType __begin, _DifferenceType __end, _Compare __comp) noexcept
 {
-#if _PSTL_EARLYEXIT_PRESENT
+#if defined(_PSTL_EARLYEXIT_PRESENT)
     _DifferenceType __i = __begin;
     _PSTL_PRAGMA_VECTOR_UNALIGNED // Do not generate peel loop part
         _PSTL_PRAGMA_SIMD_EARLYEXIT for (; __i < __end; ++__i)
@@ -165,7 +165,7 @@ template <class _Index1, class _DifferenceType, class _Index2, class _Pred>
 std::pair<_Index1, _Index2>
 __simd_first(_Index1 __first1, _DifferenceType __n, _Index2 __first2, _Pred __pred) noexcept
 {
-#if _PSTL_EARLYEXIT_PRESENT
+#if defined(_PSTL_EARLYEXIT_PRESENT)
     _DifferenceType __i = 0;
     _PSTL_PRAGMA_VECTOR_UNALIGNED
     _PSTL_PRAGMA_SIMD_EARLYEXIT
@@ -387,7 +387,7 @@ __simd_adjacent_find(_Index __first, _Index __last, _BinaryPredicate __pred, boo
     typedef typename std::iterator_traits<_Index>::difference_type _DifferenceType;
     _DifferenceType __i = 0;
 
-#if _PSTL_EARLYEXIT_PRESENT
+#if defined(_PSTL_EARLYEXIT_PRESENT)
     //Some compiler versions fail to compile the following loop when iterators are used. Indices are used instead
     const _DifferenceType __n = __last - __first - 1;
     _PSTL_PRAGMA_VECTOR_UNALIGNED
@@ -532,17 +532,17 @@ __simd_scan(_InputIterator __first, _Size __n, _OutputIterator __result, _UnaryO
 template <typename _Tp, typename _BinaryOp>
 struct _Combiner
 {
-    _Tp __value;
+    _Tp __value_;
     _BinaryOp* __bin_op; // Here is a pointer to function because of default ctor
 
-    _Combiner() : __value{}, __bin_op(nullptr) {}
-    _Combiner(const _Tp& value, const _BinaryOp* bin_op) : __value(value), __bin_op(const_cast<_BinaryOp*>(bin_op)) {}
-    _Combiner(const _Combiner& __obj) : __value{}, __bin_op(__obj.__bin_op) {}
+    _Combiner() : __value_{}, __bin_op(nullptr) {}
+    _Combiner(const _Tp& value, const _BinaryOp* bin_op) : __value_(value), __bin_op(const_cast<_BinaryOp*>(bin_op)) {}
+    _Combiner(const _Combiner& __obj) : __value_{}, __bin_op(__obj.__bin_op) {}
 
     void
     operator()(const _Combiner& __obj)
     {
-        __value = (*__bin_op)(__value, __obj.__value);
+        __value_ = (*__bin_op)(__value_, __obj.__value);
     }
 };
 
@@ -561,12 +561,12 @@ __simd_scan(_InputIterator __first, _Size __n, _OutputIterator __result, _UnaryO
     _PSTL_PRAGMA_SIMD_SCAN(__bin_op : __init_)
     for (_Size __i = 0; __i < __n; ++__i)
     {
-        __result[__i] = __init_.__value;
+        __result[__i] = __init_.__value_;
         _PSTL_PRAGMA_SIMD_EXCLUSIVE_SCAN(__init_)
         _PSTL_PRAGMA_FORCEINLINE
-        __init_.__value = __binary_op(__init_.__value, __unary_op(__first[__i]));
+        __init_.__value_ = __binary_op(__init_.__value_, __unary_op(__first[__i]));
     }
-    return std::make_pair(__result + __n, __init_.__value);
+    return std::make_pair(__result + __n, __init_.__value_);
 }
 
 // Inclusive scan for "+" and arithmetic types
@@ -602,11 +602,11 @@ __simd_scan(_InputIterator __first, _Size __n, _OutputIterator __result, _UnaryO
     for (_Size __i = 0; __i < __n; ++__i)
     {
         _PSTL_PRAGMA_FORCEINLINE
-        __init_.__value = __binary_op(__init_.__value, __unary_op(__first[__i]));
+        __init_.__value_ = __binary_op(__init_.__value_, __unary_op(__first[__i]));
         _PSTL_PRAGMA_SIMD_INCLUSIVE_SCAN(__init_)
-        __result[__i] = __init_.__value;
+        __result[__i] = __init_.__value_;
     }
-    return std::make_pair(__result + __n, __init_.__value);
+    return std::make_pair(__result + __n, __init_.__value_);
 }
 
 // [restriction] - std::iterator_traits<_ForwardIterator>::value_type should be DefaultConstructible.

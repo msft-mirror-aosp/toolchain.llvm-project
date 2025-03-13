@@ -8,17 +8,19 @@
 
 #include "lldb/Core/AddressRange.h"
 #include "lldb/Core/Module.h"
+#include "lldb/Core/Section.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/Stream.h"
 #include "lldb/lldb-defines.h"
+#include "lldb/lldb-types.h"
 
 #include "llvm/Support/Compiler.h"
 
 #include <memory>
 
-#include <inttypes.h>
+#include <cinttypes>
 
 namespace lldb_private {
 class SectionList;
@@ -27,7 +29,7 @@ class SectionList;
 using namespace lldb;
 using namespace lldb_private;
 
-AddressRange::AddressRange() : m_base_addr(), m_byte_size(0) {}
+AddressRange::AddressRange() : m_base_addr() {}
 
 AddressRange::AddressRange(addr_t file_addr, addr_t byte_size,
                            const SectionList *section_list)
@@ -40,24 +42,23 @@ AddressRange::AddressRange(const lldb::SectionSP &section, addr_t offset,
 AddressRange::AddressRange(const Address &so_addr, addr_t byte_size)
     : m_base_addr(so_addr), m_byte_size(byte_size) {}
 
-AddressRange::~AddressRange() {}
+AddressRange::~AddressRange() = default;
 
-// bool
-// AddressRange::Contains (const Address &addr) const
-//{
-//    const addr_t byte_size = GetByteSize();
-//    if (byte_size)
-//        return addr.GetSection() == m_base_addr.GetSection() &&
-//        (addr.GetOffset() - m_base_addr.GetOffset()) < byte_size;
-//}
-//
-// bool
-// AddressRange::Contains (const Address *addr) const
-//{
-//    if (addr)
-//        return Contains (*addr);
-//    return false;
-//}
+bool AddressRange::Contains(const Address &addr) const {
+  SectionSP range_sect_sp = GetBaseAddress().GetSection();
+  SectionSP addr_sect_sp = addr.GetSection();
+  if (range_sect_sp) {
+    if (!addr_sect_sp ||
+        range_sect_sp->GetModule() != addr_sect_sp->GetModule())
+      return false; // Modules do not match.
+  } else if (addr_sect_sp) {
+    return false; // Range has no module but "addr" does because addr has a
+                  // section
+  }
+  // Either the modules match, or both have no module, so it is ok to compare
+  // the file addresses in this case only.
+  return ContainsFileAddress(addr);
+}
 
 bool AddressRange::ContainsFileAddress(const Address &addr) const {
   if (addr.GetSection() == m_base_addr.GetSection())
@@ -145,6 +146,10 @@ void AddressRange::Clear() {
   m_byte_size = 0;
 }
 
+bool AddressRange::IsValid() const {
+  return m_base_addr.IsValid() && (m_byte_size > 0);
+}
+
 bool AddressRange::Dump(Stream *s, Target *target, Address::DumpStyle style,
                         Address::DumpStyle fallback_style) const {
   addr_t vmaddr = LLDB_INVALID_ADDRESS;
@@ -169,7 +174,7 @@ bool AddressRange::Dump(Stream *s, Target *target, Address::DumpStyle style,
 
   case Address::DumpStyleModuleWithFileAddress:
     show_module = true;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case Address::DumpStyleFileAddress:
     vmaddr = m_base_addr.GetFileAddress();
     break;
@@ -203,11 +208,41 @@ void AddressRange::DumpDebug(Stream *s) const {
             static_cast<void *>(m_base_addr.GetSection().get()),
             m_base_addr.GetOffset(), GetByteSize());
 }
-//
-// bool
-// lldb::operator==    (const AddressRange& lhs, const AddressRange& rhs)
-//{
-//    if (lhs.GetBaseAddress() == rhs.GetBaseAddress())
-//        return lhs.GetByteSize() == rhs.GetByteSize();
-//    return false;
-//}
+
+bool AddressRange::GetDescription(Stream *s, Target *target) const {
+  addr_t start_addr = m_base_addr.GetLoadAddress(target);
+  if (start_addr != LLDB_INVALID_ADDRESS) {
+    // We have a valid target and the address was resolved, or we have a base
+    // address with no section. Just print out a raw address range: [<addr>,
+    // <addr>)
+    s->Printf("[0x%" PRIx64 "-0x%" PRIx64 ")", start_addr,
+              start_addr + GetByteSize());
+    return true;
+  }
+
+  // Either no target or the address wasn't resolved, print as
+  // <module>[<file-addr>-<file-addr>)
+  const char *file_name = "";
+  const auto section_sp = m_base_addr.GetSection();
+  if (section_sp) {
+    if (const auto object_file = section_sp->GetObjectFile())
+      file_name = object_file->GetFileSpec().GetFilename().AsCString();
+  }
+  start_addr = m_base_addr.GetFileAddress();
+  const addr_t end_addr = (start_addr == LLDB_INVALID_ADDRESS)
+                              ? LLDB_INVALID_ADDRESS
+                              : start_addr + GetByteSize();
+  s->Printf("%s[0x%" PRIx64 "-0x%" PRIx64 ")", file_name, start_addr, end_addr);
+  return true;
+}
+
+bool AddressRange::operator==(const AddressRange &rhs) {
+  if (!IsValid() || !rhs.IsValid())
+    return false;
+  return m_base_addr == rhs.GetBaseAddress() &&
+         m_byte_size == rhs.GetByteSize();
+}
+
+bool AddressRange::operator!=(const AddressRange &rhs) {
+  return !(*this == rhs);
+}

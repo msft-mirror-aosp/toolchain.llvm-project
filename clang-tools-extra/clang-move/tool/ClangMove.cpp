@@ -30,7 +30,8 @@ namespace {
 std::error_code CreateNewFile(const llvm::Twine &path) {
   int fd = 0;
   if (std::error_code ec = llvm::sys::fs::openFileForWrite(
-          path, fd, llvm::sys::fs::CD_CreateAlways, llvm::sys::fs::OF_Text))
+          path, fd, llvm::sys::fs::CD_CreateAlways,
+          llvm::sys::fs::OF_TextWithCRLF))
     return ec;
 
   return llvm::sys::Process::SafelyCloseFileDescriptor(fd);
@@ -95,7 +96,13 @@ cl::opt<bool> DumpDecls(
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  tooling::CommonOptionsParser OptionsParser(argc, argv, ClangMoveCategory);
+  auto ExpectedParser =
+      tooling::CommonOptionsParser::create(argc, argv, ClangMoveCategory);
+  if (!ExpectedParser) {
+    llvm::errs() << ExpectedParser.takeError();
+    return 1;
+  }
+  tooling::CommonOptionsParser &OptionsParser = ExpectedParser.get();
 
   if (OldDependOnNew && NewDependOnOld) {
     llvm::errs() << "Provide either --old_depend_on_new or "
@@ -124,7 +131,7 @@ int main(int argc, const char **argv) {
                              Twine(EC.message()));
 
   move::ClangMoveContext Context{Spec, Tool.getReplacements(),
-                                 std::string(InitialDirectory.str()), Style,
+                                 std::string(InitialDirectory), Style,
                                  DumpDecls};
   move::DeclarationReporter Reporter;
   move::ClangMoveActionFactory Factory(&Context, &Reporter);
@@ -192,7 +199,7 @@ int main(int argc, const char **argv) {
       for (auto I = Files.begin(), E = Files.end(); I != E; ++I) {
         OS << "  {\n";
         OS << "    \"FilePath\": \"" << *I << "\",\n";
-        const auto Entry = FileMgr.getFile(*I);
+        const auto Entry = FileMgr.getOptionalFileRef(*I);
         auto ID = SM.translateFile(*Entry);
         std::string Content;
         llvm::raw_string_ostream ContentStream(Content);

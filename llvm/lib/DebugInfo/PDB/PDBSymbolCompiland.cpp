@@ -9,14 +9,14 @@
 #include "llvm/DebugInfo/PDB/IPDBSession.h"
 #include "llvm/DebugInfo/PDB/IPDBSourceFile.h"
 
+#include "llvm/DebugInfo/PDB/ConcreteSymbolEnumerator.h"
+#include "llvm/DebugInfo/PDB/PDBSymDumper.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolCompiland.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolCompilandDetails.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolCompilandEnv.h"
-#include "llvm/DebugInfo/PDB/PDBSymDumper.h"
 
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Path.h"
-#include <utility>
 
 using namespace llvm;
 using namespace llvm::pdb;
@@ -100,6 +100,9 @@ std::string PDBSymbolCompiland::getSourceFileFullPath() const {
               .Case(".c", Lang == PDB_Lang::C)
               .Case(".asm", Lang == PDB_Lang::Masm)
               .Case(".swift", Lang == PDB_Lang::Swift)
+              .Case(".rs", Lang == PDB_Lang::Rust)
+              .Case(".m", Lang == PDB_Lang::ObjC)
+              .Case(".mm", Lang == PDB_Lang::ObjCpp)
               .Default(false))
         return File->getFileName();
     }

@@ -1,51 +1,67 @@
 add_subdirectory(memory_utils)
 
+if(LIBC_CONF_STRING_UNSAFE_WIDE_READ)
+  list(APPEND string_config_options "-DLIBC_COPT_STRING_UNSAFE_WIDE_READ")
+endif()
+if(LIBC_CONF_MEMSET_X86_USE_SOFTWARE_PREFETCHING)
+  list(APPEND string_config_options "-DLIBC_COPT_MEMSET_X86_USE_SOFTWARE_PREFETCHING")
+endif()
+if(string_config_options)
+  list(PREPEND string_config_options "COMPILE_OPTIONS")
+endif()
+
 add_header_library(
   string_utils
   HDRS
     string_utils.h
   DEPENDS
-    libc.utils.CPP.standalone_cpp
+    .memory_utils.inline_bzero
+    .memory_utils.inline_memcpy
+    libc.hdr.types.size_t
+    libc.include.stdlib
+    libc.src.__support.CPP.bitset
+    libc.src.__support.CPP.type_traits
+    libc.src.__support.common
+  ${string_config_options}
 )
 
-add_entrypoint_object(
-  strcat
-  SRCS
-    strcat.cpp
+add_header_library(
+  allocating_string_utils
   HDRS
-    strcat.h
+    allocating_string_utils.h
   DEPENDS
-    .strcpy
-    .string_utils
+    .memory_utils.inline_memcpy
+    libc.include.stdlib
+    libc.src.__support.CPP.optional
+    libc.src.__support.macros.config
 )
 
 add_entrypoint_object(
-  strcpy
+  memccpy
   SRCS
-    strcpy.cpp
+    memccpy.cpp
   HDRS
-    strcpy.h
+    memccpy.h
+)
+
+add_entrypoint_object(
+  mempcpy
+  SRCS
+    mempcpy.cpp
+  HDRS
+    mempcpy.h
   DEPENDS
-    .memcpy
-    .string_utils
+    .memory_utils.inline_memcpy
 )
 
 add_entrypoint_object(
-  strlen
+  memmem
   SRCS
-    strlen.cpp
+    memmem.cpp
   HDRS
-    strlen.h
+    memmem.h
   DEPENDS
-    libc.include.string
-)
-
-add_entrypoint_object(
-  strcmp
-  SRCS
-    strcmp.cpp
-  HDRS
-    strcmp.h
+    .memory_utils.inline_memmem
 )
 
 add_entrypoint_object(
@@ -59,40 +75,6 @@ add_entrypoint_object(
 )
 
 add_entrypoint_object(
-  strchr
-  SRCS
-    strchr.cpp
-  HDRS
-    strchr.h
-)
-
-add_entrypoint_object(
-  strstr
-  SRCS
-    strstr.cpp
-  HDRS
-    strstr.h
-)
-
-add_entrypoint_object(
-  strncpy
-  SRCS
-    strncpy.cpp
-  HDRS
-    strncpy.h
-)
-
-add_entrypoint_object(
-  strnlen
-  SRCS
-    strnlen.cpp
-  HDRS
-    strnlen.h
-  DEPENDS
-    .string_utils
-)
-
-add_entrypoint_object(
   memrchr
   SRCS
     memrchr.cpp
@@ -101,11 +83,104 @@ add_entrypoint_object(
 )
 
 add_entrypoint_object(
-  strrchr
+  stpcpy
   SRCS
-    strrchr.cpp
+    stpcpy.cpp
   HDRS
-    strrchr.h
+    stpcpy.h
+  DEPENDS
+    .mempcpy
+    .string_utils
+)
+
+add_entrypoint_object(
+  stpncpy
+  SRCS
+    stpncpy.cpp
+  HDRS
+    stpncpy.h
+  DEPENDS
+    .memory_utils.inline_bzero
+)
+
+add_entrypoint_object(
+  strcat
+  SRCS
+    strcat.cpp
+  HDRS
+    strcat.h
+  DEPENDS
+    .strcpy
+    .string_utils
+    libc.include.llvm-libc-types.size_t
+)
+
+add_entrypoint_object(
+  strchr
+  SRCS
+    strchr.cpp
+  HDRS
+    strchr.h
+  DEPENDS
+    .string_utils
+)
+
+add_entrypoint_object(
+  strchrnul
+  SRCS
+    strchrnul.cpp
+  HDRS
+    strchrnul.h
+  DEPENDS
+    .string_utils
+)
+
+add_entrypoint_object(
+  strcmp
+  SRCS
+    strcmp.cpp
+  HDRS
+    strcmp.h
+  DEPENDS
+    .memory_utils.inline_strcmp
+)
+
+add_entrypoint_object(
+  strcasestr
+  SRCS
+    strcasestr.cpp
+  HDRS
+    strcasestr.h
+  DEPENDS
+    .memory_utils.inline_strstr
+    libc.src.__support.ctype_utils
+)
+
+add_entrypoint_object(
+  strcoll
+  SRCS
+    strcoll.cpp
+  HDRS
+    strcoll.h
+)
+
+add_entrypoint_object(
+  strcoll_l
+  SRCS
+    strcoll_l.cpp
+  HDRS
+  strcoll_l.h
+)
+
+add_entrypoint_object(
+  strcpy
+  SRCS
+    strcpy.cpp
+  HDRS
+    strcpy.h
+  DEPENDS
+    .memory_utils.inline_memcpy
+    .string_utils
 )
 
 add_entrypoint_object(
@@ -119,13 +194,124 @@ add_entrypoint_object(
 )
 
 add_entrypoint_object(
-  strspn
+  strdup
   SRCS
-    strspn.cpp
+    strdup.cpp
   HDRS
-    strspn.h
+    strdup.h
   DEPENDS
-    libc.utils.CPP.standalone_cpp
+    .memory_utils.inline_memcpy
+    .string_utils
+    libc.hdr.stdlib_macros
+    libc.src.errno.errno
+    libc.include.llvm-libc-types.size_t
+)
+
+add_entrypoint_object(
+  strerror
+  SRCS
+    strerror.cpp
+  HDRS
+    strerror.h
+  DEPENDS
+    libc.src.__support.StringUtil.error_to_string
+)
+
+add_entrypoint_object(
+  strerror_r
+  SRCS
+    strerror_r.cpp
+  HDRS
+    strerror_r.h
+  DEPENDS
+    libc.src.__support.StringUtil.error_to_string
+)
+
+add_entrypoint_object(
+  strlcat
+  SRCS
+    strlcat.cpp
+  HDRS
+    strlcat.h
+  DEPENDS
+    .string_utils
+    libc.include.llvm-libc-types.size_t
+)
+
+add_entrypoint_object(
+  strlcpy
+  SRCS
+    strlcpy.cpp
+  HDRS
+    strlcpy.h
+  DEPENDS
+    .string_utils
+    libc.include.llvm-libc-types.size_t
+)
+
+add_entrypoint_object(
+  strlen
+  SRCS
+    strlen.cpp
+  HDRS
+    strlen.h
+  DEPENDS
+    .string_utils
+    libc.include.llvm-libc-types.size_t
+)
+
+add_entrypoint_object(
+  strncat
+  SRCS
+    strncat.cpp
+  HDRS
+    strncat.h
+  DEPENDS
+    .strncpy
+    .string_utils
+    libc.include.llvm-libc-types.size_t
+)
+
+add_entrypoint_object(
+  strncmp
+  SRCS
+    strncmp.cpp
+  HDRS
+    strncmp.h
+  DEPENDS
+    .memory_utils.inline_strcmp
+)
+
+add_entrypoint_object(
+  strncpy
+  SRCS
+    strncpy.cpp
+  HDRS
+    strncpy.h
+)
+
+add_entrypoint_object(
+  strndup
+  SRCS
+    strndup.cpp
+  HDRS
+    strndup.h
+  DEPENDS
+    .memory_utils.inline_memcpy
+    .string_utils
+    libc.include.stdlib
+    libc.src.__support.CPP.new
+    libc.include.llvm-libc-types.size_t
+)
+
+add_entrypoint_object(
+  strnlen
+  SRCS
+    strnlen.cpp
+  HDRS
+    strnlen.h
+  DEPENDS
+    .string_utils
 )
 
 add_entrypoint_object(
@@ -136,6 +322,56 @@ add_entrypoint_object(
     strpbrk.h
   DEPENDS
     .string_utils
+)
+
+add_entrypoint_object(
+  strrchr
+  SRCS
+    strrchr.cpp
+  HDRS
+    strrchr.h
+  DEPENDS
+    .string_utils
+)
+
+add_entrypoint_object(
+  strsep
+  SRCS
+    strsep.cpp
+  HDRS
+    strsep.h
+  DEPENDS
+    .string_utils
+)
+
+add_entrypoint_object(
+  strsignal
+  SRCS
+    strsignal.cpp
+  HDRS
+    strsignal.h
+  DEPENDS
+    libc.src.__support.StringUtil.signal_to_string
+)
+
+add_entrypoint_object(
+  strspn
+  SRCS
+    strspn.cpp
+  HDRS
+    strspn.h
+  DEPENDS
+    libc.src.__support.CPP.bitset
+)
+
+add_entrypoint_object(
+  strstr
+  SRCS
+    strstr.cpp
+  HDRS
+    strstr.h
+  DEPENDS
+    .memory_utils.inline_strstr
 )
 
 add_entrypoint_object(
@@ -158,65 +394,139 @@ add_entrypoint_object(
     .string_utils
 )
 
-# Helper to define a function with multiple implementations
-# - Computes flags to satisfy required/rejected features and arch,
-# - Declares an entry point,
-# - Attach the REQUIRE_CPU_FEATURES property to the target,
-# - Add the fully qualified target to `${name}_implementations` global property for tests.
-function(add_implementation name impl_name)
-  cmake_parse_arguments(
-    "ADD_IMPL"
-    "" # Optional arguments
-    "MARCH" # Single value arguments
-    "REQUIRE;REJECT;SRCS;HDRS;DEPENDS;COMPILE_OPTIONS" # Multi value arguments
-    ${ARGN})
-  compute_flags(flags
-    MARCH ${ADD_IMPL_MARCH}
-    REQUIRE ${ADD_IMPL_REQUIRE}
-    REJECT ${ADD_IMPL_REJECT}
+add_entrypoint_object(
+  strxfrm
+  SRCS
+    strxfrm.cpp
+  HDRS
+    strxfrm.h
+  DEPENDS
+    .string_utils
+    .memory_utils.inline_memcpy
+)
+
+add_entrypoint_object(
+  strxfrm_l
+  SRCS
+    strxfrm_l.cpp
+  HDRS
+    strxfrm_l.h
+  DEPENDS
+    .string_utils
+    .memory_utils.inline_memcpy
+)
+
+add_entrypoint_object(
+  memset_explicit
+  SRCS
+    memset_explicit.cpp
+  HDRS
+    memset_explicit.h
+  DEPENDS
+    .string_utils
+    .memory_utils.inline_memset
+)
+
+# ------------------------------------------------------------------------------
+# memcmp
+# ------------------------------------------------------------------------------
+
+function(add_memcmp memcmp_name)
+  add_implementation(memcmp ${memcmp_name}
+    SRCS ${LIBC_SOURCE_DIR}/src/string/memcmp.cpp
+    HDRS ${LIBC_SOURCE_DIR}/src/string/memcmp.h
+    DEPENDS
+      .memory_utils.inline_memcmp
+      libc.include.string
+    ${ARGN}
   )
-  add_entrypoint_object(${impl_name}
-    NAME ${name}
-    SRCS ${ADD_IMPL_SRCS}
-    HDRS ${ADD_IMPL_HDRS}
-    DEPENDS ${ADD_IMPL_DEPENDS}
-    COMPILE_OPTIONS ${ADD_IMPL_COMPILE_OPTIONS} ${flags} -O2
-  )
-  get_fq_target_name(${impl_name} fq_target_name)
-  set_target_properties(${fq_target_name} PROPERTIES REQUIRE_CPU_FEATURES "${ADD_IMPL_REQUIRE}")
-  set_property(GLOBAL APPEND PROPERTY "${name}_implementations" "${fq_target_name}")
 endfunction()
+
+if(${LIBC_TARGET_ARCHITECTURE_IS_X86})
+  add_memcmp(memcmp_x86_64_opt_sse2   COMPILE_OPTIONS -march=k8             REQUIRE SSE2)
+  add_memcmp(memcmp_x86_64_opt_sse4   COMPILE_OPTIONS -march=nehalem        REQUIRE SSE4_2)
+  add_memcmp(memcmp_x86_64_opt_avx2   COMPILE_OPTIONS -march=haswell        REQUIRE AVX2)
+  add_memcmp(memcmp_x86_64_opt_avx512 COMPILE_OPTIONS -march=skylake-avx512 REQUIRE AVX512BW)
+  add_memcmp(memcmp_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
+  add_memcmp(memcmp)
+elseif(${LIBC_TARGET_ARCHITECTURE_IS_AARCH64})
+  add_memcmp(memcmp_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
+  add_memcmp(memcmp)
+elseif(LIBC_TARGET_OS_IS_GPU)
+  add_memcmp(memcmp)
+else()
+  add_memcmp(memcmp_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
+  add_memcmp(memcmp)
+endif()
 
 # ------------------------------------------------------------------------------
 # memcpy
 # ------------------------------------------------------------------------------
 
-# include the relevant architecture specific implementations
-if(${LIBC_TARGET_MACHINE} STREQUAL "x86_64")
-  set(LIBC_STRING_TARGET_ARCH "x86")
-  set(MEMCPY_SRC ${LIBC_SOURCE_DIR}/src/string/x86/memcpy.cpp)
-else()
-  set(LIBC_STRING_TARGET_ARCH ${LIBC_TARGET_MACHINE})
-  set(MEMCPY_SRC ${LIBC_SOURCE_DIR}/src/string/memcpy.cpp)
-endif()
-
 function(add_memcpy memcpy_name)
   add_implementation(memcpy ${memcpy_name}
-    SRCS ${MEMCPY_SRC}
+    SRCS ${LIBC_SOURCE_DIR}/src/string/memcpy.cpp
     HDRS ${LIBC_SOURCE_DIR}/src/string/memcpy.h
     DEPENDS
-      .memory_utils.memory_utils
+      .memory_utils.inline_memcpy
       libc.include.string
-    COMPILE_OPTIONS
-      -fno-builtin-memcpy
     ${ARGN}
   )
 endfunction()
 
-if(${LIBC_STRING_TARGET_ARCH} STREQUAL "x86")
-  add_memcpy(memcpy MARCH native)
-else()
+if(${LIBC_TARGET_ARCHITECTURE_IS_X86})
+  add_memcpy(memcpy_x86_64_opt_sse2   COMPILE_OPTIONS -march=k8             REQUIRE SSE2)
+  add_memcpy(memcpy_x86_64_opt_sse4   COMPILE_OPTIONS -march=nehalem        REQUIRE SSE4_2)
+  add_memcpy(memcpy_x86_64_opt_avx    COMPILE_OPTIONS -march=sandybridge    REQUIRE AVX)
+  add_memcpy(memcpy_x86_64_opt_avx512 COMPILE_OPTIONS -march=skylake-avx512 REQUIRE AVX512F)
+  add_memcpy(memcpy_x86_64_opt_sw_prefetch_sse4   COMPILE_OPTIONS -DLIBC_COPT_MEMCPY_X86_USE_SOFTWARE_PREFETCHING -march=nehalem        REQUIRE SSE4_2)
+  add_memcpy(memcpy_x86_64_opt_sw_prefetch_avx    COMPILE_OPTIONS -DLIBC_COPT_MEMCPY_X86_USE_SOFTWARE_PREFETCHING -march=sandybridge    REQUIRE AVX)
+  add_memcpy(memcpy_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
   add_memcpy(memcpy)
+elseif(${LIBC_TARGET_ARCHITECTURE_IS_AARCH64})
+  # Disable tail merging as it leads to lower performance.
+  add_memcpy(memcpy_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE}
+                                      MLLVM_COMPILE_OPTIONS "-tail-merge-threshold=0")
+  add_memcpy(memcpy                   MLLVM_COMPILE_OPTIONS "-tail-merge-threshold=0")
+elseif(LIBC_TARGET_OS_IS_GPU)
+  add_memcpy(memcpy)
+else()
+  add_memcpy(memcpy_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
+  add_memcpy(memcpy)
+endif()
+
+# ------------------------------------------------------------------------------
+# memmove
+# ------------------------------------------------------------------------------
+
+function(add_memmove memmove_name)
+  add_implementation(memmove ${memmove_name}
+    SRCS ${LIBC_SOURCE_DIR}/src/string/memmove.cpp
+    HDRS ${LIBC_SOURCE_DIR}/src/string/memmove.h
+    DEPENDS
+      .memory_utils.inline_memcpy
+      libc.include.string
+    ${ARGN}
+  )
+endfunction()
+
+if(${LIBC_TARGET_ARCHITECTURE_IS_X86})
+  add_memmove(memmove_x86_64_opt_sse2   COMPILE_OPTIONS -march=k8             REQUIRE SSE2)
+  add_memmove(memmove_x86_64_opt_sse4   COMPILE_OPTIONS -march=nehalem        REQUIRE SSE4_2)
+  add_memmove(memmove_x86_64_opt_avx2   COMPILE_OPTIONS -march=haswell        REQUIRE AVX2)
+  add_memmove(memmove_x86_64_opt_avx512 COMPILE_OPTIONS -march=skylake-avx512 REQUIRE AVX512F)
+  add_memmove(memmove_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
+  add_memmove(memmove)
+elseif(${LIBC_TARGET_ARCHITECTURE_IS_AARCH64})
+  # Disable tail merging as it leads to lower performance.
+  add_memmove(memmove_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE}
+                                        MLLVM_COMPILE_OPTIONS "-tail-merge-threshold=0")
+  add_memmove(memmove                   MLLVM_COMPILE_OPTIONS "-tail-merge-threshold=0")
+elseif(LIBC_TARGET_OS_IS_GPU)
+  add_memmove(memmove)
+else()
+  add_memmove(memmove_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
+  add_memmove(memmove)
 endif()
 
 # ------------------------------------------------------------------------------
@@ -228,48 +538,28 @@ function(add_memset memset_name)
     SRCS ${LIBC_SOURCE_DIR}/src/string/memset.cpp
     HDRS ${LIBC_SOURCE_DIR}/src/string/memset.h
     DEPENDS
-      .memory_utils.memory_utils
+      .memory_utils.inline_memset
       libc.include.string
-    COMPILE_OPTIONS
-      -fno-builtin-memset
     ${ARGN}
   )
 endfunction()
 
-if(${LIBC_STRING_TARGET_ARCH} STREQUAL "x86")
-  add_memset(memset MARCH native)
-else()
+if(${LIBC_TARGET_ARCHITECTURE_IS_X86})
+  add_memset(memset_x86_64_opt_sse2   COMPILE_OPTIONS -march=k8             REQUIRE SSE2)
+  add_memset(memset_x86_64_opt_sse4   COMPILE_OPTIONS -march=nehalem        REQUIRE SSE4_2)
+  add_memset(memset_x86_64_opt_avx2   COMPILE_OPTIONS -march=haswell        REQUIRE AVX2)
+  add_memset(memset_x86_64_opt_avx512 COMPILE_OPTIONS -march=skylake-avx512 REQUIRE AVX512F)
+  add_memset(memset_x86_64_opt_sw_prefetch COMPILE_OPTIONS -DLIBC_COPT_MEMSET_X86_USE_SOFTWARE_PREFETCHING)
+  add_memset(memset_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
   add_memset(memset)
-endif()
-
-# ------------------------------------------------------------------------------
-# bzero
-# ------------------------------------------------------------------------------
-
-function(add_bzero bzero_name)
-  add_implementation(bzero ${bzero_name}
-    SRCS ${LIBC_SOURCE_DIR}/src/string/bzero.cpp
-    HDRS ${LIBC_SOURCE_DIR}/src/string/bzero.h
-    DEPENDS
-      .memory_utils.memory_utils
-      libc.include.string
-    COMPILE_OPTIONS
-      -fno-builtin-memset
-      -fno-builtin-bzero
-    ${ARGN}
-  )
-endfunction()
-
-if(${LIBC_STRING_TARGET_ARCH} STREQUAL "x86")
-  add_bzero(bzero MARCH native)
+elseif(${LIBC_TARGET_ARCHITECTURE_IS_AARCH64})
+  # Disable tail merging as it leads to lower performance.
+  add_memset(memset_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE}
+                                      MLLVM_COMPILE_OPTIONS "-tail-merge-threshold=0")
+  add_memset(memset                   MLLVM_COMPILE_OPTIONS "-tail-merge-threshold=0")
+elseif(LIBC_TARGET_OS_IS_GPU)
+  add_memset(memset)
 else()
-  add_bzero(bzero)
-endif()
-
-# ------------------------------------------------------------------------------
-# Add all other relevant implementations for the native target.
-# ------------------------------------------------------------------------------
-
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${LIBC_STRING_TARGET_ARCH})
-  include(${LIBC_STRING_TARGET_ARCH}/CMakeLists.txt)
+  add_memset(memset_opt_host          COMPILE_OPTIONS ${LIBC_COMPILE_OPTIONS_NATIVE})
+  add_memset(memset)
 endif()

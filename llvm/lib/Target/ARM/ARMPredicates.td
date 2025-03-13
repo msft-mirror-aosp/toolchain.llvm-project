@@ -77,6 +77,8 @@ def HasV8_5a         : Predicate<"Subtarget->hasV8_5aOps()">,
                                  AssemblerPredicate<(all_of HasV8_5aOps), "armv8.5a">;
 def HasV8_6a         : Predicate<"Subtarget->hasV8_6aOps()">,
                                  AssemblerPredicate<(all_of HasV8_6aOps), "armv8.6a">;
+def HasV8_7a         : Predicate<"Subtarget->hasV8_7aOps()">,
+                                 AssemblerPredicate<(all_of HasV8_7aOps), "armv8.7a">;
 def NoVFP            : Predicate<"!Subtarget->hasVFP2Base()">;
 def HasVFP2          : Predicate<"Subtarget->hasVFP2Base()">,
                                  AssemblerPredicate<(all_of FeatureVFP2_SP), "VFP2">;
@@ -105,6 +107,8 @@ def HasRAS           : Predicate<"Subtarget->hasRAS()">,
                                  AssemblerPredicate<(all_of FeatureRAS), "ras">;
 def HasLOB           : Predicate<"Subtarget->hasLOB()">,
                                  AssemblerPredicate<(all_of FeatureLOB), "lob">;
+def HasPACBTI        : Predicate<"Subtarget->hasPACBTI()">,
+                                 AssemblerPredicate<(all_of FeaturePACBTI), "pacbti">;
 def HasFP16          : Predicate<"Subtarget->hasFP16()">,
                                  AssemblerPredicate<(all_of FeatureFP16),"half-float conversions">;
 def HasFullFP16      : Predicate<"Subtarget->hasFullFP16()">,
@@ -166,8 +170,10 @@ def IsNotMachO       : Predicate<"!Subtarget->isTargetMachO()">;
 def IsNaCl           : Predicate<"Subtarget->isTargetNaCl()">;
 def IsWindows        : Predicate<"Subtarget->isTargetWindows()">;
 def IsNotWindows     : Predicate<"!Subtarget->isTargetWindows()">;
-def IsReadTPHard     : Predicate<"Subtarget->isReadTPHard()">;
-def IsReadTPSoft     : Predicate<"!Subtarget->isReadTPHard()">;
+def IsReadTPTPIDRURW : Predicate<"Subtarget->isReadTPTPIDRURW()">;
+def IsReadTPTPIDRURO : Predicate<"Subtarget->isReadTPTPIDRURO()">;
+def IsReadTPTPIDRPRW : Predicate<"Subtarget->isReadTPTPIDRPRW()">;
+def IsReadTPSoft     : Predicate<"Subtarget->isReadTPSoft()">;
 def UseNaClTrap      : Predicate<"Subtarget->useNaClTrap()">,
                                  AssemblerPredicate<(all_of FeatureNaClTrap), "NaCl">;
 def DontUseNaClTrap  : Predicate<"!Subtarget->useNaClTrap()">;
@@ -187,6 +193,9 @@ let RecomputePerFunction = 1 in {
   def UseFPVMLx: Predicate<"((Subtarget->useFPVMLx() &&"
                            "  TM.Options.AllowFPOpFusion != FPOpFusion::Fast) ||"
                            "Subtarget->hasMinSize())">;
+  def SLSBLRMitigation : Predicate<[{ MF->getSubtarget<ARMSubtarget>().hardenSlsBlr() }]>;
+  def NoSLSBLRMitigation : Predicate<[{ !MF->getSubtarget<ARMSubtarget>().hardenSlsBlr() }]>;
+
 }
 def UseMulOps        : Predicate<"Subtarget->useMulOps()">;
 
@@ -215,7 +224,19 @@ let RecomputePerFunction = 1 in {
 }
 
 def GenExecuteOnly : Predicate<"Subtarget->genExecuteOnly()">;
+def DontGenExecuteOnly : Predicate<"!Subtarget->genExecuteOnly()">;
+def GenT1ExecuteOnly : Predicate<"Subtarget->genExecuteOnly() && "
+                                 "Subtarget->isThumb1Only() && "
+                                 "!Subtarget->hasV8MBaselineOps()">;
+let RecomputePerFunction = 1 in {
+  def SignRetAddr : Predicate<[{ MF->getInfo<ARMFunctionInfo>()->shouldSignReturnAddress(true) }]>;
+  def NoSignRetAddr : Predicate<[{ !MF->getInfo<ARMFunctionInfo>()->shouldSignReturnAddress(true) }]>;
+}
 
 // Armv8.5-A extensions
 def HasSB            : Predicate<"Subtarget->hasSB()">,
                        AssemblerPredicate<(all_of FeatureSB), "sb">;
+
+// Armv8.9-A/9.4-A 2022 Architecture extensions
+def HasCLRBHB        : Predicate<"Subtarget->hasCLRBHB()">,
+                       AssemblerPredicate<(all_of FeatureCLRBHB), "clrbhb">;

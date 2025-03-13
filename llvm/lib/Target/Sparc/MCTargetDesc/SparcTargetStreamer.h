@@ -13,15 +13,18 @@
 #include "llvm/MC/MCStreamer.h"
 
 namespace llvm {
+
+class formatted_raw_ostream;
+
 class SparcTargetStreamer : public MCTargetStreamer {
   virtual void anchor();
 
 public:
   SparcTargetStreamer(MCStreamer &S);
   /// Emit ".register <reg>, #ignore".
-  virtual void emitSparcRegisterIgnore(unsigned reg) = 0;
+  virtual void emitSparcRegisterIgnore(unsigned reg){};
   /// Emit ".register <reg>, #scratch".
-  virtual void emitSparcRegisterScratch(unsigned reg) = 0;
+  virtual void emitSparcRegisterScratch(unsigned reg){};
 };
 
 // This part is for ascii assembly output
@@ -37,7 +40,7 @@ public:
 // This part is for ELF object output
 class SparcTargetELFStreamer : public SparcTargetStreamer {
 public:
-  SparcTargetELFStreamer(MCStreamer &S);
+  SparcTargetELFStreamer(MCStreamer &S, const MCSubtargetInfo &STI);
   MCELFStreamer &getStreamer();
   void emitSparcRegisterIgnore(unsigned reg) override {}
   void emitSparcRegisterScratch(unsigned reg) override {}

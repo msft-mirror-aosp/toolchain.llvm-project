@@ -6,13 +6,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "src/fenv/feclearexcept.h"
+#include "src/__support/FPUtil/FEnvImpl.h"
 #include "src/__support/common.h"
-#include "utils/FPUtil/FEnv.h"
+#include "src/__support/macros/config.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
-int LLVM_LIBC_ENTRYPOINT(feclearexcept)(int e) {
-  return fputil::clearExcept(e);
+LLVM_LIBC_FUNCTION(int, feclearexcept, (int e)) {
+  return fputil::clear_except(e);
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

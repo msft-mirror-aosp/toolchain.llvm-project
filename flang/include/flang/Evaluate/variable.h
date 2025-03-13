@@ -51,6 +51,7 @@ template <typename T> struct Variable;
 struct BaseObject {
   EVALUATE_UNION_CLASS_BOILERPLATE(BaseObject)
   int Rank() const;
+  int Corank() const;
   std::optional<Expr<SubscriptInteger>> LEN() const;
   llvm::raw_ostream &AsFortran(llvm::raw_ostream &) const;
   const Symbol *symbol() const {
@@ -80,7 +81,11 @@ public:
 
   const DataRef &base() const { return base_.value(); }
   DataRef &base() { return base_.value(); }
+  const SymbolRef &symbol() const { return symbol_; }
+  SymbolRef &symbol() { return symbol_; }
+
   int Rank() const;
+  int Corank() const;
   const Symbol &GetFirstSymbol() const;
   const Symbol &GetLastSymbol() const { return symbol_; }
   std::optional<Expr<SubscriptInteger>> LEN() const;
@@ -107,10 +112,13 @@ public:
   const Symbol &GetLastSymbol() const;
   const Component &GetComponent() const { return std::get<Component>(u_); }
   Component &GetComponent() { return std::get<Component>(u_); }
-  const Component *UnwrapComponent() const; // null if just a Symbol
+  const SymbolRef *UnwrapSymbolRef() const; // null if a Component
+  SymbolRef *UnwrapSymbolRef();
+  const Component *UnwrapComponent() const; // null if not a Component
   Component *UnwrapComponent();
 
   int Rank() const;
+  int Corank() const;
   std::optional<Expr<SubscriptInteger>> LEN() const;
   bool operator==(const NamedEntity &) const;
   llvm::raw_ostream &AsFortran(llvm::raw_ostream &) const;
@@ -142,6 +150,7 @@ public:
   const Symbol &parameter() const { return parameter_; }
 
   static constexpr int Rank() { return 0; } // always scalar
+  static constexpr int Corank() { return 0; }
   bool operator==(const TypeParamInquiry &) const;
   llvm::raw_ostream &AsFortran(llvm::raw_ostream &) const;
 
@@ -160,14 +169,20 @@ public:
       std::optional<Expr<SubscriptInteger>> &&);
 
   std::optional<Expr<SubscriptInteger>> lower() const;
+  const Expr<SubscriptInteger> *GetLower() const {
+    return lower_.has_value() ? &lower_->value() : nullptr;
+  }
   Triplet &set_lower(Expr<SubscriptInteger> &&);
   std::optional<Expr<SubscriptInteger>> upper() const;
+  const Expr<SubscriptInteger> *GetUpper() const {
+    return upper_.has_value() ? &upper_->value() : nullptr;
+  }
   Triplet &set_upper(Expr<SubscriptInteger> &&);
   Expr<SubscriptInteger> stride() const; // N.B. result is not optional<>
+  const Expr<SubscriptInteger> &GetStride() const { return stride_.value(); }
   Triplet &set_stride(Expr<SubscriptInteger> &&);
 
   bool operator==(const Triplet &) const;
-  bool IsStrideOne() const;
   llvm::raw_ostream &AsFortran(llvm::raw_ostream &) const;
 
 private:
@@ -213,6 +228,7 @@ public:
   }
 
   int Rank() const;
+  int Corank() const;
   const Symbol &GetFirstSymbol() const;
   const Symbol &GetLastSymbol() const;
   std::optional<Expr<SubscriptInteger>> LEN() const;
@@ -226,7 +242,7 @@ private:
 
 // R914 coindexed-named-object
 // R924 image-selector, R926 image-selector-spec.
-// C824 severely limits the usage of derived types with coarray ultimate
+// C825 severely limits the usage of derived types with coarray ultimate
 // components: they can't be pointers, allocatables, arrays, coarrays, or
 // function results.  They can be components of other derived types.
 // Although the F'2018 Standard never prohibits multiple image-selectors
@@ -260,6 +276,7 @@ public:
   CoarrayRef &set_team(Expr<SomeInteger> &&, bool isTeamNumber = false);
 
   int Rank() const;
+  int Corank() const { return 0; }
   const Symbol &GetFirstSymbol() const;
   const Symbol &GetLastSymbol() const;
   NamedEntity GetBase() const;
@@ -283,6 +300,7 @@ private:
 struct DataRef {
   EVALUATE_UNION_CLASS_BOILERPLATE(DataRef)
   int Rank() const;
+  int Corank() const;
   const Symbol &GetFirstSymbol() const;
   const Symbol &GetLastSymbol() const;
   std::optional<Expr<SubscriptInteger>> LEN() const;
@@ -313,13 +331,20 @@ public:
   }
 
   Expr<SubscriptInteger> lower() const;
+  const Expr<SubscriptInteger> *GetLower() const {
+    return lower_.has_value() ? &lower_->value() : nullptr;
+  }
   Substring &set_lower(Expr<SubscriptInteger> &&);
   std::optional<Expr<SubscriptInteger>> upper() const;
+  const Expr<SubscriptInteger> *GetUpper() const {
+    return upper_.has_value() ? &upper_->value() : nullptr;
+  }
   Substring &set_upper(Expr<SubscriptInteger> &&);
   const Parent &parent() const { return parent_; }
   Parent &parent() { return parent_; }
 
   int Rank() const;
+  int Corank() const;
   template <typename A> const A *GetParentIf() const {
     return std::get_if<A>(&parent_);
   }
@@ -346,9 +371,11 @@ public:
   ENUM_CLASS(Part, RE, IM)
   CLASS_BOILERPLATE(ComplexPart)
   ComplexPart(DataRef &&z, Part p) : complex_{std::move(z)}, part_{p} {}
+  DataRef &complex() { return complex_; }
   const DataRef &complex() const { return complex_; }
   Part part() const { return part_; }
   int Rank() const;
+  int Corank() const;
   const Symbol &GetFirstSymbol() const { return complex_.GetFirstSymbol(); }
   const Symbol &GetLastSymbol() const { return complex_.GetLastSymbol(); }
   bool operator==(const ComplexPart &) const;
@@ -384,6 +411,7 @@ public:
 
   std::optional<DynamicType> GetType() const;
   int Rank() const;
+  int Corank() const;
   BaseObject GetBaseObject() const;
   const Symbol *GetLastSymbol() const;
   std::optional<Expr<SubscriptInteger>> LEN() const;
@@ -409,6 +437,7 @@ public:
   int dimension() const { return dimension_; }
 
   static constexpr int Rank() { return 0; } // always scalar
+  static constexpr int Corank() { return 0; }
   bool operator==(const DescriptorInquiry &) const;
   llvm::raw_ostream &AsFortran(llvm::raw_ostream &) const;
 

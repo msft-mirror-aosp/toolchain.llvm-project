@@ -1255,9 +1255,9 @@ static void check_table(struct isl_tab *tab)
  * the sample value will also be non-negative.
  *
  * If "var" is manifestly unbounded wrt positive values, we are done.
- * Otherwise, we pivot the variable up to a row if needed
- * Then we continue pivoting down until either
- *	- no more down pivots can be performed
+ * Otherwise, we pivot the variable up to a row if needed.
+ * Then we continue pivoting up until either
+ *	- no more up pivots can be performed
  *	- the sample value is positive
  *	- the variable is pivoted into a manifestly unbounded column
  */
@@ -1785,17 +1785,6 @@ int isl_tab_insert_var(struct isl_tab *tab, int r)
 		return -1;
 
 	return r;
-}
-
-/* Add a variable to the tableau and allocate a column for it.
- * Return the index into the variable array "var".
- */
-int isl_tab_allocate_var(struct isl_tab *tab)
-{
-	if (!tab)
-		return -1;
-
-	return isl_tab_insert_var(tab, tab->n_var);
 }
 
 /* Add a row to the tableau.  The row is given as an affine combination
@@ -3884,7 +3873,8 @@ static isl_stat drop_bmap_div(struct isl_tab *tab, int pos)
 	if (n_div < 0)
 		return isl_stat_error;
 	off = tab->n_var - n_div;
-	if (isl_basic_map_drop_div(tab->bmap, pos - off) < 0)
+	tab->bmap = isl_basic_map_drop_div(tab->bmap, pos - off);
+	if (!tab->bmap)
 		return isl_stat_error;
 	if (tab->samples) {
 		tab->samples = isl_mat_drop_cols(tab->samples, 1 + pos, 1);

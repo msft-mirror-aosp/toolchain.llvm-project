@@ -12,12 +12,12 @@
 ; This codegen will be re-evaluated at a later time on whether or not it should
 ; be emitted on P10.
 
-@globalVal = common local_unnamed_addr global i8 0, align 1
-@globalVal2 = common local_unnamed_addr global i32 0, align 4
-@globalVal3 = common local_unnamed_addr global i64 0, align 8
-@globalVal4 = common local_unnamed_addr global i16 0, align 2
+@globalVal = common dso_local local_unnamed_addr global i8 0, align 1
+@globalVal2 = common dso_local local_unnamed_addr global i32 0, align 4
+@globalVal3 = common dso_local local_unnamed_addr global i64 0, align 8
+@globalVal4 = common dso_local local_unnamed_addr global i16 0, align 2
 
-define signext i32 @setbcr1(i8 %a) {
+define dso_local signext i32 @setbcr1(i8 %a) {
 ; CHECK-LABEL: setbcr1:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    clrlwi r3, r3, 24
@@ -30,7 +30,7 @@ entry:
   ret i32 %conv
 }
 
-define signext i32 @setbcr2(i32 %a) {
+define dso_local signext i32 @setbcr2(i32 %a) {
 ; CHECK-LABEL: setbcr2:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    cmpwi r3, 1
@@ -42,7 +42,7 @@ entry:
   ret i32 %conv
 }
 
-define signext i32 @setbcr3(i64 %a) {
+define dso_local signext i32 @setbcr3(i64 %a) {
 ; CHECK-LABEL: setbcr3:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    cmpdi r3, 1
@@ -54,7 +54,7 @@ entry:
   ret i32 %conv
 }
 
-define signext i32 @setbcr4(i16 %a) {
+define dso_local signext i32 @setbcr4(i16 %a) {
 ; CHECK-LABEL: setbcr4:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    clrlwi r3, r3, 16
@@ -117,7 +117,7 @@ entry:
   ret i64 %conv
 }
 
-define void @setbcr9(i8 %a) {
+define dso_local void @setbcr9(i8 %a) {
 ; CHECK-LE-LABEL: setbcr9:
 ; CHECK-LE:       # %bb.0: # %entry
 ; CHECK-LE-NEXT:    clrlwi r3, r3, 24
@@ -128,21 +128,20 @@ define void @setbcr9(i8 %a) {
 ;
 ; CHECK-BE-LABEL: setbcr9:
 ; CHECK-BE:       # %bb.0: # %entry
-; CHECK-BE-NEXT:    addis r4, r2, .LC0@toc@ha
 ; CHECK-BE-NEXT:    clrlwi r3, r3, 24
-; CHECK-BE-NEXT:    ld r4, .LC0@toc@l(r4)
+; CHECK-BE-NEXT:    addis r4, r2, globalVal@toc@ha
 ; CHECK-BE-NEXT:    cmpwi r3, 1
 ; CHECK-BE-NEXT:    setbcr r3, eq
-; CHECK-BE-NEXT:    stb r3, 0(r4)
+; CHECK-BE-NEXT:    stb r3, globalVal@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 entry:
   %cmp = icmp ne i8 %a, 1
   %conv1 = zext i1 %cmp to i8
-  store i8 %conv1, i8* @globalVal, align 1
+  store i8 %conv1, ptr @globalVal, align 1
   ret void
 }
 
-define void @setbcr10(i32 %a) {
+define dso_local void @setbcr10(i32 %a) {
 ; CHECK-LE-LABEL: setbcr10:
 ; CHECK-LE:       # %bb.0: # %entry
 ; CHECK-LE-NEXT:    cmpwi r3, 1
@@ -152,20 +151,19 @@ define void @setbcr10(i32 %a) {
 ;
 ; CHECK-BE-LABEL: setbcr10:
 ; CHECK-BE:       # %bb.0: # %entry
-; CHECK-BE-NEXT:    addis r4, r2, .LC1@toc@ha
 ; CHECK-BE-NEXT:    cmpwi r3, 1
-; CHECK-BE-NEXT:    ld r4, .LC1@toc@l(r4)
+; CHECK-BE-NEXT:    addis r4, r2, globalVal2@toc@ha
 ; CHECK-BE-NEXT:    setbcr r3, eq
-; CHECK-BE-NEXT:    stw r3, 0(r4)
+; CHECK-BE-NEXT:    stw r3, globalVal2@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 entry:
   %cmp = icmp ne i32 %a, 1
   %conv1 = zext i1 %cmp to i32
-  store i32 %conv1, i32* @globalVal2, align 4
+  store i32 %conv1, ptr @globalVal2, align 4
   ret void
 }
 
-define void @setbcr11(i64 %a) {
+define dso_local void @setbcr11(i64 %a) {
 ; CHECK-LE-LABEL: setbcr11:
 ; CHECK-LE:       # %bb.0: # %entry
 ; CHECK-LE-NEXT:    cmpdi r3, 1
@@ -175,20 +173,19 @@ define void @setbcr11(i64 %a) {
 ;
 ; CHECK-BE-LABEL: setbcr11:
 ; CHECK-BE:       # %bb.0: # %entry
-; CHECK-BE-NEXT:    addis r4, r2, .LC2@toc@ha
 ; CHECK-BE-NEXT:    cmpdi r3, 1
-; CHECK-BE-NEXT:    ld r4, .LC2@toc@l(r4)
+; CHECK-BE-NEXT:    addis r4, r2, globalVal3@toc@ha
 ; CHECK-BE-NEXT:    setbcr r3, eq
-; CHECK-BE-NEXT:    std r3, 0(r4)
+; CHECK-BE-NEXT:    std r3, globalVal3@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 entry:
   %cmp = icmp ne i64 %a, 1
   %conv1 = zext i1 %cmp to i64
-  store i64 %conv1, i64* @globalVal3, align 8
+  store i64 %conv1, ptr @globalVal3, align 8
   ret void
 }
 
-define void @setbcr12(i16 %a) {
+define dso_local void @setbcr12(i16 %a) {
 ; CHECK-LE-LABEL: setbcr12:
 ; CHECK-LE:       # %bb.0: # %entry
 ; CHECK-LE-NEXT:    clrlwi r3, r3, 16
@@ -199,17 +196,16 @@ define void @setbcr12(i16 %a) {
 ;
 ; CHECK-BE-LABEL: setbcr12:
 ; CHECK-BE:       # %bb.0: # %entry
-; CHECK-BE-NEXT:    addis r4, r2, .LC3@toc@ha
 ; CHECK-BE-NEXT:    clrlwi r3, r3, 16
-; CHECK-BE-NEXT:    ld r4, .LC3@toc@l(r4)
+; CHECK-BE-NEXT:    addis r4, r2, globalVal4@toc@ha
 ; CHECK-BE-NEXT:    cmpwi r3, 1
 ; CHECK-BE-NEXT:    setbcr r3, eq
-; CHECK-BE-NEXT:    sth r3, 0(r4)
+; CHECK-BE-NEXT:    sth r3, globalVal4@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 entry:
   %cmp = icmp ne i16 %a, 1
   %conv1 = zext i1 %cmp to i16
-  store i16 %conv1, i16* @globalVal4, align 2
+  store i16 %conv1, ptr @globalVal4, align 2
   ret void
 }
 

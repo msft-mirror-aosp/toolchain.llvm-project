@@ -10,14 +10,11 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Value.h"
-#include "lldb/Core/ValueObjectConstResult.h"
-#include "lldb/Core/ValueObjectMemory.h"
-#include "lldb/Core/ValueObjectRegister.h"
 #include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -26,10 +23,15 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
+#include "lldb/ValueObject/ValueObjectConstResult.h"
+#include "lldb/ValueObject/ValueObjectMemory.h"
+#include "lldb/ValueObject/ValueObjectRegister.h"
 
+#include <optional>
 #include <vector>
 
 using namespace lldb;
@@ -93,6 +95,7 @@ ABISysV_x86_64::CreateInstance(lldb::ProcessSP process_sp, const ArchSpec &arch)
     case llvm::Triple::OSType::Linux:
     case llvm::Triple::OSType::MacOSX:
     case llvm::Triple::OSType::NetBSD:
+    case llvm::Triple::OSType::OpenBSD:
     case llvm::Triple::OSType::Solaris:
     case llvm::Triple::OSType::UnknownOS:
       return ABISP(
@@ -107,7 +110,7 @@ ABISysV_x86_64::CreateInstance(lldb::ProcessSP process_sp, const ArchSpec &arch)
 bool ABISysV_x86_64::PrepareTrivialCall(Thread &thread, addr_t sp,
                                         addr_t func_addr, addr_t return_addr,
                                         llvm::ArrayRef<addr_t> args) const {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+  Log *log = GetLog(LLDBLog::Expressions);
 
   if (log) {
     StreamString s;
@@ -266,7 +269,7 @@ bool ABISysV_x86_64::GetArgumentValues(Thread &thread,
     // We currently only support extracting values with Clang QualTypes. Do we
     // care about others?
     CompilerType compiler_type = value->GetCompilerType();
-    llvm::Optional<uint64_t> bit_size = compiler_type.GetBitSize(&thread);
+    std::optional<uint64_t> bit_size = compiler_type.GetBitSize(&thread);
     if (!bit_size)
       return false;
     bool is_signed;
@@ -289,13 +292,13 @@ Status ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
                                             lldb::ValueObjectSP &new_value_sp) {
   Status error;
   if (!new_value_sp) {
-    error.SetErrorString("Empty value object for return value.");
+    error = Status::FromErrorString("Empty value object for return value.");
     return error;
   }
 
   CompilerType compiler_type = new_value_sp->GetCompilerType();
   if (!compiler_type) {
-    error.SetErrorString("Null clang type for return value.");
+    error = Status::FromErrorString("Null clang type for return value.");
     return error;
   }
 
@@ -316,7 +319,7 @@ Status ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
     Status data_error;
     size_t num_bytes = new_value_sp->GetData(data, data_error);
     if (data_error.Fail()) {
-      error.SetErrorStringWithFormat(
+      error = Status::FromErrorStringWithFormat(
           "Couldn't convert return value to raw data: %s",
           data_error.AsCString());
       return error;
@@ -328,18 +331,19 @@ Status ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
       if (reg_ctx->WriteRegisterFromUnsigned(reg_info, raw_value))
         set_it_simple = true;
     } else {
-      error.SetErrorString("We don't support returning longer than 64 bit "
-                           "integer values at present.");
+      error = Status::FromErrorString(
+          "We don't support returning longer than 64 bit "
+          "integer values at present.");
     }
   } else if (compiler_type.IsFloatingPointType(count, is_complex)) {
     if (is_complex)
-      error.SetErrorString(
+      error = Status::FromErrorString(
           "We don't support returning complex values at present");
     else {
-      llvm::Optional<uint64_t> bit_width =
+      std::optional<uint64_t> bit_width =
           compiler_type.GetBitSize(frame_sp.get());
       if (!bit_width) {
-        error.SetErrorString("can't get type size");
+        error = Status::FromErrorString("can't get type size");
         return error;
       }
       if (*bit_width <= 64) {
@@ -350,7 +354,7 @@ Status ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
         Status data_error;
         size_t num_bytes = new_value_sp->GetData(data, data_error);
         if (data_error.Fail()) {
-          error.SetErrorStringWithFormat(
+          error = Status::FromErrorStringWithFormat(
               "Couldn't convert return value to raw data: %s",
               data_error.AsCString());
           return error;
@@ -365,7 +369,7 @@ Status ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
         set_it_simple = true;
       } else {
         // FIXME - don't know how to do 80 bit long doubles yet.
-        error.SetErrorString(
+        error = Status::FromErrorString(
             "We don't support returning float values > 64 bits at present");
       }
     }
@@ -375,8 +379,9 @@ Status ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
     // Okay we've got a structure or something that doesn't fit in a simple
     // register. We should figure out where it really goes, but we don't
     // support this yet.
-    error.SetErrorString("We only support setting simple integer and float "
-                         "return types at present.");
+    error = Status::FromErrorString(
+        "We only support setting simple integer and float "
+        "return types at present.");
   }
 
   return error;
@@ -399,13 +404,13 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectSimple(
 
   const uint32_t type_flags = return_compiler_type.GetTypeInfo();
   if (type_flags & eTypeIsScalar) {
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
 
     bool success = false;
     if (type_flags & eTypeIsInteger) {
       // Extract the register context so we can read arguments from registers
 
-      llvm::Optional<uint64_t> byte_size =
+      std::optional<uint64_t> byte_size =
           return_compiler_type.GetByteSize(&thread);
       if (!byte_size)
         return return_valobj_sp;
@@ -452,7 +457,7 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectSimple(
       if (type_flags & eTypeIsComplex) {
         // Don't handle complex yet.
       } else {
-        llvm::Optional<uint64_t> byte_size =
+        std::optional<uint64_t> byte_size =
             return_compiler_type.GetByteSize(&thread);
         if (byte_size && *byte_size <= sizeof(long double)) {
           const RegisterInfo *xmm0_info =
@@ -487,11 +492,11 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectSimple(
     value.GetScalar() =
         (uint64_t)thread.GetRegisterContext()->ReadRegisterAsUnsigned(rax_id,
                                                                       0);
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
     return_valobj_sp = ValueObjectConstResult::Create(
         thread.GetStackFrameAtIndex(0).get(), value, ConstString(""));
   } else if (type_flags & eTypeIsVector) {
-    llvm::Optional<uint64_t> byte_size =
+    std::optional<uint64_t> byte_size =
         return_compiler_type.GetByteSize(&thread);
     if (byte_size && *byte_size > 0) {
       const RegisterInfo *altivec_reg =
@@ -510,7 +515,7 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectSimple(
             if (reg_ctx->ReadRegister(altivec_reg, reg_value)) {
               Status error;
               if (reg_value.GetAsMemoryData(
-                      altivec_reg, heap_data_up->GetBytes(),
+                      *altivec_reg, heap_data_up->GetBytes(),
                       heap_data_up->GetByteSize(), byte_order, error)) {
                 DataExtractor data(DataBufferSP(heap_data_up.release()),
                                    byte_order,
@@ -538,10 +543,10 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectSimple(
 
                 Status error;
                 if (reg_value.GetAsMemoryData(
-                        altivec_reg, heap_data_up->GetBytes(),
+                        *altivec_reg, heap_data_up->GetBytes(),
                         altivec_reg->byte_size, byte_order, error) &&
                     reg_value2.GetAsMemoryData(
-                        altivec_reg2,
+                        *altivec_reg2,
                         heap_data_up->GetBytes() + altivec_reg->byte_size,
                         heap_data_up->GetByteSize() - altivec_reg->byte_size,
                         byte_order, error)) {
@@ -586,8 +591,8 @@ static bool FlattenAggregateType(
     uint64_t field_bit_offset = 0;
     CompilerType field_compiler_type = return_compiler_type.GetFieldAtIndex(
         idx, name, &field_bit_offset, nullptr, nullptr);
-    llvm::Optional<uint64_t> field_bit_width =
-          field_compiler_type.GetBitSize(&thread);
+    std::optional<uint64_t> field_bit_width =
+        field_compiler_type.GetBitSize(&thread);
 
     // if we don't know the size of the field (e.g. invalid type), exit
     if (!field_bit_width || *field_bit_width == 0) {
@@ -629,7 +634,7 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectImpl(
   if (!reg_ctx_sp)
     return return_valobj_sp;
 
-  llvm::Optional<uint64_t> bit_width = return_compiler_type.GetBitSize(&thread);
+  std::optional<uint64_t> bit_width = return_compiler_type.GetBitSize(&thread);
   if (!bit_width)
     return return_valobj_sp;
   if (return_compiler_type.IsAggregateType()) {
@@ -637,14 +642,14 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectImpl(
     bool is_memory = true;
     std::vector<uint32_t> aggregate_field_offsets;
     std::vector<CompilerType> aggregate_compiler_types;
-    if (return_compiler_type.GetTypeSystem()->CanPassInRegisters(
-          return_compiler_type) &&
-      *bit_width <= 128 &&
-      FlattenAggregateType(thread, exe_ctx, return_compiler_type,
-                          0, aggregate_field_offsets,
-                          aggregate_compiler_types)) {
+    auto ts = return_compiler_type.GetTypeSystem();
+    if (ts && ts->CanPassInRegisters(return_compiler_type) &&
+        *bit_width <= 128 &&
+        FlattenAggregateType(thread, exe_ctx, return_compiler_type, 0,
+                             aggregate_field_offsets,
+                             aggregate_compiler_types)) {
       ByteOrder byte_order = target->GetArchitecture().GetByteOrder();
-      DataBufferSP data_sp(new DataBufferHeap(16, 0));
+      WritableDataBufferSP data_sp(new DataBufferHeap(16, 0));
       DataExtractor return_ext(data_sp, byte_order,
                                target->GetArchitecture().GetAddressByteSize());
 
@@ -887,6 +892,7 @@ bool ABISysV_x86_64::CreateDefaultUnwindPlan(UnwindPlan &unwind_plan) {
   const int32_t ptr_size = 8;
   row->GetCFAValue().SetIsRegisterPlusOffset(dwarf_rbp, 2 * ptr_size);
   row->SetOffset(0);
+  row->SetUnspecifiedRegistersAreUndefined(true);
 
   row->SetRegisterLocationToAtCFAPlusOffset(fp_reg_num, ptr_size * -2, true);
   row->SetRegisterLocationToAtCFAPlusOffset(pc_reg_num, ptr_size * -1, true);
@@ -932,6 +938,8 @@ uint32_t ABISysV_x86_64::GetGenericNum(llvm::StringRef name) {
       .Case("rsp", LLDB_REGNUM_GENERIC_SP)
       .Case("rbp", LLDB_REGNUM_GENERIC_FP)
       .Case("rflags", LLDB_REGNUM_GENERIC_FLAGS)
+      // gdbserver uses eflags
+      .Case("eflags", LLDB_REGNUM_GENERIC_FLAGS)
       .Case("rdi", LLDB_REGNUM_GENERIC_ARG1)
       .Case("rsi", LLDB_REGNUM_GENERIC_ARG2)
       .Case("rdx", LLDB_REGNUM_GENERIC_ARG3)
@@ -949,16 +957,3 @@ void ABISysV_x86_64::Initialize() {
 void ABISysV_x86_64::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
 }
-
-lldb_private::ConstString ABISysV_x86_64::GetPluginNameStatic() {
-  static ConstString g_name("sysv-x86_64");
-  return g_name;
-}
-
-// PluginInterface protocol
-
-lldb_private::ConstString ABISysV_x86_64::GetPluginName() {
-  return GetPluginNameStatic();
-}
-
-uint32_t ABISysV_x86_64::GetPluginVersion() { return 1; }

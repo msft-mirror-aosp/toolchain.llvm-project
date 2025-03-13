@@ -1,22 +1,11 @@
 // -*- C++ -*-
-//===---------------------------- stdio.h ---------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-
-#if defined(__need_FILE) || defined(__need___FILE)
-
-#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
-#pragma GCC system_header
-#endif
-
-#include_next <stdio.h>
-
-#elif !defined(_LIBCPP_STDIO_H)
-#define _LIBCPP_STDIO_H
 
 /*
     stdio.h synopsis
@@ -98,22 +87,36 @@ int ferror(FILE* stream);
 void perror(const char* s);
 */
 
-#include <__config>
+#if defined(__cplusplus) && __cplusplus < 201103L && defined(_LIBCPP_USE_FROZEN_CXX03_HEADERS)
+#  include <__cxx03/stdio.h>
+#else
+#  include <__config>
 
-#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
-#pragma GCC system_header
-#endif
+#  if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#    pragma GCC system_header
+#  endif
 
-#include_next <stdio.h>
+// The inclusion of the system's <stdio.h> is intentionally done once outside of any include
+// guards because some code expects to be able to include the underlying system header multiple
+// times to get different definitions based on the macros that are set before inclusion.
+#  if __has_include_next(<stdio.h>)
+#    include_next <stdio.h>
+#  endif
 
-#ifdef __cplusplus
+#  ifndef _LIBCPP_STDIO_H
+#    define _LIBCPP_STDIO_H
 
-#undef getc
-#undef putc
-#undef clearerr
-#undef feof
-#undef ferror
+#    ifdef __cplusplus
 
-#endif
+#      undef getc
+#      undef putc
+#      undef clearerr
+#      undef feof
+#      undef ferror
+#      undef putchar
+#      undef getchar
 
-#endif  // _LIBCPP_STDIO_H
+#    endif // __cplusplus
+#  endif   // _LIBCPP_STDIO_H
+
+#endif // defined(__cplusplus) && __cplusplus < 201103L && defined(_LIBCPP_USE_FROZEN_CXX03_HEADERS)

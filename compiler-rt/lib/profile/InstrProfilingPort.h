@@ -23,6 +23,7 @@
 #define COMPILER_RT_FTRUNCATE(f,l) _chsize(_fileno(f),l)
 #define COMPILER_RT_ALWAYS_INLINE __forceinline
 #define COMPILER_RT_CLEANUP(x)
+#define COMPILER_RT_USED
 #elif __GNUC__
 #ifdef _WIN32
 #define COMPILER_RT_FTRUNCATE(f, l) _chsize(fileno(f), l)
@@ -37,6 +38,7 @@
 #define COMPILER_RT_ALLOCA __builtin_alloca
 #define COMPILER_RT_ALWAYS_INLINE inline __attribute((always_inline))
 #define COMPILER_RT_CLEANUP(x) __attribute__((cleanup(x)))
+#define COMPILER_RT_USED __attribute__((used))
 #endif
 
 #if defined(__APPLE__)
@@ -52,7 +54,7 @@
 #endif
 
 #define COMPILER_RT_MAX_HOSTLEN 128
-#ifdef __ORBIS__
+#if defined(__ORBIS__) || defined(__wasi__)
 #define COMPILER_RT_GETHOSTNAME(Name, Len) ((void)(Name), (void)(Len), (-1))
 #else
 #define COMPILER_RT_GETHOSTNAME(Name, Len) lprofGetHostName(Name, Len)
@@ -109,7 +111,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-static inline size_t getpagesize() {
+static inline size_t getpagesize(void) {
   SYSTEM_INFO S;
   GetNativeSystemInfo(&S);
   return S.dwPageSize;

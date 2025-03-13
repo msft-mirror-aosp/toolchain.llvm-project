@@ -14,8 +14,8 @@
 #define LLVM_CLANG_LIB_BASIC_TARGETS_SPARC_H
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/TargetParser/Triple.h"
 namespace clang {
 namespace targets {
 // Shared base class for SPARC v8 (32-bit) and SPARC v9 (64-bit).
@@ -39,10 +39,8 @@ public:
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override {
     // Check if software floating point is enabled
-    auto Feature = llvm::find(Features, "+soft-float");
-    if (Feature != Features.end()) {
+    if (llvm::is_contained(Features, "+soft-float"))
       SoftFloat = true;
-    }
     return true;
   }
   void getTargetDefines(const LangOptions &Opts,
@@ -50,11 +48,9 @@ public:
 
   bool hasFeature(StringRef Feature) const override;
 
-  bool hasSjLjLowering() const override { return true; }
-
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {
     // FIXME: Implement!
-    return None;
+    return {};
   }
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::VoidPtrBuiltinVaList;
@@ -81,7 +77,7 @@ public:
     }
     return false;
   }
-  const char *getClobbers() const override {
+  std::string_view getClobbers() const override {
     // FIXME: Implement!
     return "";
   }
@@ -144,6 +140,10 @@ public:
     CPU = getCPUKind(Name);
     return CPU != CK_GENERIC;
   }
+
+  std::pair<unsigned, unsigned> hardwareInterferenceSizes() const override {
+    return std::make_pair(32, 32);
+  }
 };
 
 // SPARC v8 is the 32-bit mode selected by Triple::sparc.
@@ -151,7 +151,7 @@ class LLVM_LIBRARY_VISIBILITY SparcV8TargetInfo : public SparcTargetInfo {
 public:
   SparcV8TargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : SparcTargetInfo(Triple, Opts) {
-    resetDataLayout("E-m:e-p:32:32-i64:64-f128:64-n32-S64");
+    resetDataLayout("E-m:e-p:32:32-i64:64-i128:128-f128:64-n32-S64");
     // NetBSD / OpenBSD use long (same as llvm default); everyone else uses int.
     switch (getTriple().getOS()) {
     default:
@@ -180,8 +180,7 @@ public:
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;
 
-  bool hasSjLjLowering() const override { return true; }
-  bool hasExtIntType() const override { return true; }
+  bool hasBitIntType() const override { return true; }
 };
 
 // SPARCV8el is the 32-bit little-endian mode selected by Triple::sparcel.
@@ -189,7 +188,7 @@ class LLVM_LIBRARY_VISIBILITY SparcV8elTargetInfo : public SparcV8TargetInfo {
 public:
   SparcV8elTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : SparcV8TargetInfo(Triple, Opts) {
-    resetDataLayout("e-m:e-p:32:32-i64:64-f128:64-n32-S64");
+    resetDataLayout("e-m:e-p:32:32-i64:64-i128:128-f128:64-n32-S64");
   }
 };
 
@@ -199,7 +198,7 @@ public:
   SparcV9TargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : SparcTargetInfo(Triple, Opts) {
     // FIXME: Support Sparc quad-precision long double?
-    resetDataLayout("E-m:e-i64:64-n32:64-S128");
+    resetDataLayout("E-m:e-i64:64-i128:128-n32:64-S128");
     // This is an LP64 platform.
     LongWidth = LongAlign = PointerWidth = PointerAlign = 64;
 
@@ -234,7 +233,7 @@ public:
     return getCPUGeneration(CPU) == CG_V9;
   }
 
-  bool hasExtIntType() const override { return true; }
+  bool hasBitIntType() const override { return true; }
 };
 } // namespace targets
 } // namespace clang

@@ -28,7 +28,6 @@ using ::llvm::HasValue;
 using ::llvm::StringError;
 using ::testing::AllOf;
 using ::testing::HasSubstr;
-using ::testing::Property;
 
 using MatchResult = MatchFinder::MatchResult;
 
@@ -47,7 +46,7 @@ template <typename M> TestMatch matchCode(StringRef Code, M Matcher) {
   ASTContext &Context = ASTUnit->getASTContext();
   assert(!Context.getDiagnostics().hasErrorOccurred() && "Compilation error");
 
-  TraversalKindScope RAII(Context, ast_type_traits::TK_AsIs);
+  TraversalKindScope RAII(Context, TK_AsIs);
   auto Matches = ast_matchers::match(Matcher, Context);
   // We expect a single, exact match.
   assert(Matches.size() != 0 && "no matches found");
@@ -457,6 +456,51 @@ TEST(RangeSelectorTest, NameOpCtorInitializer) {
   EXPECT_THAT_EXPECTED(select(name(Init), Match), HasValue("field"));
 }
 
+TEST(RangeSelectorTest, NameOpTypeLoc) {
+  StringRef Code = R"cc(
+    namespace ns {
+    struct Foo {
+      Foo();
+      Foo(int);
+      Foo(int, int);
+    };
+    }  // namespace ns
+
+    ns::Foo a;
+    auto b = ns::Foo(3);
+    auto c = ns::Foo(1, 2);
+  )cc";
+  const char *CtorTy = "ctor_ty";
+  // Matches declaration of `a`
+  TestMatch MatchA = matchCode(
+      Code, varDecl(hasName("a"), hasTypeLoc(typeLoc().bind(CtorTy))));
+  EXPECT_THAT_EXPECTED(select(name(CtorTy), MatchA), HasValue("Foo"));
+  // Matches call of Foo(int)
+  TestMatch MatchB = matchCode(
+      Code, cxxFunctionalCastExpr(hasTypeLoc(typeLoc().bind(CtorTy))));
+  EXPECT_THAT_EXPECTED(select(name(CtorTy), MatchB), HasValue("Foo"));
+  // Matches call of Foo(int, int)
+  TestMatch MatchC = matchCode(
+      Code, cxxTemporaryObjectExpr(hasTypeLoc(typeLoc().bind(CtorTy))));
+  EXPECT_THAT_EXPECTED(select(name(CtorTy), MatchC), HasValue("Foo"));
+}
+
+TEST(RangeSelectorTest, NameOpTemplateSpecializationTypeLoc) {
+  StringRef Code = R"cc(
+    namespace ns {
+    template <typename T>
+    struct Foo {};
+    }  // namespace ns
+
+    ns::Foo<int> a;
+  )cc";
+  const char *Loc = "tyloc";
+  // Matches declaration of `a`.
+  TestMatch MatchA =
+      matchCode(Code, varDecl(hasName("a"), hasTypeLoc(typeLoc().bind(Loc))));
+  EXPECT_THAT_EXPECTED(select(name(Loc), MatchA), HasValue("Foo"));
+}
+
 TEST(RangeSelectorTest, NameOpErrors) {
   EXPECT_THAT_EXPECTED(selectFromTrivial(name("unbound_id")),
                        Failed<StringError>(withUnboundNodeMessage()));
@@ -605,6 +649,48 @@ TEST(RangeSelectorTest, CallArgsErrors) {
                        Failed<StringError>(withUnboundNodeMessage()));
   EXPECT_THAT_EXPECTED(selectFromAssorted(callArgs("stmt")),
                        Failed<StringError>(withTypeErrorMessage("stmt")));
+}
+
+TEST(RangeSelectorTest, ConstructExprArgs) {
+  const StringRef Code = R"cc(
+    struct C {
+      C(int, int);
+    };
+    C f() {
+      return C(1, 2);
+    }
+  )cc";
+  const char *ID = "id";
+  TestMatch Match = matchCode(Code, cxxTemporaryObjectExpr().bind(ID));
+  EXPECT_THAT_EXPECTED(select(constructExprArgs(ID), Match), HasValue("1, 2"));
+}
+
+TEST(RangeSelectorTest, ConstructExprBracedArgs) {
+  const StringRef Code = R"cc(
+    struct C {
+      C(int, int);
+    };
+    C f() {
+      return {1, 2};
+    }
+  )cc";
+  const char *ID = "id";
+  TestMatch Match = matchCode(Code, cxxConstructExpr().bind(ID));
+  EXPECT_THAT_EXPECTED(select(constructExprArgs(ID), Match), HasValue("1, 2"));
+}
+
+TEST(RangeSelectorTest, ConstructExprNoArgs) {
+  const StringRef Code = R"cc(
+    struct C {
+      C();
+    };
+    C f() {
+      return C();
+    }
+  )cc";
+  const char *ID = "id";
+  TestMatch Match = matchCode(Code, cxxTemporaryObjectExpr().bind(ID));
+  EXPECT_THAT_EXPECTED(select(constructExprArgs(ID), Match), HasValue(""));
 }
 
 TEST(RangeSelectorTest, StatementsOp) {

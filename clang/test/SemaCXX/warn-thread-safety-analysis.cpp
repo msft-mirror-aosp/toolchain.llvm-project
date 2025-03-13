@@ -82,6 +82,9 @@ private:
   T* ptr_;
 };
 
+template<typename T, typename U>
+U& operator->*(const SmartPtr<T>& ptr, U T::*p) { return ptr->*p; }
+
 
 // For testing destructor calls and cleanup.
 class MyString {
@@ -137,6 +140,36 @@ public:
    int x __attribute__((guarded_by(mu)));
    void MyLock() EXCLUSIVE_LOCK_FUNCTION(mu);
 };
+
+struct TestingMoreComplexAttributes {
+   Mutex lock;
+   struct { Mutex lock; } strct;
+   union {
+       bool a __attribute__((guarded_by(lock)));
+       bool b __attribute__((guarded_by(strct.lock)));
+       bool *ptr_a __attribute__((pt_guarded_by(lock)));
+       bool *ptr_b __attribute__((pt_guarded_by(strct.lock)));
+       Mutex lock1 __attribute__((acquired_before(lock))) __attribute__((acquired_before(strct.lock)));
+       Mutex lock2 __attribute__((acquired_after(lock))) __attribute__((acquired_after(strct.lock)));
+   };
+} more_complex_atttributes;
+
+void more_complex_attributes() {
+    more_complex_atttributes.a = true; // expected-warning{{writing variable 'a' requires holding mutex 'lock' exclusively}}
+    more_complex_atttributes.b = true; // expected-warning{{writing variable 'b' requires holding mutex 'strct.lock' exclusively}}
+    *more_complex_atttributes.ptr_a = true; // expected-warning{{writing the value pointed to by 'ptr_a' requires holding mutex 'lock' exclusively}}
+    *more_complex_atttributes.ptr_b = true; // expected-warning{{writing the value pointed to by 'ptr_b' requires holding mutex 'strct.lock' exclusively}}
+
+    more_complex_atttributes.lock.Lock();
+    more_complex_atttributes.lock1.Lock(); // expected-warning{{mutex 'lock1' must be acquired before 'lock'}}
+    more_complex_atttributes.lock1.Unlock();
+    more_complex_atttributes.lock.Unlock();
+
+    more_complex_atttributes.lock2.Lock();
+    more_complex_atttributes.lock.Lock(); // expected-warning{{mutex 'lock' must be acquired before 'lock2'}}
+    more_complex_atttributes.lock.Unlock();
+    more_complex_atttributes.lock2.Unlock();
+}
 
 MutexWrapper sls_mw;
 
@@ -280,12 +313,12 @@ void sls_fun_bad_6() {
 
 void sls_fun_bad_7() {
   sls_mu.Lock();
-  while (getBool()) {
+  while (getBool()) { // \
+        expected-warning{{expecting mutex 'sls_mu' to be held at start of each loop}}
     sls_mu.Unlock();
     if (getBool()) {
       if (getBool()) {
-        continue; // \
-        expected-warning{{expecting mutex 'sls_mu' to be held at start of each loop}}
+        continue;
       }
     }
     sls_mu.Lock(); // expected-note {{mutex acquired here}}
@@ -332,12 +365,14 @@ void sls_fun_bad_12() {
     sls_mu.Unlock();
     if (getBool()) {
       if (getBool()) {
-        break; // expected-warning{{mutex 'sls_mu' is not held on every path through here}}
+        break;
       }
     }
     sls_mu.Lock();
   }
-  sls_mu.Unlock();
+  sls_mu.Unlock(); // \
+    expected-warning{{mutex 'sls_mu' is not held on every path through here}} \
+    expected-warning{{releasing mutex 'sls_mu' that was not held}}
 }
 
 //-----------------------------------------//
@@ -635,11 +670,11 @@ void shared_fun_0() {
 
 void shared_fun_1() {
   sls_mu.ReaderLock(); // \
-    // expected-warning {{mutex 'sls_mu' is acquired exclusively and shared in the same scope}}
+    // expected-note {{the other acquisition of mutex 'sls_mu' is here}}
   do {
     sls_mu.Unlock();
     sls_mu.Lock();  // \
-      // expected-note {{the other acquisition of mutex 'sls_mu' is here}}
+      // expected-warning {{mutex 'sls_mu' is acquired exclusively and shared in the same scope}}
   } while (getBool());
   sls_mu.Unlock();
 }
@@ -694,11 +729,11 @@ void shared_fun_11() {
 
 void shared_bad_0() {
   sls_mu.Lock();  // \
-    // expected-warning {{mutex 'sls_mu' is acquired exclusively and shared in the same scope}}
+    // expected-note {{the other acquisition of mutex 'sls_mu' is here}}
   do {
     sls_mu.Unlock();
     sls_mu.ReaderLock();  // \
-      // expected-note {{the other acquisition of mutex 'sls_mu' is here}}
+      // expected-warning {{mutex 'sls_mu' is acquired exclusively and shared in the same scope}}
   } while (getBool());
   sls_mu.Unlock();
 }
@@ -1558,8 +1593,12 @@ namespace substitution_test {
     void unlockData()  UNLOCK_FUNCTION(mu);
 
     void doSomething() EXCLUSIVE_LOCKS_REQUIRED(mu)  { }
+    void operator()()  EXCLUSIVE_LOCKS_REQUIRED(mu)  { }
+
+    MyData operator+(const MyData& other) const SHARED_LOCKS_REQUIRED(mu, other.mu);
   };
 
+  MyData operator-(const MyData& a, const MyData& b) SHARED_LOCKS_REQUIRED(a.mu, b.mu);
 
   class DataLocker {
   public:
@@ -1571,6 +1610,27 @@ namespace substitution_test {
   class Foo {
   public:
     void foo(MyData* d) EXCLUSIVE_LOCKS_REQUIRED(d->mu) { }
+
+    void subst(MyData& d) {
+      d.doSomething(); // expected-warning {{calling function 'doSomething' requires holding mutex 'd.mu' exclusively}}
+      d();             // expected-warning {{calling function 'operator()' requires holding mutex 'd.mu' exclusively}}
+      d.operator()();  // expected-warning {{calling function 'operator()' requires holding mutex 'd.mu' exclusively}}
+
+      d.lockData();
+      d.doSomething();
+      d();
+      d.operator()();
+      d.unlockData();
+    }
+
+    void binop(MyData& a, MyData& b) EXCLUSIVE_LOCKS_REQUIRED(a.mu) {
+      a + b; // expected-warning {{calling function 'operator+' requires holding mutex 'b.mu'}}
+             // expected-note@-1 {{found near match 'a.mu'}}
+      b + a; // expected-warning {{calling function 'operator+' requires holding mutex 'b.mu'}}
+             // expected-note@-1 {{found near match 'a.mu'}}
+      a - b; // expected-warning {{calling function 'operator-' requires holding mutex 'b.mu'}}
+             // expected-note@-1 {{found near match 'a.mu'}}
+    }
 
     void bar1(MyData* d) {
       d->lockData();
@@ -1601,6 +1661,30 @@ namespace substitution_test {
       dlr.unlockData(d1);
     }
   };
+
+  // Automatic object destructor calls don't appear as expressions in the CFG,
+  // so we have to handle them separately whenever substitutions are required.
+  struct DestructorRequires {
+    Mutex mu;
+    ~DestructorRequires() EXCLUSIVE_LOCKS_REQUIRED(mu);
+  };
+
+  void destructorRequires() {
+    DestructorRequires rd;
+    rd.mu.AssertHeld();
+  }
+
+  struct DestructorExcludes {
+    Mutex mu;
+    ~DestructorExcludes() LOCKS_EXCLUDED(mu);
+  };
+
+  void destructorExcludes() {
+    DestructorExcludes ed;
+    ed.mu.Lock(); // expected-note {{mutex acquired here}}
+  } // expected-warning {{cannot call function '~DestructorExcludes' while mutex 'ed.mu' is held}}
+    // expected-warning@-1 {{mutex 'ed.mu' is still held at the end of function}}
+
 } // end namespace substituation_test
 
 
@@ -1673,8 +1757,32 @@ struct TestScopedLockable {
 
   bool getBool();
 
+  bool lock2Bool(MutexLock);
+
   void foo1() {
     MutexLock mulock(&mu1);
+    a = 5;
+  }
+
+#ifdef __cpp_guaranteed_copy_elision
+  void const_lock() {
+    const MutexLock mulock = MutexLock(&mu1);
+    a = 5;
+  }
+#endif
+
+  void temporary() {
+    MutexLock{&mu1}, a = 5;
+  }
+
+  void temporary_cfg(int x) {
+    // test the case where a pair of temporary Ctor and Dtor is in different CFG blocks
+    lock2Bool(MutexLock{&mu1}) || x;
+    MutexLock{&mu1};  // no-warn
+  }
+
+  void lifetime_extension() {
+    const MutexLock &mulock = MutexLock(&mu1);
     a = 5;
   }
 
@@ -1693,6 +1801,12 @@ struct TestScopedLockable {
   void foo3() {
     MutexLock mulock_a(&mu1); // expected-note{{mutex acquired here}}
     MutexLock mulock_b(&mu1); // \
+      // expected-warning {{acquiring mutex 'mu1' that is already held}}
+  }
+
+  void temporary_double_lock() {
+    MutexLock mulock_a(&mu1); // expected-note{{mutex acquired here}}
+    MutexLock{&mu1};          // \
       // expected-warning {{acquiring mutex 'mu1' that is already held}}
   }
 
@@ -2085,13 +2199,13 @@ namespace GoingNative {
   mutex m;
   void test() {
     m.lock();
-    while (foo()) {
+    while (foo()) { // expected-warning {{expecting mutex 'm' to be held at start of each loop}}
       m.unlock();
       // ...
       if (bar()) {
         // ...
         if (foo())
-          continue; // expected-warning {{expecting mutex 'm' to be held at start of each loop}}
+          continue;
         //...
       }
       // ...
@@ -2550,7 +2664,7 @@ void test2(Bar* b1, Bar* b2) {
 }
 
 
-// Sanity check -- lock the mutex directly, but use attributes that call getMu()
+// Lock the mutex directly, but use attributes that call getMu()
 // Also lock the mutex using getFooMu, which calls a lock_returned function.
 void test3(Bar* b1, Bar* b2) {
   b1->mu_.Lock();
@@ -2582,6 +2696,7 @@ class Foo {
   void test3();
   void test4();
   void test5();
+  void test6();
 };
 
 
@@ -2595,6 +2710,7 @@ void Foo::test2() {
   if (c) {            // test join point -- held/not held during release
     rlock.Release();
   }
+  // No warning on join point because the lock will be released by the scope object anyway.
 }
 
 void Foo::test3() {
@@ -2615,8 +2731,20 @@ void Foo::test5() {
   if (c) {
     rlock.Release();
   }
-  // no warning on join point for managed lock.
+  // No warning on join point because the lock will be released by the scope object anyway.
   rlock.Release();  // expected-warning {{releasing mutex 'mu_' that was not held}}
+}
+
+void Foo::test6() {
+  ReleasableMutexLock rlock(&mu_);
+  do {
+    if (c) {
+      rlock.Release();
+      break;
+    }
+  } while (c);
+  // No warning on join point because the lock will be released by the scope object anyway
+  a = 1; // expected-warning {{writing variable 'a' requires holding mutex 'mu_' exclusively}}
 }
 
 
@@ -2659,6 +2787,7 @@ public:
 
 Mutex mu;
 int x GUARDED_BY(mu);
+bool b;
 
 void print(int);
 
@@ -2738,6 +2867,165 @@ void doubleLock2() {
   scope.Unlock();
   scope.Lock(); // expected-note{{mutex acquired here}}
   scope.Lock(); // expected-warning {{acquiring mutex 'mu' that is already held}}
+}
+
+void lockJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  if (b)
+    scope.Lock();
+  // No warning on join point because the lock will be released by the scope object anyway.
+  x = 2; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void unlockJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  scope.Lock();
+  if (b)
+    scope.Unlock();
+  // No warning on join point because the lock will be released by the scope object anyway.
+  x = 2; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void loopAcquire() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  for (unsigned i = 1; i < 10; ++i)
+    scope.Lock(); // We could catch this double lock with negative capabilities.
+}
+
+void loopRelease() {
+  RelockableMutexLock scope(&mu, ExclusiveTraits{}); // expected-note {{mutex acquired here}}
+  // We have to warn on this join point despite the lock being managed ...
+  for (unsigned i = 1; i < 10; ++i) { // expected-warning {{expecting mutex 'mu' to be held at start of each loop}}
+    x = 1; // ... because we might miss that this doesn't always happen under lock.
+    if (i == 5)
+      scope.Unlock();
+  }
+}
+
+void loopPromote() {
+  RelockableMutexLock scope(&mu, SharedTraits{});
+  for (unsigned i = 1; i < 10; ++i) {
+    x = 1; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+    if (i == 5)
+      scope.PromoteShared();
+  }
+}
+
+void loopDemote() {
+  RelockableMutexLock scope(&mu, ExclusiveTraits{}); // expected-note {{the other acquisition of mutex 'mu' is here}}
+  // We have to warn on this join point despite the lock being managed ...
+  for (unsigned i = 1; i < 10; ++i) {
+    x = 1; // ... because we might miss that this doesn't always happen under exclusive lock.
+    if (i == 5)
+      scope.DemoteExclusive(); // expected-warning {{mutex 'mu' is acquired exclusively and shared in the same scope}}
+  }
+}
+
+void loopAcquireContinue() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  for (unsigned i = 1; i < 10; ++i) {
+    x = 1; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+    if (i == 5) {
+      scope.Lock();
+      continue;
+    }
+  }
+}
+
+void loopReleaseContinue() {
+  RelockableMutexLock scope(&mu, ExclusiveTraits{}); // expected-note {{mutex acquired here}}
+  // We have to warn on this join point despite the lock being managed ...
+  for (unsigned i = 1; i < 10; ++i) { // expected-warning {{expecting mutex 'mu' to be held at start of each loop}}
+    x = 1; // ... because we might miss that this doesn't always happen under lock.
+    if (i == 5) {
+      scope.Unlock();
+      continue;
+    }
+  }
+}
+
+void loopPromoteContinue() {
+  RelockableMutexLock scope(&mu, SharedTraits{});
+  for (unsigned i = 1; i < 10; ++i) {
+    x = 1; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+    if (i == 5) {
+      scope.PromoteShared();
+      continue;
+    }
+  }
+}
+
+void loopDemoteContinue() {
+  RelockableMutexLock scope(&mu, ExclusiveTraits{}); // expected-note {{the other acquisition of mutex 'mu' is here}}
+  // We have to warn on this join point despite the lock being managed ...
+  for (unsigned i = 1; i < 10; ++i) {
+    x = 1; // ... because we might miss that this doesn't always happen under exclusive lock.
+    if (i == 5) {
+      scope.DemoteExclusive(); // expected-warning {{mutex 'mu' is acquired exclusively and shared in the same scope}}
+      continue;
+    }
+  }
+}
+
+void exclusiveSharedJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  if (b)
+    scope.Lock();
+  else
+    scope.ReaderLock();
+  // No warning on join point because the lock will be released by the scope object anyway.
+  print(x);
+  x = 2; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void sharedExclusiveJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  if (b)
+    scope.ReaderLock();
+  else
+    scope.Lock();
+  // No warning on join point because the lock will be released by the scope object anyway.
+  print(x);
+  x = 2; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void assertJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  if (b)
+    scope.Lock();
+  else
+    mu.AssertHeld();
+  x = 2;
+}
+
+void assertSharedJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  if (b)
+    scope.ReaderLock();
+  else
+    mu.AssertReaderHeld();
+  print(x);
+  x = 2; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void assertStrongerJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  if (b)
+    scope.ReaderLock();
+  else
+    mu.AssertHeld();
+  print(x);
+  x = 2; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void assertWeakerJoin() {
+  RelockableMutexLock scope(&mu, DeferTraits{});
+  if (b)
+    scope.Lock();
+  else
+    mu.AssertReaderHeld();
+  print(x);
+  x = 2; // expected-warning {{writing variable 'x' requires holding mutex 'mu' exclusively}}
 }
 
 void directUnlock() {
@@ -2871,10 +3159,9 @@ void manual() EXCLUSIVE_LOCKS_REQUIRED(mu) {
 
 void join() EXCLUSIVE_LOCKS_REQUIRED(mu) {
   MutexUnlock scope(&mu);
-  if (c) {
-    scope.Lock(); // expected-note{{mutex acquired here}}
-  }
-  // expected-warning@+1{{mutex 'mu' is not held on every path through here}}
+  if (c)
+    scope.Lock();
+  // No warning on join point because the lock will be released by the scope object anyway.
   scope.Lock();
 }
 
@@ -2909,6 +3196,378 @@ void lockUnlock() EXCLUSIVE_LOCKS_REQUIRED(mu) {
 
 } // end namespace ScopedUnlock
 
+namespace PassingScope {
+
+class SCOPED_LOCKABLE RelockableScope {
+public:
+  RelockableScope(Mutex *mu) EXCLUSIVE_LOCK_FUNCTION(mu);
+  void Release() UNLOCK_FUNCTION();
+  void Acquire() EXCLUSIVE_LOCK_FUNCTION();
+  ~RelockableScope() EXCLUSIVE_UNLOCK_FUNCTION();
+};
+
+class SCOPED_LOCKABLE ReaderRelockableScope {
+public:
+  ReaderRelockableScope(Mutex *mu) SHARED_LOCK_FUNCTION(mu);
+  void Release() UNLOCK_FUNCTION();
+  void Acquire() SHARED_LOCK_FUNCTION();
+  ~ReaderRelockableScope() UNLOCK_FUNCTION();
+};
+
+Mutex mu;
+Mutex mu1;
+Mutex mu2;
+int x GUARDED_BY(mu);
+int y GUARDED_BY(mu) GUARDED_BY(mu2);
+void print(int);
+
+// Analysis inside the function with annotated parameters
+
+void sharedRequired(ReleasableMutexLock& scope SHARED_LOCKS_REQUIRED(mu)) {
+  print(x); // OK.
+}
+
+void sharedAcquire(ReaderRelockableScope& scope SHARED_LOCK_FUNCTION(mu)) {
+  scope.Acquire();
+  print(x);
+}
+
+void sharedRelease(RelockableScope& scope SHARED_UNLOCK_FUNCTION(mu)) {
+  print(x);
+  scope.Release();
+  print(x); // expected-warning{{reading variable 'x' requires holding mutex 'mu'}}
+}
+
+void requiredLock(ReleasableMutexLock& scope EXCLUSIVE_LOCKS_REQUIRED(mu)) {
+  x = 1; // OK.
+}
+
+void reacquireRequiredLock(RelockableScope& scope EXCLUSIVE_LOCKS_REQUIRED(mu)) {
+  scope.Release();
+  scope.Acquire();
+  x = 2; // OK.
+}
+
+void releaseSingleMutex(ReleasableMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu)) {
+  x = 1; // OK.
+  scope.Release();
+  x = 2; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void releaseMultipleMutexes(ReleasableMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu, mu2)) {
+  y = 1; // OK.
+  scope.Release();
+  y = 2; // expected-warning{{writing variable 'y' requires holding mutex 'mu' exclusively}}
+         // expected-warning@-1{{writing variable 'y' requires holding mutex 'mu2' exclusively}}
+}
+
+void acquireLock(RelockableScope& scope EXCLUSIVE_LOCK_FUNCTION(mu)) {
+  x = 1; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+  scope.Acquire();
+  x = 2; // OK.
+}
+
+void acquireMultipleLocks(RelockableScope& scope EXCLUSIVE_LOCK_FUNCTION(mu, mu2)) {
+  y = 1; // expected-warning{{writing variable 'y' requires holding mutex 'mu' exclusively}}
+         // expected-warning@-1{{writing variable 'y' requires holding mutex 'mu2' exclusively}}
+  scope.Acquire();
+  y = 2;  // OK.
+}
+
+void excludedLock(ReleasableMutexLock& scope LOCKS_EXCLUDED(mu)) {
+  x = 1; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void acquireAndReleaseExcludedLocks(RelockableScope& scope LOCKS_EXCLUDED(mu)) {
+  scope.Acquire();
+  scope.Release();
+}
+
+// expected-note@+1{{mutex acquired here}}
+void unreleasedMutex(ReleasableMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu)) {
+  x = 1; // OK.
+} // expected-warning{{mutex 'mu' is still held at the end of function}}
+
+// expected-note@+1{{mutex acquired here}}
+void acquireAlreadyHeldMutex(RelockableScope& scope EXCLUSIVE_UNLOCK_FUNCTION(mu)) {
+  scope.Acquire(); // expected-warning{{acquiring mutex 'mu' that is already held}}
+  scope.Release();
+}
+
+void reacquireMutex(RelockableScope& scope EXCLUSIVE_UNLOCK_FUNCTION(mu)) {
+  scope.Release();
+  scope.Acquire(); // expected-note{{mutex acquired here}}
+  x = 2; // OK.
+} // expected-warning{{mutex 'mu' is still held at the end of function}}
+
+// expected-note@+1{{mutex acquired here}}
+void requireSingleMutex(ReleasableMutexLock& scope EXCLUSIVE_LOCKS_REQUIRED(mu)) {
+  x = 1; // OK.
+  scope.Release();
+  x = 2; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+} // expected-warning{{expecting mutex 'mu' to be held at the end of function}}
+
+// expected-note@+1 2{{mutex acquired here}}
+void requireMultipleMutexes(ReleasableMutexLock& scope EXCLUSIVE_LOCKS_REQUIRED(mu, mu2)) {
+  y = 1; // OK.
+  scope.Release();
+  y = 2; // expected-warning{{writing variable 'y' requires holding mutex 'mu' exclusively}}
+         // expected-warning@-1{{writing variable 'y' requires holding mutex 'mu2' exclusively}}
+} // expected-warning{{expecting mutex 'mu' to be held at the end of function}}
+  // expected-warning@-1{{expecting mutex 'mu2' to be held at the end of function}}
+
+// expected-note@+1{{mutex acquired here}}
+void acquireAlreadyHeldLock(RelockableScope& scope EXCLUSIVE_LOCKS_REQUIRED(mu)) {
+  scope.Acquire(); // expected-warning{{acquiring mutex 'mu' that is already held}}
+}
+
+// expected-note@+1 {{mutex acquired here}}
+void releaseWithoutHoldingLock(ReleasableMutexLock& scope EXCLUSIVE_LOCK_FUNCTION(mu)) {
+  scope.Release(); // expected-warning{{releasing mutex 'mu' that was not held}}
+} // expected-warning{{expecting mutex 'mu' to be held at the end of function}}
+
+// expected-note@+1 {{mutex acquired here}}
+void endWithReleasedMutex(RelockableScope& scope EXCLUSIVE_LOCK_FUNCTION(mu)) {
+  scope.Acquire();
+  scope.Release();
+} // expected-warning{{expecting mutex 'mu' to be held at the end of function}}
+
+void acquireExcludedLock(RelockableScope& scope LOCKS_EXCLUDED(mu)) {
+  x = 1; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+  scope.Acquire(); // expected-note {{mutex acquired here}}
+  x = 2; // OK.
+} // expected-warning{{mutex 'mu' is still held at the end of function}}
+
+void acquireMultipleExcludedLocks(RelockableScope& scope LOCKS_EXCLUDED(mu, mu2)) {
+  y = 1; // expected-warning{{writing variable 'y' requires holding mutex 'mu' exclusively}}
+         // expected-warning@-1{{writing variable 'y' requires holding mutex 'mu2' exclusively}}
+  scope.Acquire(); // expected-note 2{{mutex acquired here}}
+  y = 2; // OK.
+} // expected-warning{{mutex 'mu' is still held at the end of function}}
+  // expected-warning@-1{{mutex 'mu2' is still held at the end of function}}
+
+void reacquireExcludedLocks(RelockableScope& scope LOCKS_EXCLUDED(mu)) {
+  scope.Release(); // expected-warning{{releasing mutex 'mu' that was not held}}
+  scope.Acquire(); // expected-note {{mutex acquired here}}
+  x = 2; // OK.
+} // expected-warning{{mutex 'mu' is still held at the end of function}}
+
+// expected-note@+1{{mutex acquired here}}
+void sharedRequired2(ReleasableMutexLock& scope SHARED_LOCKS_REQUIRED(mu)) {
+  print(x); // OK.
+  scope.Release();
+  print(x); // expected-warning{{reading variable 'x' requires holding mutex 'mu'}}
+} // expected-warning{{expecting mutex 'mu' to be held at the end of function}}
+
+// expected-note@+1{{mutex acquired here}}
+void sharedAcquire2(RelockableScope& scope SHARED_LOCK_FUNCTION(mu)) {
+  print(x); // expected-warning{{reading variable 'x' requires holding mutex 'mu'}}
+  scope.Release(); // expected-warning{{releasing mutex 'mu' that was not held}}
+} // expected-warning{{expecting mutex 'mu' to be held at the end of function}}
+
+// expected-note@+1 2{{mutex acquired here}}
+void sharedRelease2(RelockableScope& scope SHARED_UNLOCK_FUNCTION(mu)) {
+  scope.Acquire(); //expected-warning{{acquiring mutex 'mu' that is already held}}
+} //expected-warning{{mutex 'mu' is still held at the end of function}}
+
+// Handling the call of the function with annotated parameters
+
+// expected-note@+1{{see attribute on parameter here}}
+void release(ReleasableMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu));
+// expected-note@+1{{see attribute on parameter here}}
+void release_DoubleMutexLock(DoubleMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu));
+// expected-note@+1 2{{see attribute on parameter here}}
+void release_two(ReleasableMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu, mu2));
+// expected-note@+1{{see attribute on parameter here}}
+void release_double(DoubleMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu, mu2));
+void require(ReleasableMutexLock& scope EXCLUSIVE_LOCKS_REQUIRED(mu));
+void acquire(RelockableScope& scope EXCLUSIVE_LOCK_FUNCTION(mu));
+void exclude(RelockableScope& scope LOCKS_EXCLUDED(mu));
+
+void release_shared(ReaderRelockableScope& scope SHARED_UNLOCK_FUNCTION(mu));
+void require_shared(ReleasableMutexLock& scope SHARED_LOCKS_REQUIRED(mu));
+void acquire_shared(ReaderRelockableScope& scope SHARED_LOCK_FUNCTION(mu));
+
+void unlockCall() {
+  ReleasableMutexLock scope(&mu);
+  x = 1; // OK.
+  release(scope);
+  x = 2; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void unlockSharedCall() {
+  ReaderRelockableScope scope(&mu);
+  print(x); // OK.
+  release_shared(scope);
+  print(x); // expected-warning{{reading variable 'x' requires holding mutex 'mu'}}
+}
+
+void requireCall() {
+  ReleasableMutexLock scope(&mu);
+  x = 1; // OK.
+  require(scope);
+  x = 2; // Ok.
+}
+
+void requireSharedCall() {
+  ReleasableMutexLock scope(&mu);
+  print(x); // OK.
+  require_shared(scope);
+  print(x); // Ok.
+}
+
+void acquireCall() {
+  RelockableScope scope(&mu);
+  scope.Release();
+  acquire(scope);
+  x = 2; // Ok.
+}
+
+void acquireSharedCall() {
+  ReaderRelockableScope scope(&mu);
+  scope.Release();
+  acquire_shared(scope);
+  print(x); // Ok.
+}
+
+void writeAfterExcludeCall() {
+  RelockableScope scope(&mu);
+  scope.Release();
+  exclude(scope);
+  x = 2; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void unlockCallAfterExplicitRelease() {
+  ReleasableMutexLock scope(&mu);
+  x = 1; // OK.
+  scope.Release(); // expected-note{{mutex released here}}
+  release(scope); // expected-warning{{releasing mutex 'mu' that was not held}}
+  x = 2; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void unmatchedMutexes() {
+  ReleasableMutexLock scope(&mu2);
+  release(scope); // expected-warning{{mutex managed by 'scope' is 'mu2' instead of 'mu'}}
+                  // expected-warning@-1{{releasing mutex 'mu' that was not held}}
+}
+
+void wrongOrder() {
+  DoubleMutexLock scope(&mu2, &mu);
+  release_double(scope); // expected-warning{{mutex managed by 'scope' is 'mu2' instead of 'mu'}}
+}
+
+void differentNumberOfMutexes() {
+  ReleasableMutexLock scope(&mu);
+  release_two(scope); // expected-warning{{mutex 'mu2' not managed by 'scope'}}
+                      // expected-warning@-1{{releasing mutex 'mu2' that was not held}}
+}
+
+void differentNumberOfMutexes2() {
+  ReleasableMutexLock scope(&mu2);
+  release_two(scope); // expected-warning{{mutex managed by 'scope' is 'mu2' instead of 'mu'}}
+                      // expected-warning@-1{{releasing mutex 'mu' that was not held}}
+}
+
+void differentNumberOfMutexes3() {
+  DoubleMutexLock scope(&mu, &mu2);
+  release_DoubleMutexLock(scope); // expected-warning{{did not expect mutex 'mu2' to be managed by 'scope'}}
+}
+
+void releaseDefault(ReleasableMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(mu), int = 0);
+
+void unlockFunctionDefault() {
+  ReleasableMutexLock scope(&mu);
+  x = 1; // OK.
+  releaseDefault(scope);
+  x = 2; // expected-warning{{writing variable 'x' requires holding mutex 'mu' exclusively}}
+}
+
+void requireCallWithReleasedLock() {
+  ReleasableMutexLock scope(&mu);
+  scope.Release();
+  require(scope);  // expected-warning{{calling function 'require' requires holding mutex 'mu' exclusively}}
+}
+
+void acquireCallWithAlreadyHeldLock() {
+  RelockableScope scope(&mu); // expected-note{{mutex acquired here}}
+  acquire(scope); // expected-warning{{acquiring mutex 'mu' that is already held}}
+  x = 1;
+}
+
+void excludeCallWithAlreadyHeldLock() {
+  RelockableScope scope(&mu);
+  exclude(scope); // expected-warning{{cannot call function 'exclude' while mutex 'mu' is held}}
+  x = 2; // OK.
+}
+
+void requireConst(const ReleasableMutexLock& scope EXCLUSIVE_LOCKS_REQUIRED(mu));
+void requireConstCall() {
+  requireConst(ReleasableMutexLock(&mu));
+}
+
+void passScopeUndeclared(ReleasableMutexLock &scope) {
+  release(scope); // expected-warning{{calling function 'release' requires holding mutex 'scope' exclusively}}
+                  // expected-warning@-1{{releasing mutex 'mu' that was not held}}
+}
+
+class SCOPED_LOCKABLE ScopedWithoutLock {
+public:
+  ScopedWithoutLock();
+
+  ~ScopedWithoutLock() EXCLUSIVE_UNLOCK_FUNCTION();
+};
+
+void require(ScopedWithoutLock &scope EXCLUSIVE_LOCKS_REQUIRED(mu));
+
+void constructWithoutLock() {
+  ScopedWithoutLock scope;
+  require(scope); // expected-warning{{calling function 'require' requires holding mutex 'mu' exclusively}}
+                  // expected-warning@-1{{calling function 'require' requires holding mutex 'scope' exclusively}}
+} // expected-warning {{releasing mutex 'scope' that was not held}}
+
+void requireConst(const ScopedWithoutLock& scope EXCLUSIVE_LOCKS_REQUIRED(mu));
+
+void requireCallWithReleasedLock2() {
+  requireConst(ScopedWithoutLock());
+  // expected-warning@-1{{calling function 'requireConst' requires holding mutex '#undefined' exclusively}}
+  // expected-warning@-2{{calling function 'requireConst' requires holding mutex 'mu' exclusively}}
+}
+
+void requireDecl(RelockableScope &scope EXCLUSIVE_LOCKS_REQUIRED(mu));
+void requireDecl(RelockableScope &scope) {
+  scope.Release();
+  scope.Acquire();
+}
+
+struct foo
+{
+  Mutex mu;
+  // expected-note@+1{{see attribute on parameter here}}
+  void require(RelockableScope &scope EXCLUSIVE_LOCKS_REQUIRED(mu));
+  void callRequire(){
+    RelockableScope scope(&mu);
+    // TODO: False positive due to incorrect parsing of parameter attribute arguments.
+    require(scope);
+    // expected-warning@-1{{calling function 'require' requires holding mutex 'mu' exclusively}}
+    // expected-warning@-2{{mutex managed by 'scope' is 'mu' instead of 'mu'}}
+  }
+};
+
+struct ObjectWithMutex {
+  Mutex mu;
+  int x GUARDED_BY(mu);
+};
+void releaseMember(ObjectWithMutex& object, ReleasableMutexLock& scope EXCLUSIVE_UNLOCK_FUNCTION(object.mu)) {
+  object.x = 1;
+  scope.Release();
+}
+void releaseMemberCall() {
+  ObjectWithMutex obj;
+  ReleasableMutexLock lock(&obj.mu);
+  releaseMember(obj, lock);
+}
+
+} // end namespace PassingScope
 
 namespace TrylockFunctionTest {
 
@@ -3687,8 +4346,8 @@ class Foo {
     }
     a = 0; // \
       // expected-warning {{writing variable 'a' requires holding mutex 'mu_' exclusively}}
-    endNoWarnOnWrites();  // \
-      // expected-warning {{releasing mutex '*' that was not held}}
+    endNoWarnOnWrites(); // \
+      // expected-warning {{releasing wildcard '*' that was not held}}
   }
 
 
@@ -4002,6 +4661,20 @@ public:
   void foo() EXCLUSIVE_LOCKS_REQUIRED(this);
 };
 
+class SelfLockDeferred {
+public:
+  SelfLockDeferred() LOCKS_EXCLUDED(mu_);
+  ~SelfLockDeferred() UNLOCK_FUNCTION(mu_);
+
+  Mutex mu_;
+};
+
+class LOCKABLE SelfLockDeferred2 {
+public:
+  SelfLockDeferred2() LOCKS_EXCLUDED(this);
+  ~SelfLockDeferred2() UNLOCK_FUNCTION();
+};
+
 
 void test() {
   SelfLock s;
@@ -4011,6 +4684,14 @@ void test() {
 void test2() {
   SelfLock2 s2;
   s2.foo();
+}
+
+void testDeferredTemporary() {
+  SelfLockDeferred(); // expected-warning {{releasing mutex '<temporary>.mu_' that was not held}}
+}
+
+void testDeferredTemporary2() {
+  SelfLockDeferred2(); // expected-warning {{releasing mutex '<temporary>' that was not held}}
 }
 
 }  // end namespace SelfConstructorTest
@@ -4163,6 +4844,21 @@ public:
 
   void operator()() { }
 
+  Data& operator+=(int);
+  Data& operator-=(int);
+  Data& operator*=(int);
+  Data& operator/=(int);
+  Data& operator%=(int);
+  Data& operator^=(int);
+  Data& operator&=(int);
+  Data& operator|=(int);
+  Data& operator<<=(int);
+  Data& operator>>=(int);
+  Data& operator++();
+  Data& operator++(int);
+  Data& operator--();
+  Data& operator--(int);
+
 private:
   int dat;
 };
@@ -4229,6 +4925,20 @@ public:
                           // expected-warning {{reading variable 'datap1_' requires holding mutex 'mu_'}}
     data_ = *datap2_;     // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}} \
                           // expected-warning {{reading the value pointed to by 'datap2_' requires holding mutex 'mu_'}}
+    data_ += 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ -= 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ *= 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ /= 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ %= 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ ^= 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ &= 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ |= 1;           // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ <<= 1;          // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_ >>= 1;          // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    ++data_;              // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_++;              // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    --data_;              // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
+    data_--;              // expected-warning {{writing variable 'data_' requires holding mutex 'mu_' exclusively}}
 
     data_[0] = 0;         // expected-warning {{reading variable 'data_' requires holding mutex 'mu_'}}
     (*datap2_)[0] = 0;    // expected-warning {{reading the value pointed to by 'datap2_' requires holding mutex 'mu_'}}
@@ -4474,8 +5184,8 @@ public:
 
   void test6() {
     mu_.AssertHeld();
-    mu_.Unlock();
-  }  // should this be a warning?
+    mu_.Unlock(); // should this be a warning?
+  }
 
   void test7() {
     if (c) {
@@ -4496,9 +5206,10 @@ public:
     else {
       mu_.AssertHeld();
     }
+    // FIXME: should warn, because it's unclear whether we need to release or not.
     int b = a;
     a = 0;
-    mu_.Unlock();
+    mu_.Unlock(); // should this be a warning?
   }
 
   void test9() {
@@ -4525,6 +5236,28 @@ public:
     assertMu();
     int b = a;
     a = 0;
+  }
+
+  void test12() {
+    if (c)
+      mu_.ReaderLock(); // expected-warning {{mutex 'mu_' is acquired exclusively and shared in the same scope}}
+    else
+      mu_.AssertHeld(); // expected-note {{the other acquisition of mutex 'mu_' is here}}
+    // FIXME: should instead warn because it's unclear whether we need to release or not.
+    int b = a;
+    a = 0;
+    mu_.Unlock();
+  }
+
+  void test13() {
+    if (c)
+      mu_.Lock(); // expected-warning {{mutex 'mu_' is acquired exclusively and shared in the same scope}}
+    else
+      mu_.AssertReaderHeld(); // expected-note {{the other acquisition of mutex 'mu_' is here}}
+    // FIXME: should instead warn because it's unclear whether we need to release or not.
+    int b = a;
+    a = 0;
+    mu_.Unlock();
   }
 };
 
@@ -4632,13 +5365,15 @@ class Cell {
 
 
 // This mainly duplicates earlier tests, but just to make sure...
-class PtGuardedBySanityTest {
+class PtGuardedByCorrectnessTest {
   Mutex  mu1;
   Mutex  mu2;
   int*   a GUARDED_BY(mu1) PT_GUARDED_BY(mu2);
   Cell*  c GUARDED_BY(mu1) PT_GUARDED_BY(mu2);
   int    sa[10] GUARDED_BY(mu1);
   Cell   sc[10] GUARDED_BY(mu1);
+
+  static constexpr int Cell::*pa = &Cell::a;
 
   void test1() {
     mu1.Lock();
@@ -4659,9 +5394,11 @@ class PtGuardedBySanityTest {
 
     if (c->a == 0) doSomething();    // expected-warning {{reading the value pointed to by 'c' requires holding mutex 'mu2'}}
     c->a = 0;                        // expected-warning {{writing the value pointed to by 'c' requires holding mutex 'mu2' exclusively}}
+    c->*pa = 0;                      // expected-warning {{writing the value pointed to by 'c' requires holding mutex 'mu2' exclusively}}
 
     if ((*c).a == 0) doSomething();  // expected-warning {{reading the value pointed to by 'c' requires holding mutex 'mu2'}}
     (*c).a = 0;                      // expected-warning {{writing the value pointed to by 'c' requires holding mutex 'mu2' exclusively}}
+    (*c).*pa = 0;                    // expected-warning {{writing the value pointed to by 'c' requires holding mutex 'mu2' exclusively}}
 
     if (a[0] == 42) doSomething();     // expected-warning {{reading the value pointed to by 'a' requires holding mutex 'mu2'}}
     a[0] = 57;                         // expected-warning {{writing the value pointed to by 'a' requires holding mutex 'mu2' exclusively}}
@@ -4693,6 +5430,7 @@ class PtGuardedBySanityTest {
     sa[0] = 57;                         // expected-warning {{writing variable 'sa' requires holding mutex 'mu1' exclusively}}
     if (sc[0].a == 42) doSomething();   // expected-warning {{reading variable 'sc' requires holding mutex 'mu1'}}
     sc[0].a = 57;                       // expected-warning {{writing variable 'sc' requires holding mutex 'mu1' exclusively}}
+    sc[0].*pa = 57;                     // expected-warning {{writing variable 'sc' requires holding mutex 'mu1' exclusively}}
 
     if (*sa == 42) doSomething();       // expected-warning {{reading variable 'sa' requires holding mutex 'mu1'}}
     *sa = 57;                           // expected-warning {{writing variable 'sa' requires holding mutex 'mu1' exclusively}}
@@ -4725,6 +5463,8 @@ class SmartPtr_PtGuardedBy_Test {
   SmartPtr<int>  sp GUARDED_BY(mu1) PT_GUARDED_BY(mu2);
   SmartPtr<Cell> sq GUARDED_BY(mu1) PT_GUARDED_BY(mu2);
 
+  static constexpr int Cell::*pa = &Cell::a;
+
   void test1() {
     mu1.ReaderLock();
     mu2.Lock();
@@ -4733,6 +5473,7 @@ class SmartPtr_PtGuardedBy_Test {
     if (*sp == 0) doSomething();
     *sp = 0;
     sq->a = 0;
+    sq->*pa = 0;
 
     if (sp[0] == 0) doSomething();
     sp[0] = 0;
@@ -4748,6 +5489,7 @@ class SmartPtr_PtGuardedBy_Test {
     if (*sp == 0) doSomething();   // expected-warning {{reading variable 'sp' requires holding mutex 'mu1'}}
     *sp = 0;                       // expected-warning {{reading variable 'sp' requires holding mutex 'mu1'}}
     sq->a = 0;                     // expected-warning {{reading variable 'sq' requires holding mutex 'mu1'}}
+    sq->*pa = 0;                   // expected-warning {{reading variable 'sq' requires holding mutex 'mu1'}}
 
     if (sp[0] == 0) doSomething();   // expected-warning {{reading variable 'sp' requires holding mutex 'mu1'}}
     sp[0] = 0;                       // expected-warning {{reading variable 'sp' requires holding mutex 'mu1'}}
@@ -4764,6 +5506,7 @@ class SmartPtr_PtGuardedBy_Test {
     if (*sp == 0) doSomething();   // expected-warning {{reading the value pointed to by 'sp' requires holding mutex 'mu2'}}
     *sp = 0;                       // expected-warning {{reading the value pointed to by 'sp' requires holding mutex 'mu2'}}
     sq->a = 0;                     // expected-warning {{reading the value pointed to by 'sq' requires holding mutex 'mu2'}}
+    sq->*pa = 0;                   // expected-warning {{reading the value pointed to by 'sq' requires holding mutex 'mu2'}}
 
     if (sp[0] == 0) doSomething();   // expected-warning {{reading the value pointed to by 'sp' requires holding mutex 'mu2'}}
     sp[0] = 0;                       // expected-warning {{reading the value pointed to by 'sp' requires holding mutex 'mu2'}}
@@ -4826,8 +5569,12 @@ class Foo {
     };
 
     func1();  // expected-warning {{calling function 'operator()' requires holding mutex 'mu_' exclusively}}
+    func1.operator()();  // expected-warning {{calling function 'operator()' requires holding mutex 'mu_' exclusively}}
     func2();
+    func2.operator()();
     func3();
+    mu_.Unlock();
+    func3.operator()();
     mu_.Unlock();
   }
 };
@@ -5025,7 +5772,7 @@ void dispatch_log(const char *msg) __attribute__((requires_capability(!FlightCon
 void dispatch_log2(const char *msg) __attribute__((requires_capability(Logger))) {}
 
 void flight_control_entry(void) __attribute__((requires_capability(FlightControl))) {
-  dispatch_log("wrong"); /* expected-warning {{cannot call function 'dispatch_log' while mutex 'FlightControl' is held}} */
+  dispatch_log("wrong"); /* expected-warning {{cannot call function 'dispatch_log' while role 'FlightControl' is held}} */
   dispatch_log2("also wrong"); /* expected-warning {{calling function 'dispatch_log2' requires holding role 'Logger' exclusively}} */
 }
 
@@ -5272,6 +6019,85 @@ public:
   }
 };
 
+class Return {
+  Mutex mu;
+  Foo foo GUARDED_BY(mu);
+  Foo* foo_ptr PT_GUARDED_BY(mu);
+
+  Foo returns_value_locked() {
+    MutexLock lock(&mu);
+    return foo;
+  }
+
+  Foo returns_value_locks_required() EXCLUSIVE_LOCKS_REQUIRED(mu) {
+    return foo;
+  }
+
+  Foo returns_value_releases_lock_after_return() UNLOCK_FUNCTION(mu) {
+    MutexLock lock(&mu, true);
+    return foo;
+  }
+
+  Foo returns_value_aquires_lock() EXCLUSIVE_LOCK_FUNCTION(mu) {
+    mu.Lock();
+    return foo;
+  }
+  
+  Foo returns_value_not_locked() {
+    return foo;               // expected-warning {{reading variable 'foo' requires holding mutex 'mu'}}
+  }
+  
+  Foo returns_value_releases_lock_before_return() UNLOCK_FUNCTION(mu) {
+    mu.Unlock();
+    return foo;               // expected-warning {{reading variable 'foo' requires holding mutex 'mu'}}
+  }
+
+  Foo &returns_ref_not_locked() {
+    return foo;               // expected-warning {{returning variable 'foo' by reference requires holding mutex 'mu'}}
+  }
+
+  Foo &returns_ref_locked() {
+    MutexLock lock(&mu);
+    return foo;               // expected-warning {{returning variable 'foo' by reference requires holding mutex 'mu'}}
+  }
+
+  Foo &returns_ref_shared_locks_required() SHARED_LOCKS_REQUIRED(mu) {
+    return foo;               // expected-warning {{returning variable 'foo' by reference requires holding mutex 'mu' exclusively}}
+  }
+
+  Foo &returns_ref_exclusive_locks_required() EXCLUSIVE_LOCKS_REQUIRED(mu) {
+    return foo;
+  }
+
+  Foo &returns_ref_releases_lock_after_return() UNLOCK_FUNCTION(mu) {
+    MutexLock lock(&mu, true);
+    return foo;               // expected-warning {{returning variable 'foo' by reference requires holding mutex 'mu' exclusively}}
+  }
+
+  Foo& returns_ref_releases_lock_before_return() UNLOCK_FUNCTION(mu) {
+    mu.Unlock();
+    return foo;               // // expected-warning {{returning variable 'foo' by reference requires holding mutex 'mu' exclusively}}
+  }
+  
+  Foo &returns_ref_aquires_lock() EXCLUSIVE_LOCK_FUNCTION(mu) {
+    mu.Lock();
+    return foo;
+  }
+  
+  const Foo &returns_constref_shared_locks_required() SHARED_LOCKS_REQUIRED(mu) {
+    return foo;
+  }
+  
+  Foo *returns_ptr() {
+    return &foo;              // FIXME -- Do we want to warn on this ?
+  }
+
+  Foo &returns_ref2() {
+    return *foo_ptr;          // expected-warning {{returning the value that 'foo_ptr' points to by reference requires holding mutex 'mu' exclusively}}
+  }
+
+};
+
 
 }  // end namespace PassByRefTest
 
@@ -5443,12 +6269,12 @@ class Foo5 {
 
 
 class Foo6 {
-  Mutex mu1 ACQUIRED_AFTER(mu3);     // expected-warning {{Cycle in acquired_before/after dependencies, starting with 'mu1'}}
-  Mutex mu2 ACQUIRED_AFTER(mu1);     // expected-warning {{Cycle in acquired_before/after dependencies, starting with 'mu2'}}
-  Mutex mu3 ACQUIRED_AFTER(mu2);     // expected-warning {{Cycle in acquired_before/after dependencies, starting with 'mu3'}}
+  Mutex mu1 ACQUIRED_AFTER(mu3);     // expected-warning {{cycle in acquired_before/after dependencies, starting with 'mu1'}}
+  Mutex mu2 ACQUIRED_AFTER(mu1);     // expected-warning {{cycle in acquired_before/after dependencies, starting with 'mu2'}}
+  Mutex mu3 ACQUIRED_AFTER(mu2);     // expected-warning {{cycle in acquired_before/after dependencies, starting with 'mu3'}}
 
-  Mutex mu_b ACQUIRED_BEFORE(mu_b);  // expected-warning {{Cycle in acquired_before/after dependencies, starting with 'mu_b'}}
-  Mutex mu_a ACQUIRED_AFTER(mu_a);   // expected-warning {{Cycle in acquired_before/after dependencies, starting with 'mu_a'}}
+  Mutex mu_b ACQUIRED_BEFORE(mu_b);  // expected-warning {{cycle in acquired_before/after dependencies, starting with 'mu_b'}}
+  Mutex mu_a ACQUIRED_AFTER(mu_a);   // expected-warning {{cycle in acquired_before/after dependencies, starting with 'mu_a'}}
 
   void test0() {
     mu_a.Lock();
@@ -5645,46 +6471,70 @@ C c;
 void f() { c[A()]->g(); }
 } // namespace PR34800
 
+#ifdef __cpp_guaranteed_copy_elision
+
 namespace ReturnScopedLockable {
-  template<typename Object> class SCOPED_LOCKABLE ReadLockedPtr {
-  public:
-    ReadLockedPtr(Object *ptr) SHARED_LOCK_FUNCTION((*this)->mutex);
-    ReadLockedPtr(ReadLockedPtr &&) SHARED_LOCK_FUNCTION((*this)->mutex);
-    ~ReadLockedPtr() UNLOCK_FUNCTION();
 
-    Object *operator->() const { return object; }
-
-  private:
-    Object *object;
-  };
-
-  struct Object {
-    int f() SHARED_LOCKS_REQUIRED(mutex);
-    Mutex mutex;
-  };
-
-  ReadLockedPtr<Object> get();
-  int use() {
-    auto ptr = get();
-    return ptr->f();
+class Object {
+public:
+  MutexLock lock() EXCLUSIVE_LOCK_FUNCTION(mutex) {
+    return MutexLock(&mutex);
   }
-  void use_constructor() {
-    auto ptr = ReadLockedPtr<Object>(nullptr);
-    ptr->f();
-    auto ptr2 = ReadLockedPtr<Object>{nullptr};
-    ptr2->f();
-    auto ptr3 = (ReadLockedPtr<Object>{nullptr});
-    ptr3->f();
+
+  ReaderMutexLock lockShared() SHARED_LOCK_FUNCTION(mutex) {
+    return ReaderMutexLock(&mutex);
   }
-  struct Convertible {
-    Convertible();
-    operator ReadLockedPtr<Object>();
-  };
-  void use_conversion() {
-    ReadLockedPtr<Object> ptr = Convertible();
-    ptr->f();
+
+  MutexLock adopt() EXCLUSIVE_LOCKS_REQUIRED(mutex) {
+    return MutexLock(&mutex, true);
   }
+
+  ReaderMutexLock adoptShared() SHARED_LOCKS_REQUIRED(mutex) {
+    return ReaderMutexLock(&mutex, true);
+  }
+
+  int x GUARDED_BY(mutex);
+  void needsLock() EXCLUSIVE_LOCKS_REQUIRED(mutex);
+
+  void testInside() {
+    MutexLock scope = lock();
+    x = 1;
+    needsLock();
+  }
+
+  Mutex mutex;
+};
+
+Object obj;
+
+void testLock() {
+  MutexLock scope = obj.lock();
+  obj.x = 1;
+  obj.needsLock();
 }
+
+int testSharedLock() {
+  ReaderMutexLock scope = obj.lockShared();
+  obj.x = 1; // expected-warning {{writing variable 'x' requires holding mutex 'obj.mutex' exclusively}}
+  return obj.x;
+}
+
+void testAdopt() {
+  obj.mutex.Lock();
+  MutexLock scope = obj.adopt();
+  obj.x = 1;
+}
+
+int testAdoptShared() {
+  obj.mutex.Lock();
+  ReaderMutexLock scope = obj.adoptShared();
+  obj.x = 1;
+  return obj.x;
+}
+
+} // namespace ReturnScopedLockable
+
+#endif
 
 namespace PR38640 {
 void f() {

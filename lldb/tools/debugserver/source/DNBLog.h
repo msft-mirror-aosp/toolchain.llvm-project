@@ -14,12 +14,10 @@
 #define LLDB_TOOLS_DEBUGSERVER_SOURCE_DNBLOG_H
 
 #include "DNBDefs.h"
-#include <stdint.h>
-#include <stdio.h>
+#include <cstdint>
+#include <cstdio>
 
-#ifdef __cplusplus
 extern "C" {
-#endif
 
 // Flags that get filled in automatically before calling the log callback
 // function
@@ -144,9 +142,6 @@ void DNBLogSetVerbose(int g);
 #define DNBLogCloseLogFile() ((void)0)
 
 #endif // #else defined(DNBLOG_ENABLED)
-
-#ifdef __cplusplus
 }
-#endif
 
 #endif // LLDB_TOOLS_DEBUGSERVER_SOURCE_DNBLOG_H

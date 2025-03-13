@@ -35,8 +35,6 @@
 // RUN: %env_hwasan_opts=allocator_may_return_null=1     %run %t new-nothrow 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=CHECK-nnNULL
 
-// REQUIRES: stable-runtime
-
 // TODO(alekseyshl): Fix it.
 // UNSUPPORTED: android
 
@@ -48,42 +46,40 @@
 #include <limits>
 #include <new>
 
-#include "utils.h"
-
 int main(int argc, char **argv) {
   assert(argc == 2);
   const char *action = argv[1];
-  untag_fprintf(stderr, "%s:\n", action);
+  fprintf(stderr, "%s:\n", action);
 
   static const size_t kMaxAllowedMallocSizePlusOne = (1UL << 40) + 1;
 
   void *x = nullptr;
-  if (!untag_strcmp(action, "malloc")) {
+  if (!strcmp(action, "malloc")) {
     x = malloc(kMaxAllowedMallocSizePlusOne);
-  } else if (!untag_strcmp(action, "calloc")) {
+  } else if (!strcmp(action, "calloc")) {
     x = calloc((kMaxAllowedMallocSizePlusOne / 4) + 1, 4);
-  } else if (!untag_strcmp(action, "calloc-overflow")) {
+  } else if (!strcmp(action, "calloc-overflow")) {
     volatile size_t kMaxSizeT = std::numeric_limits<size_t>::max();
     size_t kArraySize = 4096;
     volatile size_t kArraySize2 = kMaxSizeT / kArraySize + 10;
     x = calloc(kArraySize, kArraySize2);
-  } else if (!untag_strcmp(action, "realloc")) {
+  } else if (!strcmp(action, "realloc")) {
     x = realloc(0, kMaxAllowedMallocSizePlusOne);
-  } else if (!untag_strcmp(action, "realloc-after-malloc")) {
+  } else if (!strcmp(action, "realloc-after-malloc")) {
     char *t = (char*)malloc(100);
     *t = 42;
     x = realloc(t, kMaxAllowedMallocSizePlusOne);
     assert(*t == 42);
     free(t);
-  } else if (!untag_strcmp(action, "new")) {
+  } else if (!strcmp(action, "new")) {
     x = operator new(kMaxAllowedMallocSizePlusOne);
-  } else if (!untag_strcmp(action, "new-nothrow")) {
+  } else if (!strcmp(action, "new-nothrow")) {
     x = operator new(kMaxAllowedMallocSizePlusOne, std::nothrow);
   } else {
     assert(0);
   }
 
-  untag_fprintf(stderr, "errno: %d\n", errno);
+  fprintf(stderr, "errno: %d\n", errno);
 
   free(x);
 
@@ -91,21 +87,21 @@ int main(int argc, char **argv) {
 }
 
 // CHECK-mCRASH: malloc:
-// CHECK-mCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big
+// CHECK-mCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big {{.*}} in main
 // CHECK-cCRASH: calloc:
-// CHECK-cCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big
+// CHECK-cCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big {{.*}} in main
 // CHECK-coCRASH: calloc-overflow:
-// CHECK-coCRASH: SUMMARY: HWAddressSanitizer: calloc-overflow
+// CHECK-coCRASH: SUMMARY: HWAddressSanitizer: calloc-overflow {{.*}} in main
 // CHECK-rCRASH: realloc:
-// CHECK-rCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big
+// CHECK-rCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big {{.*}} in main
 // CHECK-mrCRASH: realloc-after-malloc:
-// CHECK-mrCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big
+// CHECK-mrCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big {{.*}} in main
 // CHECK-nCRASH: new:
-// CHECK-nCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big
+// CHECK-nCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big {{.*}} in main
 // CHECK-nCRASH-OOM: new:
-// CHECK-nCRASH-OOM: SUMMARY: HWAddressSanitizer: out-of-memory
+// CHECK-nCRASH-OOM: SUMMARY: HWAddressSanitizer: out-of-memory {{.*}} in main
 // CHECK-nnCRASH: new-nothrow:
-// CHECK-nnCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big
+// CHECK-nnCRASH: SUMMARY: HWAddressSanitizer: allocation-size-too-big {{.*}} in main
 
 // CHECK-mNULL: malloc:
 // CHECK-mNULL: errno: 12

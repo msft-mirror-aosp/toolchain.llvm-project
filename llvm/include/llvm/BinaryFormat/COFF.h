@@ -24,7 +24,6 @@
 
 #include "llvm/Support/DataTypes.h"
 #include <cassert>
-#include <cstring>
 
 namespace llvm {
 namespace COFF {
@@ -99,6 +98,8 @@ enum MachineTypes : unsigned {
   IMAGE_FILE_MACHINE_ARM = 0x1C0,
   IMAGE_FILE_MACHINE_ARMNT = 0x1C4,
   IMAGE_FILE_MACHINE_ARM64 = 0xAA64,
+  IMAGE_FILE_MACHINE_ARM64EC = 0xA641,
+  IMAGE_FILE_MACHINE_ARM64X = 0xA64E,
   IMAGE_FILE_MACHINE_EBC = 0xEBC,
   IMAGE_FILE_MACHINE_I386 = 0x14C,
   IMAGE_FILE_MACHINE_IA64 = 0x200,
@@ -119,6 +120,19 @@ enum MachineTypes : unsigned {
   IMAGE_FILE_MACHINE_THUMB = 0x1C2,
   IMAGE_FILE_MACHINE_WCEMIPSV2 = 0x169
 };
+
+template <typename T> bool isArm64EC(T Machine) {
+  return Machine == IMAGE_FILE_MACHINE_ARM64EC ||
+         Machine == IMAGE_FILE_MACHINE_ARM64X;
+}
+
+template <typename T> bool isAnyArm64(T Machine) {
+  return Machine == IMAGE_FILE_MACHINE_ARM64 || isArm64EC(Machine);
+}
+
+template <typename T> bool is64Bit(T Machine) {
+  return Machine == IMAGE_FILE_MACHINE_AMD64 || isAnyArm64(Machine);
+}
 
 enum Characteristics : unsigned {
   C_Invalid = 0,
@@ -403,6 +417,39 @@ enum RelocationTypesARM64 : unsigned {
   IMAGE_REL_ARM64_REL32 = 0x0011,
 };
 
+enum RelocationTypesMips : unsigned {
+  IMAGE_REL_MIPS_ABSOLUTE = 0x0000,
+  IMAGE_REL_MIPS_REFHALF = 0x0001,
+  IMAGE_REL_MIPS_REFWORD = 0x0002,
+  IMAGE_REL_MIPS_JMPADDR = 0x0003,
+  IMAGE_REL_MIPS_REFHI = 0x0004,
+  IMAGE_REL_MIPS_REFLO = 0x0005,
+  IMAGE_REL_MIPS_GPREL = 0x0006,
+  IMAGE_REL_MIPS_LITERAL = 0x0007,
+  IMAGE_REL_MIPS_SECTION = 0x000A,
+  IMAGE_REL_MIPS_SECREL = 0x000B,
+  IMAGE_REL_MIPS_SECRELLO = 0x000C,
+  IMAGE_REL_MIPS_SECRELHI = 0x000D,
+  IMAGE_REL_MIPS_JMPADDR16 = 0x0010,
+  IMAGE_REL_MIPS_REFWORDNB = 0x0022,
+  IMAGE_REL_MIPS_PAIR = 0x0025,
+};
+
+enum DynamicRelocationType : unsigned {
+  IMAGE_DYNAMIC_RELOCATION_GUARD_RF_PROLOGUE = 1,
+  IMAGE_DYNAMIC_RELOCATION_GUARD_RF_EPILOGUE = 2,
+  IMAGE_DYNAMIC_RELOCATION_GUARD_IMPORT_CONTROL_TRANSFER = 3,
+  IMAGE_DYNAMIC_RELOCATION_GUARD_INDIR_CONTROL_TRANSFER = 4,
+  IMAGE_DYNAMIC_RELOCATION_GUARD_SWITCHTABLE_BRANCH = 5,
+  IMAGE_DYNAMIC_RELOCATION_ARM64X = 6,
+};
+
+enum Arm64XFixupType : uint8_t {
+  IMAGE_DVRT_ARM64X_FIXUP_TYPE_ZEROFILL = 0,
+  IMAGE_DVRT_ARM64X_FIXUP_TYPE_VALUE = 1,
+  IMAGE_DVRT_ARM64X_FIXUP_TYPE_DELTA = 2,
+};
+
 enum COMDATType : uint8_t {
   IMAGE_COMDAT_SELECT_NODUPLICATES = 1,
   IMAGE_COMDAT_SELECT_ANY,
@@ -439,7 +486,8 @@ struct AuxiliaryWeakExternal {
 enum WeakExternalCharacteristics : unsigned {
   IMAGE_WEAK_EXTERN_SEARCH_NOLIBRARY = 1,
   IMAGE_WEAK_EXTERN_SEARCH_LIBRARY = 2,
-  IMAGE_WEAK_EXTERN_SEARCH_ALIAS = 3
+  IMAGE_WEAK_EXTERN_SEARCH_ALIAS = 3,
+  IMAGE_WEAK_EXTERN_ANTI_DEPENDENCY = 4
 };
 
 struct AuxiliarySectionDefinition {
@@ -603,7 +651,7 @@ enum WindowsSubsystem : unsigned {
   IMAGE_SUBSYSTEM_NATIVE = 1,  ///< Device drivers and native Windows processes
   IMAGE_SUBSYSTEM_WINDOWS_GUI = 2,      ///< The Windows GUI subsystem.
   IMAGE_SUBSYSTEM_WINDOWS_CUI = 3,      ///< The Windows character subsystem.
-  IMAGE_SUBSYSTEM_OS2_CUI = 5,          ///< The OS/2 character subsytem.
+  IMAGE_SUBSYSTEM_OS2_CUI = 5,          ///< The OS/2 character subsystem.
   IMAGE_SUBSYSTEM_POSIX_CUI = 7,        ///< The POSIX character subsystem.
   IMAGE_SUBSYSTEM_NATIVE_WINDOWS = 8,   ///< Native Windows 9x driver.
   IMAGE_SUBSYSTEM_WINDOWS_CE_GUI = 9,   ///< Windows CE.
@@ -701,7 +749,55 @@ enum ImportNameType : unsigned {
   IMPORT_NAME_NOPREFIX = 2,
   /// The import name is the public symbol name, but skipping the leading ?,
   /// @, or optionally _, and truncating at the first @.
-  IMPORT_NAME_UNDECORATE = 3
+  IMPORT_NAME_UNDECORATE = 3,
+  /// The import name is specified as a separate string in the import library
+  /// object file.
+  IMPORT_NAME_EXPORTAS = 4
+};
+
+enum class GuardFlags : uint32_t {
+  /// Module performs control flow integrity checks using system-supplied
+  /// support.
+  CF_INSTRUMENTED = 0x100,
+  /// Module performs control flow and write integrity checks.
+  CFW_INSTRUMENTED = 0x200,
+  /// Module contains valid control flow target metadata.
+  CF_FUNCTION_TABLE_PRESENT = 0x400,
+  /// Module does not make use of the /GS security cookie.
+  SECURITY_COOKIE_UNUSED = 0x800,
+  /// Module supports read only delay load IAT.
+  PROTECT_DELAYLOAD_IAT = 0x1000,
+  /// Delayload import table in its own .didat section (with nothing else in it)
+  /// that can be freely reprotected.
+  DELAYLOAD_IAT_IN_ITS_OWN_SECTION = 0x2000,
+  /// Module contains suppressed export information. This also infers that the
+  /// address taken IAT table is also present in the load config.
+  CF_EXPORT_SUPPRESSION_INFO_PRESENT = 0x4000,
+  /// Module enables suppression of exports.
+  CF_ENABLE_EXPORT_SUPPRESSION = 0x8000,
+  /// Module contains longjmp target information.
+  CF_LONGJUMP_TABLE_PRESENT = 0x10000,
+  /// Module contains EH continuation target information.
+  EH_CONTINUATION_TABLE_PRESENT = 0x400000,
+  /// Mask for the subfield that contains the stride of Control Flow Guard
+  /// function table entries (that is, the additional count of bytes per table
+  /// entry).
+  CF_FUNCTION_TABLE_SIZE_MASK = 0xF0000000,
+  CF_FUNCTION_TABLE_SIZE_5BYTES = 0x10000000,
+  CF_FUNCTION_TABLE_SIZE_6BYTES = 0x20000000,
+  CF_FUNCTION_TABLE_SIZE_7BYTES = 0x30000000,
+  CF_FUNCTION_TABLE_SIZE_8BYTES = 0x40000000,
+  CF_FUNCTION_TABLE_SIZE_9BYTES = 0x50000000,
+  CF_FUNCTION_TABLE_SIZE_10BYTES = 0x60000000,
+  CF_FUNCTION_TABLE_SIZE_11BYTES = 0x70000000,
+  CF_FUNCTION_TABLE_SIZE_12BYTES = 0x80000000,
+  CF_FUNCTION_TABLE_SIZE_13BYTES = 0x90000000,
+  CF_FUNCTION_TABLE_SIZE_14BYTES = 0xA0000000,
+  CF_FUNCTION_TABLE_SIZE_15BYTES = 0xB0000000,
+  CF_FUNCTION_TABLE_SIZE_16BYTES = 0xC0000000,
+  CF_FUNCTION_TABLE_SIZE_17BYTES = 0xD0000000,
+  CF_FUNCTION_TABLE_SIZE_18BYTES = 0xE0000000,
+  CF_FUNCTION_TABLE_SIZE_19BYTES = 0xF0000000,
 };
 
 struct ImportHeader {
@@ -726,9 +822,36 @@ enum CodeViewIdentifiers {
   DEBUG_HASHES_SECTION_MAGIC = 0x133C9C5
 };
 
+// These flags show up in the @feat.00 symbol. They appear to be some kind of
+// compiler features bitfield read by link.exe.
+enum Feat00Flags : uint32_t {
+  // Object is compatible with /safeseh.
+  SafeSEH = 0x1,
+  // Object was compiled with /GS.
+  GuardStack = 0x100,
+  // Object was compiled with /sdl.
+  SDL = 0x200,
+  // Object was compiled with /guard:cf.
+  GuardCF = 0x800,
+  // Object was compiled with /guard:ehcont.
+  GuardEHCont = 0x4000,
+  // Object was compiled with /kernel.
+  Kernel = 0x40000000,
+};
+
+enum Arm64ECThunkType : uint8_t {
+  GuestExit = 0,
+  Entry = 1,
+  Exit = 4,
+};
+
 inline bool isReservedSectionNumber(int32_t SectionNumber) {
   return SectionNumber <= 0;
 }
+
+/// Encode section name based on string table offset.
+/// The size of Out must be at least COFF::NameSize.
+bool encodeSectionName(char *Out, uint64_t Offset);
 
 } // End namespace COFF.
 } // End namespace llvm.

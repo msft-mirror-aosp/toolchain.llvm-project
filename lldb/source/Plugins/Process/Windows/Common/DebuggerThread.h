@@ -46,7 +46,7 @@ private:
   void FreeProcessHandles();
   void DebugLoop();
   ExceptionResult HandleExceptionEvent(const EXCEPTION_DEBUG_INFO &info,
-                                       DWORD thread_id);
+                                       DWORD thread_id, bool shutting_down);
   DWORD HandleCreateThreadEvent(const CREATE_THREAD_DEBUG_INFO &info,
                                 DWORD thread_id);
   DWORD HandleCreateProcessEvent(const CREATE_PROCESS_DEBUG_INFO &info,
@@ -91,10 +91,8 @@ private:
   // exit.
   bool m_detached = false;
 
-  static lldb::thread_result_t DebuggerThreadLaunchRoutine(void *data);
   lldb::thread_result_t
   DebuggerThreadLaunchRoutine(const ProcessLaunchInfo &launch_info);
-  static lldb::thread_result_t DebuggerThreadAttachRoutine(void *data);
   lldb::thread_result_t
   DebuggerThreadAttachRoutine(lldb::pid_t pid,
                               const ProcessAttachInfo &launch_info);

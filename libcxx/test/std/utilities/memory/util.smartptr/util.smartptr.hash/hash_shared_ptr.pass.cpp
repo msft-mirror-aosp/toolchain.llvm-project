@@ -17,12 +17,14 @@
 // };
 
 #include <memory>
+
 #include <cassert>
+#include <functional>
+
+#include "test_macros.h"
 
 #if TEST_STD_VER >= 11
 #include "poisoned_hash_helper.h"
-
-#include "test_macros.h"
 
 struct A {};
 #endif
@@ -38,8 +40,8 @@ int main(int, char**)
   }
 #if TEST_STD_VER >= 11
   {
-    test_hash_enabled_for_type<std::shared_ptr<int>>();
-    test_hash_enabled_for_type<std::shared_ptr<A>>();
+    test_hash_enabled<std::shared_ptr<int>>();
+    test_hash_enabled<std::shared_ptr<A>>();
   }
 #endif
 

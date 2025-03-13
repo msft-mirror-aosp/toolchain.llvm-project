@@ -6,9 +6,9 @@
 ; RUN:   -ppc-gpr-icmps=all -ppc-asm-full-reg-names -mcpu=pwr8 < %s | FileCheck %s --check-prefix=CHECK-LE \
 ; RUN:  --implicit-check-not cmpw --implicit-check-not cmpd --implicit-check-not cmpl
 
-@glob = local_unnamed_addr global i32 0, align 4
+@glob = dso_local local_unnamed_addr global i32 0, align 4
 
-define signext i32 @test_ineui(i32 zeroext %a, i32 zeroext %b) {
+define dso_local signext i32 @test_ineui(i32 zeroext %a, i32 zeroext %b) {
 ; CHECK-LABEL: test_ineui:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    xor r3, r3, r4
@@ -37,7 +37,7 @@ entry:
   ret i32 %conv
 }
 
-define signext i32 @test_ineui_sext(i32 zeroext %a, i32 zeroext %b) {
+define dso_local signext i32 @test_ineui_sext(i32 zeroext %a, i32 zeroext %b) {
 ; CHECK-LABEL: test_ineui_sext:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    xor r3, r3, r4
@@ -69,7 +69,7 @@ entry:
   ret i32 %sub
 }
 
-define signext i32 @test_ineui_z(i32 zeroext %a) {
+define dso_local signext i32 @test_ineui_z(i32 zeroext %a) {
 ; CHECK-LABEL: test_ineui_z:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    cntlzw r3, r3
@@ -95,7 +95,7 @@ entry:
   ret i32 %conv
 }
 
-define signext i32 @test_ineui_sext_z(i32 zeroext %a) {
+define dso_local signext i32 @test_ineui_sext_z(i32 zeroext %a) {
 ; CHECK-LABEL: test_ineui_sext_z:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    cntlzw r3, r3
@@ -124,7 +124,7 @@ entry:
   ret i32 %sub
 }
 
-define void @test_ineui_store(i32 zeroext %a, i32 zeroext %b) {
+define dso_local void @test_ineui_store(i32 zeroext %a, i32 zeroext %b) {
 ; CHECK-LABEL: test_ineui_store:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    xor r3, r3, r4
@@ -136,32 +136,31 @@ define void @test_ineui_store(i32 zeroext %a, i32 zeroext %b) {
 ; CHECK-NEXT:    blr
 ; CHECK-BE-LABEL: test_ineui_store:
 ; CHECK-BE:       # %bb.0: # %entry
-; CHECK-BE-NEXT:    addis r5, r2, .LC0@toc@ha
 ; CHECK-BE-NEXT:    xor r3, r3, r4
+; CHECK-BE-NEXT:    addis r4, r2, glob@toc@ha
 ; CHECK-BE-NEXT:    cntlzw r3, r3
-; CHECK-BE-NEXT:    ld r4, .LC0@toc@l(r5)
 ; CHECK-BE-NEXT:    srwi r3, r3, 5
 ; CHECK-BE-NEXT:    xori r3, r3, 1
-; CHECK-BE-NEXT:    stw r3, 0(r4)
+; CHECK-BE-NEXT:    stw r3, glob@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 ;
 ; CHECK-LE-LABEL: test_ineui_store:
 ; CHECK-LE:       # %bb.0: # %entry
 ; CHECK-LE-NEXT:    xor r3, r3, r4
-; CHECK-LE-NEXT:    addis r5, r2, glob@toc@ha
+; CHECK-LE-NEXT:    addis r4, r2, glob@toc@ha
 ; CHECK-LE-NEXT:    cntlzw r3, r3
 ; CHECK-LE-NEXT:    srwi r3, r3, 5
 ; CHECK-LE-NEXT:    xori r3, r3, 1
-; CHECK-LE-NEXT:    stw r3, glob@toc@l(r5)
+; CHECK-LE-NEXT:    stw r3, glob@toc@l(r4)
 ; CHECK-LE-NEXT:    blr
 entry:
   %cmp = icmp ne i32 %a, %b
   %conv = zext i1 %cmp to i32
-  store i32 %conv, i32* @glob, align 4
+  store i32 %conv, ptr @glob, align 4
   ret void
 }
 
-define void @test_ineui_sext_store(i32 zeroext %a, i32 zeroext %b) {
+define dso_local void @test_ineui_sext_store(i32 zeroext %a, i32 zeroext %b) {
 ; CHECK-LABEL: test_ineui_sext_store:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    xor r3, r3, r4
@@ -175,33 +174,32 @@ define void @test_ineui_sext_store(i32 zeroext %a, i32 zeroext %b) {
 ; CHECK-BE-LABEL: test_ineui_sext_store:
 ; CHECK-BE:       # %bb.0: # %entry
 ; CHECK-BE-NEXT:    xor r3, r3, r4
-; CHECK-BE-NEXT:    addis r5, r2, .LC0@toc@ha
+; CHECK-BE-NEXT:    addis r4, r2, glob@toc@ha
 ; CHECK-BE-NEXT:    cntlzw r3, r3
-; CHECK-BE-NEXT:    ld r4, .LC0@toc@l(r5)
 ; CHECK-BE-NEXT:    srwi r3, r3, 5
 ; CHECK-BE-NEXT:    xori r3, r3, 1
 ; CHECK-BE-NEXT:    neg r3, r3
-; CHECK-BE-NEXT:    stw r3, 0(r4)
+; CHECK-BE-NEXT:    stw r3, glob@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 ;
 ; CHECK-LE-LABEL: test_ineui_sext_store:
 ; CHECK-LE:       # %bb.0: # %entry
 ; CHECK-LE-NEXT:    xor r3, r3, r4
-; CHECK-LE-NEXT:    addis r5, r2, glob@toc@ha
+; CHECK-LE-NEXT:    addis r4, r2, glob@toc@ha
 ; CHECK-LE-NEXT:    cntlzw r3, r3
 ; CHECK-LE-NEXT:    srwi r3, r3, 5
 ; CHECK-LE-NEXT:    xori r3, r3, 1
 ; CHECK-LE-NEXT:    neg r3, r3
-; CHECK-LE-NEXT:    stw r3, glob@toc@l(r5)
+; CHECK-LE-NEXT:    stw r3, glob@toc@l(r4)
 ; CHECK-LE-NEXT:    blr
 entry:
   %cmp = icmp ne i32 %a, %b
   %sub = sext i1 %cmp to i32
-  store i32 %sub, i32* @glob, align 4
+  store i32 %sub, ptr @glob, align 4
   ret void
 }
 
-define void @test_ineui_z_store(i32 zeroext %a) {
+define dso_local void @test_ineui_z_store(i32 zeroext %a) {
 ; CHECK-LABEL: test_ineui_z_store:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    cntlzw r3, r3
@@ -212,12 +210,11 @@ define void @test_ineui_z_store(i32 zeroext %a) {
 ; CHECK-NEXT:    blr
 ; CHECK-BE-LABEL: test_ineui_z_store:
 ; CHECK-BE:       # %bb.0: # %entry
-; CHECK-BE-NEXT:    addis r4, r2, .LC0@toc@ha
 ; CHECK-BE-NEXT:    cntlzw r3, r3
-; CHECK-BE-NEXT:    ld r4, .LC0@toc@l(r4)
+; CHECK-BE-NEXT:    addis r4, r2, glob@toc@ha
 ; CHECK-BE-NEXT:    srwi r3, r3, 5
 ; CHECK-BE-NEXT:    xori r3, r3, 1
-; CHECK-BE-NEXT:    stw r3, 0(r4)
+; CHECK-BE-NEXT:    stw r3, glob@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 ;
 ; CHECK-LE-LABEL: test_ineui_z_store:
@@ -231,11 +228,11 @@ define void @test_ineui_z_store(i32 zeroext %a) {
 entry:
   %cmp = icmp ne i32 %a, 0
   %conv = zext i1 %cmp to i32
-  store i32 %conv, i32* @glob, align 4
+  store i32 %conv, ptr @glob, align 4
   ret void
 }
 
-define void @test_ineui_sext_z_store(i32 zeroext %a) {
+define dso_local void @test_ineui_sext_z_store(i32 zeroext %a) {
 ; CHECK-LABEL: test_ineui_sext_z_store:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    cntlzw r3, r3
@@ -247,13 +244,12 @@ define void @test_ineui_sext_z_store(i32 zeroext %a) {
 ; CHECK-NEXT:    blr
 ; CHECK-BE-LABEL: test_ineui_sext_z_store:
 ; CHECK-BE:       # %bb.0: # %entry
-; CHECK-BE-NEXT:    addis r4, r2, .LC0@toc@ha
 ; CHECK-BE-NEXT:    cntlzw r3, r3
+; CHECK-BE-NEXT:    addis r4, r2, glob@toc@ha
 ; CHECK-BE-NEXT:    srwi r3, r3, 5
-; CHECK-BE-NEXT:    ld r4, .LC0@toc@l(r4)
 ; CHECK-BE-NEXT:    xori r3, r3, 1
 ; CHECK-BE-NEXT:    neg r3, r3
-; CHECK-BE-NEXT:    stw r3, 0(r4)
+; CHECK-BE-NEXT:    stw r3, glob@toc@l(r4)
 ; CHECK-BE-NEXT:    blr
 ;
 ; CHECK-LE-LABEL: test_ineui_sext_z_store:
@@ -268,6 +264,6 @@ define void @test_ineui_sext_z_store(i32 zeroext %a) {
 entry:
   %cmp = icmp ne i32 %a, 0
   %sub = sext i1 %cmp to i32
-  store i32 %sub, i32* @glob, align 4
+  store i32 %sub, ptr @glob, align 4
   ret void
 }

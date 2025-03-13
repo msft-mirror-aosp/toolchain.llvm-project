@@ -9,7 +9,7 @@
 #ifndef LLDB_DATAFORMATTERS_TYPESUMMARY_H
 #define LLDB_DATAFORMATTERS_TYPESUMMARY_H
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <functional>
 #include <memory>
@@ -21,6 +21,10 @@
 #include "lldb/Core/FormatEntity.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StructuredData.h"
+
+namespace llvm {
+class MemoryBuffer;
+}
 
 namespace lldb_private {
 class TypeSummaryOptions {
@@ -38,13 +42,13 @@ public:
   TypeSummaryOptions &SetCapping(lldb::TypeSummaryCapping);
 
 private:
-  lldb::LanguageType m_lang;
-  lldb::TypeSummaryCapping m_capping;
+  lldb::LanguageType m_lang = lldb::eLanguageTypeUnknown;
+  lldb::TypeSummaryCapping m_capping = lldb::eTypeSummaryCapped;
 };
 
 class TypeSummaryImpl {
 public:
-  enum class Kind { eSummaryString, eScript, eCallback, eInternal };
+  enum class Kind { eSummaryString, eScript, eBytecode, eCallback, eInternal };
 
   virtual ~TypeSummaryImpl() = default;
 
@@ -52,7 +56,7 @@ public:
 
   class Flags {
   public:
-    Flags() : m_flags(lldb::eTypeOptionCascade) {}
+    Flags() = default;
 
     Flags(const Flags &other) : m_flags(other.m_flags) {}
 
@@ -196,7 +200,7 @@ public:
     void SetValue(uint32_t value) { m_flags = value; }
 
   private:
-    uint32_t m_flags;
+    uint32_t m_flags = lldb::eTypeOptionCascade;
   };
 
   bool Cascades() const { return m_flags.GetCascades(); }
@@ -258,12 +262,20 @@ public:
 
   virtual std::string GetDescription() = 0;
 
+  /// Get the name of the Type Summary Provider, either a C++ class, a summary
+  /// string, or a script function name.
+  virtual std::string GetName() = 0;
+
+  /// Get the name of the kind of Summary Provider, either c++, summary string,
+  /// script or python.
+  virtual std::string GetSummaryKindName();
+
   uint32_t &GetRevision() { return m_my_revision; }
 
   typedef std::shared_ptr<TypeSummaryImpl> SharedPointer;
 
 protected:
-  uint32_t m_my_revision;
+  uint32_t m_my_revision = 0;
   Flags m_flags;
 
   TypeSummaryImpl(Kind kind, const TypeSummaryImpl::Flags &flags);
@@ -292,6 +304,8 @@ struct StringSummaryFormat : public TypeSummaryImpl {
                     const TypeSummaryOptions &options) override;
 
   std::string GetDescription() override;
+
+  std::string GetName() override;
 
   static bool classof(const TypeSummaryImpl *S) {
     return S->GetKind() == Kind::eSummaryString;
@@ -340,6 +354,8 @@ struct CXXFunctionSummaryFormat : public TypeSummaryImpl {
     return S->GetKind() == Kind::eCallback;
   }
 
+  std::string GetName() override;
+
   typedef std::shared_ptr<CXXFunctionSummaryFormat> SharedPointer;
 
 private:
@@ -352,6 +368,7 @@ private:
 struct ScriptSummaryFormat : public TypeSummaryImpl {
   std::string m_function_name;
   std::string m_python_script;
+  std::string m_script_formatter_name;
   StructuredData::ObjectSP m_script_function_sp;
 
   ScriptSummaryFormat(const TypeSummaryImpl::Flags &flags,
@@ -384,6 +401,8 @@ struct ScriptSummaryFormat : public TypeSummaryImpl {
 
   std::string GetDescription() override;
 
+  std::string GetName() override;
+
   static bool classof(const TypeSummaryImpl *S) {
     return S->GetKind() == Kind::eScript;
   }
@@ -394,6 +413,23 @@ private:
   ScriptSummaryFormat(const ScriptSummaryFormat &) = delete;
   const ScriptSummaryFormat &operator=(const ScriptSummaryFormat &) = delete;
 };
+
+/// A summary formatter that is defined in LLDB formmater bytecode.
+class BytecodeSummaryFormat : public TypeSummaryImpl {
+  std::unique_ptr<llvm::MemoryBuffer> m_bytecode;
+
+public:
+  BytecodeSummaryFormat(const TypeSummaryImpl::Flags &flags,
+                        std::unique_ptr<llvm::MemoryBuffer> bytecode);
+  bool FormatObject(ValueObject *valobj, std::string &dest,
+                    const TypeSummaryOptions &options) override;
+  std::string GetDescription() override;
+  std::string GetName() override;
+  static bool classof(const TypeSummaryImpl *S) {
+    return S->GetKind() == Kind::eBytecode;
+  }
+};
+
 } // namespace lldb_private
 
 #endif // LLDB_DATAFORMATTERS_TYPESUMMARY_H

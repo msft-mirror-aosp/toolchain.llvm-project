@@ -20,8 +20,8 @@
 #include "MacOSX/x86_64/DNBArchImplX86_64.h"
 #include "MachProcess.h"
 #include "MachThread.h"
+#include <cstdlib>
 #include <mach/mach.h>
-#include <stdlib.h>
 
 #if defined(LLDB_DEBUGSERVER_RELEASE) || defined(LLDB_DEBUGSERVER_DEBUG)
 enum debugState { debugStateUnknown, debugStateOff, debugStateOn };
@@ -182,22 +182,39 @@ kern_return_t DNBArchImplX86_64::GetGPRState(bool force) {
     m_state.context.gpr.__gs = ('g' << 8) + 's';
     m_state.SetError(e_regSetGPR, Read, 0);
 #else
-    mach_msg_type_number_t count = e_regSetWordSizeGPR;
+    mach_msg_type_number_t count = e_regSetWordSizeGPRFull;
+    int flavor = __x86_64_THREAD_FULL_STATE;
     m_state.SetError(
         e_regSetGPR, Read,
-        ::thread_get_state(m_thread->MachPortNumber(), __x86_64_THREAD_STATE,
+        ::thread_get_state(m_thread->MachPortNumber(), flavor,
                            (thread_state_t)&m_state.context.gpr, &count));
+
+    if (!m_state.GetError(e_regSetGPR, Read)) {
+      m_state.hasFullGPRState = true;
+    } else {
+      m_state.hasFullGPRState = false;
+      count = e_regSetWordSizeGPR;
+      flavor = __x86_64_THREAD_STATE;
+      m_state.SetError(
+          e_regSetGPR, Read,
+          ::thread_get_state(m_thread->MachPortNumber(), flavor,
+                             (thread_state_t)&m_state.context.gpr, &count));
+    }
     DNBLogThreadedIf(
         LOG_THREAD,
-        "::thread_get_state (0x%4.4x, %u, &gpr, %u) => 0x%8.8x"
+        "::thread_get_state (0x%4.4x, %u (%s), &gpr, %u) => 0x%8.8x"
         "\n\trax = %16.16llx rbx = %16.16llx rcx = %16.16llx rdx = %16.16llx"
         "\n\trdi = %16.16llx rsi = %16.16llx rbp = %16.16llx rsp = %16.16llx"
         "\n\t r8 = %16.16llx  r9 = %16.16llx r10 = %16.16llx r11 = %16.16llx"
         "\n\tr12 = %16.16llx r13 = %16.16llx r14 = %16.16llx r15 = %16.16llx"
         "\n\trip = %16.16llx"
-        "\n\tflg = %16.16llx  cs = %16.16llx  fs = %16.16llx  gs = %16.16llx",
-        m_thread->MachPortNumber(), x86_THREAD_STATE64,
-        x86_THREAD_STATE64_COUNT, m_state.GetError(e_regSetGPR, Read),
+        "\n\tflg = %16.16llx  cs = %16.16llx  fs = %16.16llx  gs = %16.16llx"
+        "\n\t ds = %16.16llx  es = %16.16llx  ss = %16.16llx gsB = %16.16llx",
+        m_thread->MachPortNumber(), flavor,
+        m_state.hasFullGPRState ? "full" : "non-full",
+        m_state.hasFullGPRState ? e_regSetWordSizeGPRFull
+                                : e_regSetWordSizeGPR,
+        m_state.GetError(e_regSetGPR, Read),
         m_state.context.gpr.__rax, m_state.context.gpr.__rbx,
         m_state.context.gpr.__rcx, m_state.context.gpr.__rdx,
         m_state.context.gpr.__rdi, m_state.context.gpr.__rsi,
@@ -208,7 +225,9 @@ kern_return_t DNBArchImplX86_64::GetGPRState(bool force) {
         m_state.context.gpr.__r14, m_state.context.gpr.__r15,
         m_state.context.gpr.__rip, m_state.context.gpr.__rflags,
         m_state.context.gpr.__cs, m_state.context.gpr.__fs,
-        m_state.context.gpr.__gs);
+        m_state.context.gpr.__gs, m_state.context.gpr.__ds,
+        m_state.context.gpr.__es, m_state.context.gpr.__ss,
+        m_state.context.gpr.__gsbase );
 
 //      DNBLogThreadedIf (LOG_THREAD, "thread_get_state(0x%4.4x, %u, &gpr, %u)
 //      => 0x%8.8x"
@@ -459,21 +478,26 @@ kern_return_t DNBArchImplX86_64::SetGPRState() {
                   "(SetGPRState() for stop_count = %u)",
       m_thread->MachPortNumber(), kret, m_thread->Process()->StopCount());
 
+  mach_msg_type_number_t count =
+      m_state.hasFullGPRState ? e_regSetWordSizeGPRFull : e_regSetWordSizeGPR;
+  int flavor = m_state.hasFullGPRState ? __x86_64_THREAD_FULL_STATE
+                                       : __x86_64_THREAD_STATE;
   m_state.SetError(e_regSetGPR, Write,
-                   ::thread_set_state(m_thread->MachPortNumber(),
-                                      __x86_64_THREAD_STATE,
+                   ::thread_set_state(m_thread->MachPortNumber(), flavor,
                                       (thread_state_t)&m_state.context.gpr,
-                                      e_regSetWordSizeGPR));
+                                      count));
   DNBLogThreadedIf(
       LOG_THREAD,
-      "::thread_set_state (0x%4.4x, %u, &gpr, %u) => 0x%8.8x"
+      "::thread_set_state (0x%4.4x, %u (%s), &gpr, %u) => 0x%8.8x"
       "\n\trax = %16.16llx rbx = %16.16llx rcx = %16.16llx rdx = %16.16llx"
       "\n\trdi = %16.16llx rsi = %16.16llx rbp = %16.16llx rsp = %16.16llx"
       "\n\t r8 = %16.16llx  r9 = %16.16llx r10 = %16.16llx r11 = %16.16llx"
       "\n\tr12 = %16.16llx r13 = %16.16llx r14 = %16.16llx r15 = %16.16llx"
       "\n\trip = %16.16llx"
-      "\n\tflg = %16.16llx  cs = %16.16llx  fs = %16.16llx  gs = %16.16llx",
-      m_thread->MachPortNumber(), __x86_64_THREAD_STATE, e_regSetWordSizeGPR,
+      "\n\tflg = %16.16llx  cs = %16.16llx  fs = %16.16llx  gs = %16.16llx"
+      "\n\t ds = %16.16llx  es = %16.16llx  ss = %16.16llx gsB = %16.16llx",
+      m_thread->MachPortNumber(), flavor,
+      m_state.hasFullGPRState ? "full" : "non-full", count,
       m_state.GetError(e_regSetGPR, Write), m_state.context.gpr.__rax,
       m_state.context.gpr.__rbx, m_state.context.gpr.__rcx,
       m_state.context.gpr.__rdx, m_state.context.gpr.__rdi,
@@ -484,7 +508,9 @@ kern_return_t DNBArchImplX86_64::SetGPRState() {
       m_state.context.gpr.__r13, m_state.context.gpr.__r14,
       m_state.context.gpr.__r15, m_state.context.gpr.__rip,
       m_state.context.gpr.__rflags, m_state.context.gpr.__cs,
-      m_state.context.gpr.__fs, m_state.context.gpr.__gs);
+      m_state.context.gpr.__fs, m_state.context.gpr.__gs,
+      m_state.context.gpr.__ds, m_state.context.gpr.__es,
+      m_state.context.gpr.__ss, m_state.context.gpr.__gsbase);
   return m_state.GetError(e_regSetGPR, Write);
 }
 
@@ -1157,6 +1183,10 @@ enum {
   gpr_cs,
   gpr_fs,
   gpr_gs,
+  gpr_ds,
+  gpr_es,
+  gpr_ss,
+  gpr_gsbase,
   gpr_eax,
   gpr_ebx,
   gpr_ecx,
@@ -1543,6 +1573,7 @@ enum debugserver_regnums {
   debugserver_k5 = 123,
   debugserver_k6 = 124,
   debugserver_k7 = 125,
+  debugserver_gsbase = 126,
 };
 
 #define GPR_OFFSET(reg) (offsetof(DNBArchImplX86_64::GPR, __##reg))
@@ -1690,6 +1721,10 @@ const DNBRegisterInfo DNBArchImplX86_64::g_gpr_registers[] = {
     DEFINE_GPR_ALT2(cs, NULL),
     DEFINE_GPR_ALT2(fs, NULL),
     DEFINE_GPR_ALT2(gs, NULL),
+    DEFINE_GPR_ALT2(ds, NULL),
+    DEFINE_GPR_ALT2(es, NULL),
+    DEFINE_GPR_ALT2(ss, NULL),
+    DEFINE_GPR_ALT2(gsbase, NULL),
     DEFINE_GPR_PSEUDO_32(eax, rax),
     DEFINE_GPR_PSEUDO_32(ebx, rbx),
     DEFINE_GPR_PSEUDO_32(ecx, rcx),
@@ -1767,28 +1802,28 @@ const DNBRegisterInfo DNBArchImplX86_64::g_fpu_registers_no_avx[] = {
      FPU_SIZE_UINT(mxcsrmask), FPU_OFFSET(mxcsrmask), -1U, -1U, -1U, -1U, NULL,
      NULL},
 
-    {e_regSetFPU, fpu_stmm0, "stmm0", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm0, "stmm0", "st0", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm0), FPU_OFFSET(stmm0), ehframe_dwarf_stmm0,
      ehframe_dwarf_stmm0, -1U, debugserver_stmm0, NULL, NULL},
-    {e_regSetFPU, fpu_stmm1, "stmm1", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm1, "stmm1", "st1", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm1), FPU_OFFSET(stmm1), ehframe_dwarf_stmm1,
      ehframe_dwarf_stmm1, -1U, debugserver_stmm1, NULL, NULL},
-    {e_regSetFPU, fpu_stmm2, "stmm2", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm2, "stmm2", "st2", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm2), FPU_OFFSET(stmm2), ehframe_dwarf_stmm2,
      ehframe_dwarf_stmm2, -1U, debugserver_stmm2, NULL, NULL},
-    {e_regSetFPU, fpu_stmm3, "stmm3", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm3, "stmm3", "st3", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm3), FPU_OFFSET(stmm3), ehframe_dwarf_stmm3,
      ehframe_dwarf_stmm3, -1U, debugserver_stmm3, NULL, NULL},
-    {e_regSetFPU, fpu_stmm4, "stmm4", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm4, "stmm4", "st4", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm4), FPU_OFFSET(stmm4), ehframe_dwarf_stmm4,
      ehframe_dwarf_stmm4, -1U, debugserver_stmm4, NULL, NULL},
-    {e_regSetFPU, fpu_stmm5, "stmm5", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm5, "stmm5", "st5", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm5), FPU_OFFSET(stmm5), ehframe_dwarf_stmm5,
      ehframe_dwarf_stmm5, -1U, debugserver_stmm5, NULL, NULL},
-    {e_regSetFPU, fpu_stmm6, "stmm6", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm6, "stmm6", "st6", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm6), FPU_OFFSET(stmm6), ehframe_dwarf_stmm6,
      ehframe_dwarf_stmm6, -1U, debugserver_stmm6, NULL, NULL},
-    {e_regSetFPU, fpu_stmm7, "stmm7", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm7, "stmm7", "st7", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm7), FPU_OFFSET(stmm7), ehframe_dwarf_stmm7,
      ehframe_dwarf_stmm7, -1U, debugserver_stmm7, NULL, NULL},
 
@@ -1882,28 +1917,28 @@ const DNBRegisterInfo DNBArchImplX86_64::g_fpu_registers_avx[] = {
      FPU_SIZE_UINT(mxcsrmask), AVX_OFFSET(mxcsrmask), -1U, -1U, -1U, -1U, NULL,
      NULL},
 
-    {e_regSetFPU, fpu_stmm0, "stmm0", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm0, "stmm0", "st0", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm0), AVX_OFFSET(stmm0), ehframe_dwarf_stmm0,
      ehframe_dwarf_stmm0, -1U, debugserver_stmm0, NULL, NULL},
-    {e_regSetFPU, fpu_stmm1, "stmm1", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm1, "stmm1", "st1", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm1), AVX_OFFSET(stmm1), ehframe_dwarf_stmm1,
      ehframe_dwarf_stmm1, -1U, debugserver_stmm1, NULL, NULL},
-    {e_regSetFPU, fpu_stmm2, "stmm2", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm2, "stmm2", "st2", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm2), AVX_OFFSET(stmm2), ehframe_dwarf_stmm2,
      ehframe_dwarf_stmm2, -1U, debugserver_stmm2, NULL, NULL},
-    {e_regSetFPU, fpu_stmm3, "stmm3", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm3, "stmm3", "st3", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm3), AVX_OFFSET(stmm3), ehframe_dwarf_stmm3,
      ehframe_dwarf_stmm3, -1U, debugserver_stmm3, NULL, NULL},
-    {e_regSetFPU, fpu_stmm4, "stmm4", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm4, "stmm4", "st4", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm4), AVX_OFFSET(stmm4), ehframe_dwarf_stmm4,
      ehframe_dwarf_stmm4, -1U, debugserver_stmm4, NULL, NULL},
-    {e_regSetFPU, fpu_stmm5, "stmm5", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm5, "stmm5", "st5", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm5), AVX_OFFSET(stmm5), ehframe_dwarf_stmm5,
      ehframe_dwarf_stmm5, -1U, debugserver_stmm5, NULL, NULL},
-    {e_regSetFPU, fpu_stmm6, "stmm6", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm6, "stmm6", "st6", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm6), AVX_OFFSET(stmm6), ehframe_dwarf_stmm6,
      ehframe_dwarf_stmm6, -1U, debugserver_stmm6, NULL, NULL},
-    {e_regSetFPU, fpu_stmm7, "stmm7", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm7, "stmm7", "st7", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm7), AVX_OFFSET(stmm7), ehframe_dwarf_stmm7,
      ehframe_dwarf_stmm7, -1U, debugserver_stmm7, NULL, NULL},
 
@@ -2080,28 +2115,28 @@ const DNBRegisterInfo DNBArchImplX86_64::g_fpu_registers_avx512f[] = {
      FPU_SIZE_UINT(mxcsrmask), AVX_OFFSET(mxcsrmask), -1U, -1U, -1U, -1U, NULL,
      NULL},
 
-    {e_regSetFPU, fpu_stmm0, "stmm0", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm0, "stmm0", "st0", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm0), AVX_OFFSET(stmm0), ehframe_dwarf_stmm0,
      ehframe_dwarf_stmm0, -1U, debugserver_stmm0, NULL, NULL},
-    {e_regSetFPU, fpu_stmm1, "stmm1", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm1, "stmm1", "st1", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm1), AVX_OFFSET(stmm1), ehframe_dwarf_stmm1,
      ehframe_dwarf_stmm1, -1U, debugserver_stmm1, NULL, NULL},
-    {e_regSetFPU, fpu_stmm2, "stmm2", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm2, "stmm2", "st2", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm2), AVX_OFFSET(stmm2), ehframe_dwarf_stmm2,
      ehframe_dwarf_stmm2, -1U, debugserver_stmm2, NULL, NULL},
-    {e_regSetFPU, fpu_stmm3, "stmm3", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm3, "stmm3", "st3", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm3), AVX_OFFSET(stmm3), ehframe_dwarf_stmm3,
      ehframe_dwarf_stmm3, -1U, debugserver_stmm3, NULL, NULL},
-    {e_regSetFPU, fpu_stmm4, "stmm4", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm4, "stmm4", "st4", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm4), AVX_OFFSET(stmm4), ehframe_dwarf_stmm4,
      ehframe_dwarf_stmm4, -1U, debugserver_stmm4, NULL, NULL},
-    {e_regSetFPU, fpu_stmm5, "stmm5", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm5, "stmm5", "st5", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm5), AVX_OFFSET(stmm5), ehframe_dwarf_stmm5,
      ehframe_dwarf_stmm5, -1U, debugserver_stmm5, NULL, NULL},
-    {e_regSetFPU, fpu_stmm6, "stmm6", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm6, "stmm6", "st6", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm6), AVX_OFFSET(stmm6), ehframe_dwarf_stmm6,
      ehframe_dwarf_stmm6, -1U, debugserver_stmm6, NULL, NULL},
-    {e_regSetFPU, fpu_stmm7, "stmm7", NULL, Vector, VectorOfUInt8,
+    {e_regSetFPU, fpu_stmm7, "stmm7", "st7", Vector, VectorOfUInt8,
      FPU_SIZE_MMST(stmm7), AVX_OFFSET(stmm7), ehframe_dwarf_stmm7,
      ehframe_dwarf_stmm7, -1U, debugserver_stmm7, NULL, NULL},
 
@@ -2313,6 +2348,8 @@ bool DNBArchImplX86_64::GetRegisterValue(uint32_t set, uint32_t reg,
     value->info = *regInfo;
     switch (set) {
     case e_regSetGPR:
+      if (reg > gpr_gs && !m_state.hasFullGPRState)
+        return false;
       if (reg < k_num_gpr_registers) {
         value->value.uint64 = ((uint64_t *)(&m_state.context.gpr))[reg];
         return true;
@@ -2524,6 +2561,8 @@ bool DNBArchImplX86_64::SetRegisterValue(uint32_t set, uint32_t reg,
   if (regInfo) {
     switch (set) {
     case e_regSetGPR:
+      if (reg > gpr_gs && !m_state.hasFullGPRState)
+        return false;
       if (reg < k_num_gpr_registers) {
         ((uint64_t *)(&m_state.context.gpr))[reg] = value->value.uint64;
         success = true;
@@ -2632,7 +2671,8 @@ bool DNBArchImplX86_64::SetRegisterValue(uint32_t set, uint32_t reg,
                &value->value.uint8, 16);
         memcpy(&m_state.context.fpu.avx.__fpu_ymmh0 + (reg - fpu_ymm0),
                (&value->value.uint8) + 16, 16);
-        return true;
+        success = true;
+        break;
       case fpu_k0:
       case fpu_k1:
       case fpu_k2:
@@ -2643,7 +2683,8 @@ bool DNBArchImplX86_64::SetRegisterValue(uint32_t set, uint32_t reg,
       case fpu_k7:
         memcpy(&m_state.context.fpu.avx512f.__fpu_k0 + (reg - fpu_k0),
                &value->value.uint8, 8);
-        return true;
+        success = true;
+        break;
       case fpu_zmm0:
       case fpu_zmm1:
       case fpu_zmm2:
@@ -2666,7 +2707,8 @@ bool DNBArchImplX86_64::SetRegisterValue(uint32_t set, uint32_t reg,
                &value->value.uint8 + 16, 16);
         memcpy(&m_state.context.fpu.avx512f.__fpu_zmmh0 + (reg - fpu_zmm0),
                &value->value.uint8 + 32, 32);
-        return true;
+        success = true;
+        break;
       case fpu_zmm16:
       case fpu_zmm17:
       case fpu_zmm18:
@@ -2685,7 +2727,8 @@ bool DNBArchImplX86_64::SetRegisterValue(uint32_t set, uint32_t reg,
       case fpu_zmm31:
         memcpy(&m_state.context.fpu.avx512f.__fpu_zmm16 + (reg - fpu_zmm16),
                &value->value.uint8, 64);
-        return true;
+        success = true;
+        break;
       }
       break;
 

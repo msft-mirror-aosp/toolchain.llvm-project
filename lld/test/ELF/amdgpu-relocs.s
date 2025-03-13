@@ -5,6 +5,9 @@
 # RUN: llvm-nm %t.so | FileCheck %s --check-prefix=NM
 # RUN: llvm-readelf -x .rodata -x nonalloc %t.so | FileCheck %s --check-prefix=HEX
 
+## ABS64 and RELATIVE64 relocs do not cause --check-dynamic-relocations errors.
+# RUN: ld.lld --hash-style=sysv -shared %t.o -o /dev/null --apply-dynamic-relocs
+
 .text
 
 kernel0:
@@ -98,19 +101,19 @@ foo:
 # CHECK-NEXT: R_AMDGPU_ABS64 common_var0 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 common_var1 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 common_var2 0x0
-# CHECK-NEXT: R_AMDGPU_ABS64 extern_var0 0x0
-# CHECK-NEXT: R_AMDGPU_ABS64 extern_var1 0x0
-# CHECK-NEXT: R_AMDGPU_ABS64 extern_var2 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 global_var0 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 global_var1 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 global_var2 0x0
-# CHECK-NEXT: R_AMDGPU_ABS64 temp 0x0
+# CHECK-NEXT: R_AMDGPU_ABS64 extern_var0 0x0
+# CHECK-NEXT: R_AMDGPU_ABS64 extern_var1 0x0
+# CHECK-NEXT: R_AMDGPU_ABS64 extern_var2 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 weak_var0 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 weak_var1 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 weak_var2 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 weakref_alias_var0 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 weakref_alias_var1 0x0
 # CHECK-NEXT: R_AMDGPU_ABS64 weakref_alias_var2 0x0
+# CHECK-NEXT: R_AMDGPU_ABS64 temp 0x0
 # CHECK-NEXT: }
 # CHECK-NEXT: ]
 

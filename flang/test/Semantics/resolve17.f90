@@ -1,4 +1,4 @@
-! RUN: %S/test_errors.sh %s %t %f18
+! RUN: %python %S/test_errors.py %s %flang_fc1 -pedantic
 module m
   integer :: foo
   !Note: PGI, Intel, and GNU allow this; NAG and Sun do not
@@ -11,7 +11,7 @@ module m2
   interface s
   end interface
 contains
-  !ERROR: 's' may not be the name of both a generic interface and a procedure unless it is a specific procedure of the generic
+  !WARNING: 's' should not be the name of both a generic interface and a procedure unless it is a specific procedure of the generic
   subroutine s
   end subroutine
 end module
@@ -176,26 +176,13 @@ module m9b
     module procedure g
   end interface
 contains
-  subroutine g(x)
-    real :: x
-  end
-end module
-module m9c
-  interface g
-    module procedure g
-  end interface
-contains
   subroutine g()
   end
 end module
-subroutine s9a
+subroutine s9
+  !PORTABILITY: USE-associated generic 'g' should not have specific procedures 'g' and 'g' as their interfaces are not distinguishable
   use m9a
   use m9b
-end
-subroutine s9b
-  !ERROR: USE-associated generic 'g' may not have specific procedures 'g' and 'g' as their interfaces are not distinguishable
-  use m9a
-  use m9c
 end
 
 module m10a
@@ -221,20 +208,130 @@ contains
   end
 end
 
-module m11a
+module m12a
+  interface ga
+    module procedure sa
+  end interface
+contains
+  subroutine sa(i)
+  end
+end
+module m12b
+  use m12a
+  interface gb
+    module procedure sb
+  end interface
+contains
+  subroutine sb(x)
+  end
+end
+module m12c
+  use m12b, only: gc => gb
+end
+module m12d
+  use m12a, only: g => ga
+  use m12c, only: g => gc
   interface g
   end interface
-  type g
-  end type
 end module
-module m11b
-  interface g
+
+module m13a
+ contains
+  subroutine subr
+  end subroutine
+end module
+module m13b
+  use m13a
+  interface subr
+    module procedure subr
   end interface
-  type g
+end module
+module m13c
+  use m13a
+  use m13b
+ contains
+  subroutine test
+    call subr
+  end subroutine
+end module
+module m13d
+  use m13b
+  use m13a
+ contains
+  subroutine test
+    call subr
+  end subroutine
+end module
+
+module m14a
+  type :: foo
+    integer :: n
   end type
 end module
-module m11c
-  use m11a
-  !ERROR: Generic interface 'g' has ambiguous derived types from modules 'm11a' and 'm11b'
-  use m11b
+module m14b
+  interface foo
+    module procedure bar
+  end interface
+ contains
+  real function bar(x)
+    real, intent(in) :: x
+    bar = x
+  end function
+end module
+module m14c
+  use m14a
+  use m14b
+  type(foo) :: x
+end module
+module m14d
+  use m14a
+  use m14b
+  type(foo) :: x
+ contains
+  subroutine test
+    real :: y
+    y = foo(1.0)
+    x = foo(2)
+  end subroutine
+end module
+module m14e
+  use m14b
+  use m14a
+  type(foo) :: x
+ contains
+  subroutine test
+    real :: y
+    y = foo(1.0)
+    x = foo(2)
+  end subroutine
+end module
+
+module m15a
+  interface foo
+    module procedure bar
+  end interface
+ contains
+  subroutine bar
+  end subroutine
+end module
+module m15b
+  !ERROR: Cannot use-associate 'foo'; it is already declared in this scope
+  use m15a
+ contains
+  subroutine foo
+  end subroutine
+end module
+module m15c
+ contains
+  subroutine foo
+  end subroutine
+end module
+module m15d
+  use m15a
+  use m15c
+ contains
+  subroutine test
+    !ERROR: Reference to 'foo' is ambiguous
+    call foo
+  end subroutine
 end module

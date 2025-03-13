@@ -1,10 +1,22 @@
-class FooNS
-{
+class FooBase {
 public:
-    virtual void bar();
-    virtual char baz() = 0;
+  virtual void bar();
 
 protected:
-    int x;
+  FooBase();
+
+  int x;
 };
 
+namespace ns {
+class Foo2Base {
+public:
+  virtual void bar();
+
+protected:
+  Foo2Base();
+
+  int x;
+};
+
+} // namespace ns

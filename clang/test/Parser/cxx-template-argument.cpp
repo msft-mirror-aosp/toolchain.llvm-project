@@ -1,7 +1,7 @@
-// RUN: %clang_cc1 -fsyntax-only -verify %s
+// RUN: %clang_cc1 -fsyntax-only -verify -std=c++14 %s
 // RUN: %clang_cc1 -fsyntax-only -verify -std=c++98 %s
 // RUN: %clang_cc1 -fsyntax-only -verify -std=c++11 %s
-// RUN: %clang_cc1 -fsyntax-only -verify %s -fdelayed-template-parsing
+// RUN: %clang_cc1 -fsyntax-only -verify -std=c++14 %s -fdelayed-template-parsing
 // RUN: %clang_cc1 -fsyntax-only -verify -std=c++98 %s -fdelayed-template-parsing
 // RUN: %clang_cc1 -fsyntax-only -verify -std=c++11 %s -fdelayed-template-parsing
 
@@ -22,15 +22,18 @@ namespace greatergreater {
   void f(S<int>=0); // expected-error {{a space is required between a right angle bracket and an equals sign (use '> =')}}
   void f(S<S<int>>=S<int>()); // expected-error {{use '> >'}} expected-error {{use '> ='}}
   template<typename T> void t();
+  struct R {
+    friend void operator==(void (*)(), R) {}
+    friend void operator>=(void (*)(), R) {}
+  };
   void g() {
-    void (*p)() = &t<int>;
-    (void)(&t<int>==p); // expected-error {{use '> ='}}
-    (void)(&t<int>>=p); // expected-error {{use '> >'}}
-    (void)(&t<S<int>>>=p);
+    (void)(&t<int>==R()); // expected-error {{use '> ='}}
+    (void)(&t<int>>=R()); // expected-error {{use '> >'}}
+    (void)(&t<S<int>>>=R());
 #if __cplusplus <= 199711L
     // expected-error@-2 {{use '> >'}}
 #endif
-    (void)(&t<S<int>>==p); // expected-error {{use '> >'}} expected-error {{use '> ='}}
+    (void)(&t<S<int>>==R()); // expected-error {{use '> >'}} expected-error {{use '> ='}}
   }
 }
 
@@ -137,4 +140,16 @@ namespace r360308_regression {
     const bool a = p.first<FT(0), b = p.second>FT(0);
     return a == b;
   }
+}
+
+namespace GH95598 {
+template<typename _Tp, bool _IsPtr = __is_pointer(_Tp)>
+struct __is_pointer {};
+// expected-warning@-1 {{keyword '__is_pointer' will be made available as an identifier for the remainder of the translation unit}}
+
+template<bool>
+struct ts{};
+
+template<typename _Tp>
+  struct is_pointer : ts<__is_pointer(_Tp)> {};
 }

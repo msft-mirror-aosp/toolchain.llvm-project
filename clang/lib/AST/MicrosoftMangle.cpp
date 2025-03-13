@@ -21,23 +21,37 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/GlobalDecl.h"
 #include "clang/AST/Mangle.h"
 #include "clang/AST/VTableBuilder.h"
 #include "clang/Basic/ABI.h"
 #include "clang/Basic/DiagnosticOptions.h"
-#include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CRC.h"
 #include "llvm/Support/MD5.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/xxhash.h"
+#include <functional>
+#include <optional>
 
 using namespace clang;
 
 namespace {
+
+// Get GlobalDecl of DeclContext of local entities.
+static GlobalDecl getGlobalDeclAsDeclContext(const DeclContext *DC) {
+  GlobalDecl GD;
+  if (auto *CD = dyn_cast<CXXConstructorDecl>(DC))
+    GD = GlobalDecl(CD, Ctor_Complete);
+  else if (auto *DD = dyn_cast<CXXDestructorDecl>(DC))
+    GD = GlobalDecl(DD, Dtor_Complete);
+  else
+    GD = GlobalDecl(cast<FunctionDecl>(DC));
+  return GD;
+}
 
 struct msvc_hashing_ostream : public llvm::raw_svector_ostream {
   raw_ostream &OS;
@@ -47,7 +61,7 @@ struct msvc_hashing_ostream : public llvm::raw_svector_ostream {
       : llvm::raw_svector_ostream(Buffer), OS(OS) {}
   ~msvc_hashing_ostream() override {
     StringRef MangledName = str();
-    bool StartsWithEscape = MangledName.startswith("\01");
+    bool StartsWithEscape = MangledName.starts_with("\01");
     if (StartsWithEscape)
       MangledName = MangledName.drop_front(1);
     if (MangledName.size() < 4096) {
@@ -129,12 +143,13 @@ class MicrosoftMangleContextImpl : public MicrosoftMangleContext {
   llvm::DenseMap<DiscriminatorKeyTy, unsigned> Discriminator;
   llvm::DenseMap<const NamedDecl *, unsigned> Uniquifier;
   llvm::DenseMap<const CXXRecordDecl *, unsigned> LambdaIds;
-  llvm::DenseMap<const NamedDecl *, unsigned> SEHFilterIds;
-  llvm::DenseMap<const NamedDecl *, unsigned> SEHFinallyIds;
+  llvm::DenseMap<GlobalDecl, unsigned> SEHFilterIds;
+  llvm::DenseMap<GlobalDecl, unsigned> SEHFinallyIds;
   SmallString<16> AnonymousNamespaceHash;
 
 public:
-  MicrosoftMangleContextImpl(ASTContext &Context, DiagnosticsEngine &Diags);
+  MicrosoftMangleContextImpl(ASTContext &Context, DiagnosticsEngine &Diags,
+                             bool IsAux = false);
   bool shouldMangleCXXName(const NamedDecl *D) override;
   bool shouldMangleStringLiteral(const StringLiteral *SL) override;
   void mangleCXXName(GlobalDecl GD, raw_ostream &Out) override;
@@ -142,9 +157,9 @@ public:
                                 const MethodVFTableLocation &ML,
                                 raw_ostream &Out) override;
   void mangleThunk(const CXXMethodDecl *MD, const ThunkInfo &Thunk,
-                   raw_ostream &) override;
+                   bool ElideOverrideInfo, raw_ostream &) override;
   void mangleCXXDtorThunk(const CXXDestructorDecl *DD, CXXDtorType Type,
-                          const ThisAdjustment &ThisAdjustment,
+                          const ThunkInfo &Thunk, bool ElideOverrideInfo,
                           raw_ostream &) override;
   void mangleCXXVFTable(const CXXRecordDecl *Derived,
                         ArrayRef<const CXXRecordDecl *> BasePath,
@@ -152,6 +167,8 @@ public:
   void mangleCXXVBTable(const CXXRecordDecl *Derived,
                         ArrayRef<const CXXRecordDecl *> BasePath,
                         raw_ostream &Out) override;
+
+  void mangleCXXVTable(const CXXRecordDecl *, raw_ostream &) override;
   void mangleCXXVirtualDisplacementMap(const CXXRecordDecl *SrcRD,
                                        const CXXRecordDecl *DstRD,
                                        raw_ostream &Out) override;
@@ -165,7 +182,8 @@ public:
                               int32_t VBPtrOffset, uint32_t VBIndex,
                               raw_ostream &Out) override;
   void mangleCXXRTTI(QualType T, raw_ostream &Out) override;
-  void mangleCXXRTTIName(QualType T, raw_ostream &Out) override;
+  void mangleCXXRTTIName(QualType T, raw_ostream &Out,
+                         bool NormalizeIntegers) override;
   void mangleCXXRTTIBaseClassDescriptor(const CXXRecordDecl *Derived,
                                         uint32_t NVOffset, int32_t VBPtrOffset,
                                         uint32_t VBTableOffset, uint32_t Flags,
@@ -178,7 +196,8 @@ public:
   mangleCXXRTTICompleteObjectLocator(const CXXRecordDecl *Derived,
                                      ArrayRef<const CXXRecordDecl *> BasePath,
                                      raw_ostream &Out) override;
-  void mangleTypeName(QualType T, raw_ostream &) override;
+  void mangleCanonicalTypeName(QualType T, raw_ostream &,
+                               bool NormalizeIntegers) override;
   void mangleReferenceTemporary(const VarDecl *, unsigned ManglingNumber,
                                 raw_ostream &) override;
   void mangleStaticGuardVariable(const VarDecl *D, raw_ostream &Out) override;
@@ -187,9 +206,9 @@ public:
   void mangleDynamicInitializer(const VarDecl *D, raw_ostream &Out) override;
   void mangleDynamicAtExitDestructor(const VarDecl *D,
                                      raw_ostream &Out) override;
-  void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
+  void mangleSEHFilterExpression(GlobalDecl EnclosingDecl,
                                  raw_ostream &Out) override;
-  void mangleSEHFinallyBlock(const NamedDecl *EnclosingDecl,
+  void mangleSEHFinallyBlock(GlobalDecl EnclosingDecl,
                              raw_ostream &Out) override;
   void mangleStringLiteral(const StringLiteral *SL, raw_ostream &Out) override;
   bool getNextDiscriminator(const NamedDecl *ND, unsigned &disc) {
@@ -208,7 +227,7 @@ public:
 
     // Use the canonical number for externally visible decls.
     if (ND->isExternallyVisible()) {
-      disc = getASTContext().getManglingNumber(ND);
+      disc = getASTContext().getManglingNumber(ND, isAux());
       return true;
     }
 
@@ -228,6 +247,34 @@ public:
     return true;
   }
 
+  std::string getLambdaString(const CXXRecordDecl *Lambda) override {
+    assert(Lambda->isLambda() && "RD must be a lambda!");
+    std::string Name("<lambda_");
+
+    Decl *LambdaContextDecl = Lambda->getLambdaContextDecl();
+    unsigned LambdaManglingNumber = Lambda->getLambdaManglingNumber();
+    unsigned LambdaId;
+    const ParmVarDecl *Parm = dyn_cast_or_null<ParmVarDecl>(LambdaContextDecl);
+    const FunctionDecl *Func =
+        Parm ? dyn_cast<FunctionDecl>(Parm->getDeclContext()) : nullptr;
+
+    if (Func) {
+      unsigned DefaultArgNo =
+          Func->getNumParams() - Parm->getFunctionScopeIndex();
+      Name += llvm::utostr(DefaultArgNo);
+      Name += "_";
+    }
+
+    if (LambdaManglingNumber)
+      LambdaId = LambdaManglingNumber;
+    else
+      LambdaId = getLambdaIdForDebugInfo(Lambda);
+
+    Name += llvm::utostr(LambdaId);
+    Name += ">";
+    return Name;
+  }
+
   unsigned getLambdaId(const CXXRecordDecl *RD) {
     assert(RD->isLambda() && "RD must be a lambda!");
     assert(!RD->isExternallyVisible() && "RD must not be visible!");
@@ -236,6 +283,15 @@ public:
     std::pair<llvm::DenseMap<const CXXRecordDecl *, unsigned>::iterator, bool>
         Result = LambdaIds.insert(std::make_pair(RD, LambdaIds.size()));
     return Result.first->second;
+  }
+
+  unsigned getLambdaIdForDebugInfo(const CXXRecordDecl *RD) {
+    assert(RD->isLambda() && "RD must be a lambda!");
+    assert(!RD->isExternallyVisible() && "RD must not be visible!");
+    assert(RD->getLambdaManglingNumber() == 0 &&
+           "RD must not have a mangling number!");
+    // The lambda should exist, but return 0 in case it doesn't.
+    return LambdaIds.lookup(RD);
   }
 
   /// Return a character sequence that is (somewhat) unique to the TU suitable
@@ -269,8 +325,8 @@ class MicrosoftCXXNameMangler {
 
   typedef llvm::DenseMap<const void *, StringRef> TemplateArgStringMap;
   TemplateArgStringMap TemplateArgStrings;
-  llvm::StringSaver TemplateArgStringStorage;
   llvm::BumpPtrAllocator TemplateArgStringStorageAlloc;
+  llvm::StringSaver TemplateArgStringStorage;
 
   typedef std::set<std::pair<int, bool>> PassObjectSizeArgsSet;
   PassObjectSizeArgsSet PassObjectSizeArgs;
@@ -279,40 +335,58 @@ class MicrosoftCXXNameMangler {
 
   const bool PointersAre64Bit;
 
+  DiagnosticBuilder Error(SourceLocation, StringRef, StringRef);
+  DiagnosticBuilder Error(SourceLocation, StringRef);
+  DiagnosticBuilder Error(StringRef);
+
 public:
   enum QualifierMangleMode { QMM_Drop, QMM_Mangle, QMM_Escape, QMM_Result };
+  enum class TplArgKind { ClassNTTP, StructuralValue };
 
   MicrosoftCXXNameMangler(MicrosoftMangleContextImpl &C, raw_ostream &Out_)
       : Context(C), Out(Out_), Structor(nullptr), StructorType(-1),
         TemplateArgStringStorage(TemplateArgStringStorageAlloc),
-        PointersAre64Bit(C.getASTContext().getTargetInfo().getPointerWidth(0) ==
-                         64) {}
+        PointersAre64Bit(C.getASTContext().getTargetInfo().getPointerWidth(
+                             LangAS::Default) == 64) {}
 
   MicrosoftCXXNameMangler(MicrosoftMangleContextImpl &C, raw_ostream &Out_,
                           const CXXConstructorDecl *D, CXXCtorType Type)
       : Context(C), Out(Out_), Structor(getStructor(D)), StructorType(Type),
         TemplateArgStringStorage(TemplateArgStringStorageAlloc),
-        PointersAre64Bit(C.getASTContext().getTargetInfo().getPointerWidth(0) ==
-                         64) {}
+        PointersAre64Bit(C.getASTContext().getTargetInfo().getPointerWidth(
+                             LangAS::Default) == 64) {}
 
   MicrosoftCXXNameMangler(MicrosoftMangleContextImpl &C, raw_ostream &Out_,
                           const CXXDestructorDecl *D, CXXDtorType Type)
       : Context(C), Out(Out_), Structor(getStructor(D)), StructorType(Type),
         TemplateArgStringStorage(TemplateArgStringStorageAlloc),
-        PointersAre64Bit(C.getASTContext().getTargetInfo().getPointerWidth(0) ==
-                         64) {}
+        PointersAre64Bit(C.getASTContext().getTargetInfo().getPointerWidth(
+                             LangAS::Default) == 64) {}
 
   raw_ostream &getStream() const { return Out; }
 
-  void mangle(const NamedDecl *D, StringRef Prefix = "?");
-  void mangleName(const NamedDecl *ND);
-  void mangleFunctionEncoding(const FunctionDecl *FD, bool ShouldMangle);
+  void mangle(GlobalDecl GD, StringRef Prefix = "?");
+  void mangleName(GlobalDecl GD);
+  void mangleFunctionEncoding(GlobalDecl GD, bool ShouldMangle);
   void mangleVariableEncoding(const VarDecl *VD);
   void mangleMemberDataPointer(const CXXRecordDecl *RD, const ValueDecl *VD,
+                               const NonTypeTemplateParmDecl *PD,
+                               QualType TemplateArgType,
                                StringRef Prefix = "$");
+  void mangleMemberDataPointerInClassNTTP(const CXXRecordDecl *,
+                                          const ValueDecl *);
   void mangleMemberFunctionPointer(const CXXRecordDecl *RD,
                                    const CXXMethodDecl *MD,
+                                   const NonTypeTemplateParmDecl *PD,
+                                   QualType TemplateArgType,
                                    StringRef Prefix = "$");
+  void mangleFunctionPointer(const FunctionDecl *FD,
+                             const NonTypeTemplateParmDecl *PD,
+                             QualType TemplateArgType);
+  void mangleVarDecl(const VarDecl *VD, const NonTypeTemplateParmDecl *PD,
+                     QualType TemplateArgType);
+  void mangleMemberFunctionPointerInClassNTTP(const CXXRecordDecl *RD,
+                                              const CXXMethodDecl *MD);
   void mangleVirtualMemPtrThunk(const CXXMethodDecl *MD,
                                 const MethodVFTableLocation &ML);
   void mangleNumber(int64_t Number);
@@ -321,7 +395,7 @@ public:
   void mangleBits(llvm::APInt Number);
   void mangleTagTypeKind(TagTypeKind TK);
   void mangleArtificialTagType(TagTypeKind TK, StringRef UnqualifiedName,
-                              ArrayRef<StringRef> NestedNames = None);
+                               ArrayRef<StringRef> NestedNames = {});
   void mangleAddressSpaceType(QualType T, Qualifiers Quals, SourceRange Range);
   void mangleType(QualType T, SourceRange Range,
                   QualifierMangleMode QMM = QMM_Mangle);
@@ -329,7 +403,10 @@ public:
                           const FunctionDecl *D = nullptr,
                           bool ForceThisQuals = false,
                           bool MangleExceptionSpec = true);
-  void mangleNestedName(const NamedDecl *ND);
+  void mangleSourceName(StringRef Name);
+  void mangleNestedName(GlobalDecl GD);
+
+  void mangleAutoReturnType(QualType T, QualifierMangleMode QMM);
 
 private:
   bool isStructorDecl(const NamedDecl *ND) const {
@@ -343,11 +420,10 @@ private:
                                   AddrSpace == LangAS::ptr32_uptr));
   }
 
-  void mangleUnqualifiedName(const NamedDecl *ND) {
-    mangleUnqualifiedName(ND, ND->getDeclName());
+  void mangleUnqualifiedName(GlobalDecl GD) {
+    mangleUnqualifiedName(GD, cast<NamedDecl>(GD.getDecl())->getDeclName());
   }
-  void mangleUnqualifiedName(const NamedDecl *ND, DeclarationName Name);
-  void mangleSourceName(StringRef Name);
+  void mangleUnqualifiedName(GlobalDecl GD, DeclarationName Name);
   void mangleOperatorName(OverloadedOperatorKind OO, SourceLocation Loc);
   void mangleCXXDtorType(CXXDtorType T);
   void mangleQualifiers(Qualifiers Quals, bool IsMember);
@@ -355,9 +431,9 @@ private:
   void manglePointerCVQualifiers(Qualifiers Quals);
   void manglePointerExtQualifiers(Qualifiers Quals, QualType PointeeType);
 
-  void mangleUnscopedTemplateName(const TemplateDecl *ND);
+  void mangleUnscopedTemplateName(GlobalDecl GD);
   void
-  mangleTemplateInstantiationName(const TemplateDecl *TD,
+  mangleTemplateInstantiationName(GlobalDecl GD,
                                   const TemplateArgumentList &TemplateArgs);
   void mangleObjCMethodName(const ObjCMethodDecl *MD);
 
@@ -381,8 +457,8 @@ private:
   void mangleDecayedArrayType(const ArrayType *T);
   void mangleArrayType(const ArrayType *T);
   void mangleFunctionClass(const FunctionDecl *FD);
-  void mangleCallingConvention(CallingConv CC);
-  void mangleCallingConvention(const FunctionType *T);
+  void mangleCallingConvention(CallingConv CC, SourceRange Range);
+  void mangleCallingConvention(const FunctionType *T, SourceRange Range);
   void mangleIntegerLiteral(const llvm::APSInt &Number,
                             const NonTypeTemplateParmDecl *PD = nullptr,
                             QualType TemplateArgType = QualType());
@@ -393,20 +469,26 @@ private:
                           const TemplateArgumentList &TemplateArgs);
   void mangleTemplateArg(const TemplateDecl *TD, const TemplateArgument &TA,
                          const NamedDecl *Parm);
-  void mangleTemplateArgValue(QualType T, const APValue &V,
-                              bool WithScalarType = true);
+  void mangleTemplateArgValue(QualType T, const APValue &V, TplArgKind,
+                              bool WithScalarType = false);
 
   void mangleObjCProtocol(const ObjCProtocolDecl *PD);
   void mangleObjCLifetime(const QualType T, Qualifiers Quals,
                           SourceRange Range);
   void mangleObjCKindOfType(const ObjCObjectType *T, Qualifiers Quals,
                             SourceRange Range);
+
+  void mangleAutoReturnType(const MemberPointerType *T, Qualifiers Quals);
+  void mangleAutoReturnType(const PointerType *T, Qualifiers Quals);
+  void mangleAutoReturnType(const LValueReferenceType *T, Qualifiers Quals);
+  void mangleAutoReturnType(const RValueReferenceType *T, Qualifiers Quals);
 };
 }
 
 MicrosoftMangleContextImpl::MicrosoftMangleContextImpl(ASTContext &Context,
-                                                       DiagnosticsEngine &Diags)
-    : MicrosoftMangleContext(Context, Diags) {
+                                                       DiagnosticsEngine &Diags,
+                                                       bool IsAux)
+    : MicrosoftMangleContext(Context, Diags, IsAux) {
   // To mangle anonymous namespaces, hash the path to the main source file. The
   // path should be whatever (probably relative) path was passed on the command
   // line. The goal is for the compiler to produce the same output regardless of
@@ -422,9 +504,9 @@ MicrosoftMangleContextImpl::MicrosoftMangleContextImpl(ASTContext &Context,
   // The generated names are intended to look similar to what MSVC generates,
   // which are something like "?A0x01234567@".
   SourceManager &SM = Context.getSourceManager();
-  if (const FileEntry *FE = SM.getFileEntryForID(SM.getMainFileID())) {
+  if (OptionalFileEntryRef FE = SM.getFileEntryRefForID(SM.getMainFileID())) {
     // Truncate the hash so we get 8 characters of hexadecimal.
-    uint32_t TruncatedHash = uint32_t(xxHash64(FE->getName()));
+    uint32_t TruncatedHash = uint32_t(xxh3_64bits(FE->getName()));
     AnonymousNamespaceHash = llvm::utohexstr(TruncatedHash);
   } else {
     // If we don't have a path to the main file, we'll just use 0.
@@ -478,9 +560,8 @@ bool MicrosoftMangleContextImpl::shouldMangleCXXName(const NamedDecl *D) {
       while (!DC->isNamespace() && !DC->isTranslationUnit())
         DC = getEffectiveParentContext(DC);
 
-    if (DC->isTranslationUnit() && D->getFormalLinkage() == InternalLinkage &&
-        !isa<VarTemplateSpecializationDecl>(D) &&
-        D->getIdentifier() != nullptr)
+    if (DC->isTranslationUnit() && D->getFormalLinkage() == Linkage::Internal &&
+        !isa<VarTemplateSpecializationDecl>(D) && D->getIdentifier() != nullptr)
       return false;
   }
 
@@ -492,7 +573,33 @@ MicrosoftMangleContextImpl::shouldMangleStringLiteral(const StringLiteral *SL) {
   return true;
 }
 
-void MicrosoftCXXNameMangler::mangle(const NamedDecl *D, StringRef Prefix) {
+DiagnosticBuilder MicrosoftCXXNameMangler::Error(SourceLocation loc,
+                                                 StringRef thing1,
+                                                 StringRef thing2) {
+  DiagnosticsEngine &Diags = Context.getDiags();
+  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                          "cannot mangle this %0 %1 yet");
+  return Diags.Report(loc, DiagID) << thing1 << thing2;
+}
+
+DiagnosticBuilder MicrosoftCXXNameMangler::Error(SourceLocation loc,
+                                                 StringRef thingy) {
+  DiagnosticsEngine &Diags = Context.getDiags();
+  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                          "cannot mangle this %0 yet");
+  return Diags.Report(loc, DiagID) << thingy;
+}
+
+DiagnosticBuilder MicrosoftCXXNameMangler::Error(StringRef thingy) {
+  DiagnosticsEngine &Diags = Context.getDiags();
+  // extra placeholders are ignored quietly when not used
+  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                          "cannot mangle this %0 yet");
+  return Diags.Report(DiagID) << thingy;
+}
+
+void MicrosoftCXXNameMangler::mangle(GlobalDecl GD, StringRef Prefix) {
+  const NamedDecl *D = cast<NamedDecl>(GD.getDecl());
   // MSVC doesn't mangle C++ names the same way it mangles extern "C" names.
   // Therefore it's really important that we don't decorate the
   // name with leading underscores or leading/trailing at signs. So, by
@@ -501,9 +608,9 @@ void MicrosoftCXXNameMangler::mangle(const NamedDecl *D, StringRef Prefix) {
 
   // <mangled-name> ::= ? <name> <type-encoding>
   Out << Prefix;
-  mangleName(D);
+  mangleName(GD);
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
-    mangleFunctionEncoding(FD, Context.shouldMangleDeclName(FD));
+    mangleFunctionEncoding(GD, Context.shouldMangleDeclName(FD));
   else if (const VarDecl *VD = dyn_cast<VarDecl>(D))
     mangleVariableEncoding(VD);
   else if (isa<MSGuidDecl>(D))
@@ -517,8 +624,9 @@ void MicrosoftCXXNameMangler::mangle(const NamedDecl *D, StringRef Prefix) {
     llvm_unreachable("Tried to mangle unexpected NamedDecl!");
 }
 
-void MicrosoftCXXNameMangler::mangleFunctionEncoding(const FunctionDecl *FD,
+void MicrosoftCXXNameMangler::mangleFunctionEncoding(GlobalDecl GD,
                                                      bool ShouldMangle) {
+  const FunctionDecl *FD = cast<FunctionDecl>(GD.getDecl());
   // <type-encoding> ::= <function-class> <function-type>
 
   // Since MSVC operates on the type as written and not the canonical type, it
@@ -603,12 +711,17 @@ void MicrosoftCXXNameMangler::mangleVariableEncoding(const VarDecl *VD) {
   }
 }
 
-void MicrosoftCXXNameMangler::mangleMemberDataPointer(const CXXRecordDecl *RD,
-                                                      const ValueDecl *VD,
-                                                      StringRef Prefix) {
+void MicrosoftCXXNameMangler::mangleMemberDataPointer(
+    const CXXRecordDecl *RD, const ValueDecl *VD,
+    const NonTypeTemplateParmDecl *PD, QualType TemplateArgType,
+    StringRef Prefix) {
   // <member-data-pointer> ::= <integer-literal>
   //                       ::= $F <number> <number>
   //                       ::= $G <number> <number> <number>
+  //
+  // <auto-nttp> ::= $ M <type> <integer-literal>
+  // <auto-nttp> ::= $ M <type> F <name> <number>
+  // <auto-nttp> ::= $ M <type> G <name> <number> <number>
 
   int64_t FieldOffset;
   int64_t VBTableOffset;
@@ -637,7 +750,18 @@ void MicrosoftCXXNameMangler::mangleMemberDataPointer(const CXXRecordDecl *RD,
   case MSInheritanceModel::Unspecified: Code = 'G'; break;
   }
 
-  Out << Prefix << Code;
+  Out << Prefix;
+
+  if (VD &&
+      getASTContext().getLangOpts().isCompatibleWithMSVC(
+          LangOptions::MSVC2019) &&
+      PD && PD->getType()->getTypeClass() == Type::Auto &&
+      !TemplateArgType.isNull()) {
+    Out << "M";
+    mangleType(TemplateArgType, SourceRange(), QMM_Drop);
+  }
+
+  Out << Code;
 
   mangleNumber(FieldOffset);
 
@@ -650,14 +774,41 @@ void MicrosoftCXXNameMangler::mangleMemberDataPointer(const CXXRecordDecl *RD,
     mangleNumber(VBTableOffset);
 }
 
-void
-MicrosoftCXXNameMangler::mangleMemberFunctionPointer(const CXXRecordDecl *RD,
-                                                     const CXXMethodDecl *MD,
-                                                     StringRef Prefix) {
+void MicrosoftCXXNameMangler::mangleMemberDataPointerInClassNTTP(
+    const CXXRecordDecl *RD, const ValueDecl *VD) {
+  MSInheritanceModel IM = RD->getMSInheritanceModel();
+  // <nttp-class-member-data-pointer> ::= <member-data-pointer>
+  //                                  ::= N
+  //                                  ::= 8 <postfix> @ <unqualified-name> @
+
+  if (IM != MSInheritanceModel::Single && IM != MSInheritanceModel::Multiple)
+    return mangleMemberDataPointer(RD, VD, nullptr, QualType(), "");
+
+  if (!VD) {
+    Out << 'N';
+    return;
+  }
+
+  Out << '8';
+  mangleNestedName(VD);
+  Out << '@';
+  mangleUnqualifiedName(VD);
+  Out << '@';
+}
+
+void MicrosoftCXXNameMangler::mangleMemberFunctionPointer(
+    const CXXRecordDecl *RD, const CXXMethodDecl *MD,
+    const NonTypeTemplateParmDecl *PD, QualType TemplateArgType,
+    StringRef Prefix) {
   // <member-function-pointer> ::= $1? <name>
   //                           ::= $H? <name> <number>
   //                           ::= $I? <name> <number> <number>
   //                           ::= $J? <name> <number> <number> <number>
+  //
+  // <auto-nttp> ::= $ M <type> 1? <name>
+  // <auto-nttp> ::= $ M <type> H? <name> <number>
+  // <auto-nttp> ::= $ M <type> I? <name> <number> <number>
+  // <auto-nttp> ::= $ M <type> J? <name> <number> <number> <number>
 
   MSInheritanceModel IM = RD->getMSInheritanceModel();
 
@@ -675,7 +826,17 @@ MicrosoftCXXNameMangler::mangleMemberFunctionPointer(const CXXRecordDecl *RD,
   uint64_t VBTableOffset = 0;
   uint64_t VBPtrOffset = 0;
   if (MD) {
-    Out << Prefix << Code << '?';
+    Out << Prefix;
+
+    if (getASTContext().getLangOpts().isCompatibleWithMSVC(
+            LangOptions::MSVC2019) &&
+        PD && PD->getType()->getTypeClass() == Type::Auto &&
+        !TemplateArgType.isNull()) {
+      Out << "M";
+      mangleType(TemplateArgType, SourceRange(), QMM_Drop);
+    }
+
+    Out << Code << '?';
     if (MD->isVirtual()) {
       MicrosoftVTableContext *VTContext =
           cast<MicrosoftVTableContext>(getASTContext().getVTableContext());
@@ -714,11 +875,83 @@ MicrosoftCXXNameMangler::mangleMemberFunctionPointer(const CXXRecordDecl *RD,
     mangleNumber(VBTableOffset);
 }
 
+void MicrosoftCXXNameMangler::mangleFunctionPointer(
+    const FunctionDecl *FD, const NonTypeTemplateParmDecl *PD,
+    QualType TemplateArgType) {
+  // <func-ptr> ::= $1? <mangled-name>
+  // <func-ptr> ::= <auto-nttp>
+  //
+  // <auto-nttp> ::= $ M <type> 1? <mangled-name>
+  Out << '$';
+
+  if (getASTContext().getLangOpts().isCompatibleWithMSVC(
+          LangOptions::MSVC2019) &&
+      PD && PD->getType()->getTypeClass() == Type::Auto &&
+      !TemplateArgType.isNull()) {
+    Out << "M";
+    mangleType(TemplateArgType, SourceRange(), QMM_Drop);
+  }
+
+  Out << "1?";
+  mangleName(FD);
+  mangleFunctionEncoding(FD, /*ShouldMangle=*/true);
+}
+
+void MicrosoftCXXNameMangler::mangleVarDecl(const VarDecl *VD,
+                                            const NonTypeTemplateParmDecl *PD,
+                                            QualType TemplateArgType) {
+  // <var-ptr> ::= $1? <mangled-name>
+  // <var-ptr> ::= <auto-nttp>
+  //
+  // <auto-nttp> ::= $ M <type> 1? <mangled-name>
+  Out << '$';
+
+  if (getASTContext().getLangOpts().isCompatibleWithMSVC(
+          LangOptions::MSVC2019) &&
+      PD && PD->getType()->getTypeClass() == Type::Auto &&
+      !TemplateArgType.isNull()) {
+    Out << "M";
+    mangleType(TemplateArgType, SourceRange(), QMM_Drop);
+  }
+
+  Out << "1?";
+  mangleName(VD);
+  mangleVariableEncoding(VD);
+}
+
+void MicrosoftCXXNameMangler::mangleMemberFunctionPointerInClassNTTP(
+    const CXXRecordDecl *RD, const CXXMethodDecl *MD) {
+  // <nttp-class-member-function-pointer> ::= <member-function-pointer>
+  //                           ::= N
+  //                           ::= E? <virtual-mem-ptr-thunk>
+  //                           ::= E? <mangled-name> <type-encoding>
+
+  if (!MD) {
+    if (RD->getMSInheritanceModel() != MSInheritanceModel::Single)
+      return mangleMemberFunctionPointer(RD, MD, nullptr, QualType(), "");
+
+    Out << 'N';
+    return;
+  }
+
+  Out << "E?";
+  if (MD->isVirtual()) {
+    MicrosoftVTableContext *VTContext =
+        cast<MicrosoftVTableContext>(getASTContext().getVTableContext());
+    MethodVFTableLocation ML =
+        VTContext->getMethodVFTableLocation(GlobalDecl(MD));
+    mangleVirtualMemPtrThunk(MD, ML);
+  } else {
+    mangleName(MD);
+    mangleFunctionEncoding(MD, /*ShouldMangle=*/true);
+  }
+}
+
 void MicrosoftCXXNameMangler::mangleVirtualMemPtrThunk(
     const CXXMethodDecl *MD, const MethodVFTableLocation &ML) {
   // Get the vftable offset.
   CharUnits PointerWidth = getASTContext().toCharUnitsFromBits(
-      getASTContext().getTargetInfo().getPointerWidth(0));
+      getASTContext().getTargetInfo().getPointerWidth(LangAS::Default));
   uint64_t OffsetInVFTable = ML.Index * PointerWidth.getQuantity();
 
   Out << "?_9";
@@ -726,16 +959,17 @@ void MicrosoftCXXNameMangler::mangleVirtualMemPtrThunk(
   Out << "$B";
   mangleNumber(OffsetInVFTable);
   Out << 'A';
-  mangleCallingConvention(MD->getType()->castAs<FunctionProtoType>());
+  mangleCallingConvention(MD->getType()->castAs<FunctionProtoType>(),
+                          MD->getSourceRange());
 }
 
-void MicrosoftCXXNameMangler::mangleName(const NamedDecl *ND) {
+void MicrosoftCXXNameMangler::mangleName(GlobalDecl GD) {
   // <name> ::= <unscoped-name> {[<named-scope>]+ | [<nested-name>]}? @
 
   // Always start with the unqualified name.
-  mangleUnqualifiedName(ND);
+  mangleUnqualifiedName(GD);
 
-  mangleNestedName(ND);
+  mangleNestedName(GD);
 
   // Terminate the whole name with an '@'.
   Out << '@';
@@ -750,8 +984,8 @@ void MicrosoftCXXNameMangler::mangleNumber(llvm::APSInt Number) {
   // to convert every integer to signed 64 bit before mangling (including
   // unsigned 64 bit values). Do the same, but preserve bits beyond the bottom
   // 64.
-  llvm::APInt Value =
-      Number.isSigned() ? Number.sextOrSelf(64) : Number.zextOrSelf(64);
+  unsigned Width = std::max(Number.getBitWidth(), 64U);
+  llvm::APInt Value = Number.extend(Width);
 
   // <non-negative integer> ::= A@              # when Number == 0
   //                        ::= <decimal digit> # when 1 <= Number <= 10
@@ -780,6 +1014,20 @@ void MicrosoftCXXNameMangler::mangleFloat(llvm::APFloat Number) {
   case APFloat::S_x87DoubleExtended: Out << 'X'; break;
   case APFloat::S_IEEEquad: Out << 'Y'; break;
   case APFloat::S_PPCDoubleDouble: Out << 'Z'; break;
+  case APFloat::S_PPCDoubleDoubleLegacy:
+  case APFloat::S_Float8E5M2:
+  case APFloat::S_Float8E4M3:
+  case APFloat::S_Float8E4M3FN:
+  case APFloat::S_Float8E5M2FNUZ:
+  case APFloat::S_Float8E4M3FNUZ:
+  case APFloat::S_Float8E4M3B11FNUZ:
+  case APFloat::S_Float8E3M4:
+  case APFloat::S_FloatTF32:
+  case APFloat::S_Float8E8M0FNU:
+  case APFloat::S_Float6E3M2FN:
+  case APFloat::S_Float6E2M3FN:
+  case APFloat::S_Float4E2M1FN:
+    llvm_unreachable("Tried to mangle unexpected APFloat semantics");
   }
 
   mangleBits(Number.bitcastToAPInt());
@@ -803,13 +1051,14 @@ void MicrosoftCXXNameMangler::mangleBits(llvm::APInt Value) {
   }
 }
 
-static const TemplateDecl *
-isTemplate(const NamedDecl *ND, const TemplateArgumentList *&TemplateArgs) {
+static GlobalDecl isTemplate(GlobalDecl GD,
+                             const TemplateArgumentList *&TemplateArgs) {
+  const NamedDecl *ND = cast<NamedDecl>(GD.getDecl());
   // Check if we have a function template.
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(ND)) {
     if (const TemplateDecl *TD = FD->getPrimaryTemplate()) {
       TemplateArgs = FD->getTemplateSpecializationArgs();
-      return TD;
+      return GD.getWithDecl(TD);
     }
   }
 
@@ -817,21 +1066,22 @@ isTemplate(const NamedDecl *ND, const TemplateArgumentList *&TemplateArgs) {
   if (const ClassTemplateSpecializationDecl *Spec =
           dyn_cast<ClassTemplateSpecializationDecl>(ND)) {
     TemplateArgs = &Spec->getTemplateArgs();
-    return Spec->getSpecializedTemplate();
+    return GD.getWithDecl(Spec->getSpecializedTemplate());
   }
 
   // Check if we have a variable template.
   if (const VarTemplateSpecializationDecl *Spec =
           dyn_cast<VarTemplateSpecializationDecl>(ND)) {
     TemplateArgs = &Spec->getTemplateArgs();
-    return Spec->getSpecializedTemplate();
+    return GD.getWithDecl(Spec->getSpecializedTemplate());
   }
 
-  return nullptr;
+  return GlobalDecl();
 }
 
-void MicrosoftCXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
+void MicrosoftCXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
                                                     DeclarationName Name) {
+  const NamedDecl *ND = cast<NamedDecl>(GD.getDecl());
   //  <unqualified-name> ::= <operator-name>
   //                     ::= <ctor-dtor-name>
   //                     ::= <source-name>
@@ -839,11 +1089,11 @@ void MicrosoftCXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
 
   // Check if we have a template.
   const TemplateArgumentList *TemplateArgs = nullptr;
-  if (const TemplateDecl *TD = isTemplate(ND, TemplateArgs)) {
+  if (GlobalDecl TD = isTemplate(GD, TemplateArgs)) {
     // Function templates aren't considered for name back referencing.  This
     // makes sense since function templates aren't likely to occur multiple
     // times in a symbol.
-    if (isa<FunctionTemplateDecl>(TD)) {
+    if (isa<FunctionTemplateDecl>(TD.getDecl())) {
       mangleTemplateInstantiationName(TD, *TemplateArgs);
       Out << '@';
       return;
@@ -904,7 +1154,19 @@ void MicrosoftCXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
   switch (Name.getNameKind()) {
     case DeclarationName::Identifier: {
       if (const IdentifierInfo *II = Name.getAsIdentifierInfo()) {
-        mangleSourceName(II->getName());
+        bool IsDeviceStub =
+            ND &&
+            ((isa<FunctionDecl>(ND) && ND->hasAttr<CUDAGlobalAttr>()) ||
+             (isa<FunctionTemplateDecl>(ND) &&
+              cast<FunctionTemplateDecl>(ND)
+                  ->getTemplatedDecl()
+                  ->hasAttr<CUDAGlobalAttr>())) &&
+            GD.getKernelReferenceKind() == KernelReferenceKind::Stub;
+        if (IsDeviceStub)
+          mangleSourceName(
+              (llvm::Twine("__device_stub__") + II->getName()).str());
+        else
+          mangleSourceName(II->getName());
         break;
       }
 
@@ -955,7 +1217,7 @@ void MicrosoftCXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
       if (const auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND)) {
         Out << "?__N";
         mangleTemplateArgValue(TPO->getType().getUnqualifiedType(),
-                               TPO->getValue());
+                               TPO->getValue(), TplArgKind::ClassNTTP);
         break;
       }
 
@@ -1105,7 +1367,13 @@ void MicrosoftCXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
 
 // <postfix> ::= <unqualified-name> [<postfix>]
 //           ::= <substitution> [<postfix>]
-void MicrosoftCXXNameMangler::mangleNestedName(const NamedDecl *ND) {
+void MicrosoftCXXNameMangler::mangleNestedName(GlobalDecl GD) {
+  const NamedDecl *ND = cast<NamedDecl>(GD.getDecl());
+
+  if (const auto *ID = dyn_cast<IndirectFieldDecl>(ND))
+    for (unsigned I = 1, IE = ID->getChainingSize(); I < IE; ++I)
+      mangleSourceName("<unnamed-tag>");
+
   const DeclContext *DC = getEffectiveDeclContext(ND);
   while (!DC->isTranslationUnit()) {
     if (isa<TagDecl>(ND) || isa<VarDecl>(ND)) {
@@ -1128,7 +1396,7 @@ void MicrosoftCXXNameMangler::mangleNestedName(const NamedDecl *ND) {
           Stream << '_' << Discriminator;
         if (ParameterDiscriminator)
           Stream << '_' << ParameterDiscriminator;
-        return Stream.str();
+        return Buffer;
       };
 
       unsigned Discriminator = BD->getBlockManglingNumber();
@@ -1173,9 +1441,9 @@ void MicrosoftCXXNameMangler::mangleNestedName(const NamedDecl *ND) {
       if (PointersAre64Bit)
         Out << 'E';
       Out << 'A';
-      mangleArtificialTagType(TTK_Struct,
-                             Discriminate("__block_literal", Discriminator,
-                                          ParameterDiscriminator));
+      mangleArtificialTagType(TagTypeKind::Struct,
+                              Discriminate("__block_literal", Discriminator,
+                                           ParameterDiscriminator));
       Out << "@Z";
 
       // If the effective context was a Record, we have fully mangled the
@@ -1188,7 +1456,7 @@ void MicrosoftCXXNameMangler::mangleNestedName(const NamedDecl *ND) {
     } else if (isa<NamedDecl>(DC)) {
       ND = cast<NamedDecl>(DC);
       if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(ND)) {
-        mangle(FD, "?");
+        mangle(getGlobalDeclAsDeclContext(FD), "?");
         break;
       } else {
         mangleUnqualifiedName(ND);
@@ -1347,10 +1615,7 @@ void MicrosoftCXXNameMangler::mangleOperatorName(OverloadedOperatorKind OO,
   case OO_Spaceship: Out << "?__M"; break;
 
   case OO_Conditional: {
-    DiagnosticsEngine &Diags = Context.getDiags();
-    unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-      "cannot mangle this conditional operator yet");
-    Diags.Report(Loc, DiagID);
+    Error(Loc, "conditional operator");
     break;
   }
 
@@ -1377,7 +1642,7 @@ void MicrosoftCXXNameMangler::mangleObjCMethodName(const ObjCMethodDecl *MD) {
 }
 
 void MicrosoftCXXNameMangler::mangleTemplateInstantiationName(
-    const TemplateDecl *TD, const TemplateArgumentList &TemplateArgs) {
+    GlobalDecl GD, const TemplateArgumentList &TemplateArgs) {
   // <template-name> ::= <unscoped-template-name> <template-args>
   //                 ::= <substitution>
   // Always start with the unqualified name.
@@ -1392,8 +1657,8 @@ void MicrosoftCXXNameMangler::mangleTemplateInstantiationName(
   TemplateArgBackReferences.swap(OuterTemplateArgsContext);
   PassObjectSizeArgs.swap(OuterPassObjectSizeArgs);
 
-  mangleUnscopedTemplateName(TD);
-  mangleTemplateArgs(TD, TemplateArgs);
+  mangleUnscopedTemplateName(GD);
+  mangleTemplateArgs(cast<TemplateDecl>(GD.getDecl()), TemplateArgs);
 
   // Restore the previous back reference contexts.
   NameBackReferences.swap(OuterTemplateContext);
@@ -1402,17 +1667,19 @@ void MicrosoftCXXNameMangler::mangleTemplateInstantiationName(
   PassObjectSizeArgs.swap(OuterPassObjectSizeArgs);
 }
 
-void
-MicrosoftCXXNameMangler::mangleUnscopedTemplateName(const TemplateDecl *TD) {
+void MicrosoftCXXNameMangler::mangleUnscopedTemplateName(GlobalDecl GD) {
   // <unscoped-template-name> ::= ?$ <unqualified-name>
   Out << "?$";
-  mangleUnqualifiedName(TD);
+  mangleUnqualifiedName(GD);
 }
 
 void MicrosoftCXXNameMangler::mangleIntegerLiteral(
     const llvm::APSInt &Value, const NonTypeTemplateParmDecl *PD,
     QualType TemplateArgType) {
   // <integer-literal> ::= $0 <number>
+  // <integer-literal> ::= <auto-nttp>
+  //
+  // <auto-nttp> ::= $ M <type> 0 <number>
   Out << "$";
 
   // Since MSVC 2019, add 'M[<type>]' after '$' for auto template parameter when
@@ -1433,18 +1700,15 @@ void MicrosoftCXXNameMangler::mangleIntegerLiteral(
 void MicrosoftCXXNameMangler::mangleExpression(
     const Expr *E, const NonTypeTemplateParmDecl *PD) {
   // See if this is a constant expression.
-  if (Optional<llvm::APSInt> Value =
+  if (std::optional<llvm::APSInt> Value =
           E->getIntegerConstantExpr(Context.getASTContext())) {
     mangleIntegerLiteral(*Value, PD, E->getType());
     return;
   }
 
   // As bad as this diagnostic is, it's better than crashing.
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(
-      DiagnosticsEngine::Error, "cannot yet mangle expression type %0");
-  Diags.Report(E->getExprLoc(), DiagID) << E->getStmtClassName()
-                                        << E->getSourceRange();
+  Error(E->getExprLoc(), "expression type: ", E->getStmtClassName())
+      << E->getSourceRange();
 }
 
 void MicrosoftCXXNameMangler::mangleTemplateArgs(
@@ -1466,6 +1730,22 @@ void MicrosoftCXXNameMangler::mangleTemplateArgs(
   }
 }
 
+/// If value V (with type T) represents a decayed pointer to the first element
+/// of an array, return that array.
+static ValueDecl *getAsArrayToPointerDecayedDecl(QualType T, const APValue &V) {
+  // Must be a pointer...
+  if (!T->isPointerType() || !V.isLValue() || !V.hasLValuePath() ||
+      !V.getLValueBase())
+    return nullptr;
+  // ... to element 0 of an array.
+  QualType BaseT = V.getLValueBase().getType();
+  if (!BaseT->isArrayType() || V.getLValuePath().size() != 1 ||
+      V.getLValuePath()[0].getAsArrayIndex() != 0)
+    return nullptr;
+  return const_cast<ValueDecl *>(
+      V.getLValueBase().dyn_cast<const ValueDecl *>());
+}
+
 void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
                                                 const TemplateArgument &TA,
                                                 const NamedDecl *Parm) {
@@ -1473,11 +1753,36 @@ void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
   //                ::= <integer-literal>
   //                ::= <member-data-pointer>
   //                ::= <member-function-pointer>
-  //                ::= $E? <name> <type-encoding>
-  //                ::= $1? <name> <type-encoding>
-  //                ::= $2  <type> <value>  # class NTTP
-  //                ::= $0A@
+  //                ::= $ <constant-value>
+  //                ::= $ <auto-nttp-constant-value>
   //                ::= <template-args>
+  //
+  // <auto-nttp-constant-value> ::= M <type> <constant-value>
+  //
+  // <constant-value> ::= 0 <number>                   # integer
+  //                  ::= 1 <mangled-name>             # address of D
+  //                  ::= 2 <type> <typed-constant-value>* @ # struct
+  //                  ::= 3 <type> <constant-value>* @ # array
+  //                  ::= 4 ???                        # string
+  //                  ::= 5 <constant-value> @         # address of subobject
+  //                  ::= 6 <constant-value> <unqualified-name> @ # a.b
+  //                  ::= 7 <type> [<unqualified-name> <constant-value>] @
+  //                      # union, with or without an active member
+  //                  # pointer to member, symbolically
+  //                  ::= 8 <class> <unqualified-name> @
+  //                  ::= A <type> <non-negative integer>  # float
+  //                  ::= B <type> <non-negative integer>  # double
+  //                  # pointer to member, by component value
+  //                  ::= F <number> <number>
+  //                  ::= G <number> <number> <number>
+  //                  ::= H <mangled-name> <number>
+  //                  ::= I <mangled-name> <number> <number>
+  //                  ::= J <mangled-name> <number> <number> <number>
+  //
+  // <typed-constant-value> ::= [<type>] <constant-value>
+  //
+  // The <type> appears to be included in a <typed-constant-value> only in the
+  // '0', '1', '8', 'A', 'B', and 'E' cases.
 
   switch (TA.getKind()) {
   case TemplateArgument::Null:
@@ -1494,24 +1799,29 @@ void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
     if (isa<FieldDecl>(ND) || isa<IndirectFieldDecl>(ND)) {
       mangleMemberDataPointer(cast<CXXRecordDecl>(ND->getDeclContext())
                                   ->getMostRecentNonInjectedDecl(),
-                              cast<ValueDecl>(ND));
+                              cast<ValueDecl>(ND),
+                              cast<NonTypeTemplateParmDecl>(Parm),
+                              TA.getParamTypeForDecl());
     } else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(ND)) {
       const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(FD);
       if (MD && MD->isInstance()) {
         mangleMemberFunctionPointer(
-            MD->getParent()->getMostRecentNonInjectedDecl(), MD);
+            MD->getParent()->getMostRecentNonInjectedDecl(), MD,
+            cast<NonTypeTemplateParmDecl>(Parm), TA.getParamTypeForDecl());
       } else {
-        Out << "$1?";
-        mangleName(FD);
-        mangleFunctionEncoding(FD, /*ShouldMangle=*/true);
+        mangleFunctionPointer(FD, cast<NonTypeTemplateParmDecl>(Parm),
+                              TA.getParamTypeForDecl());
       }
     } else if (TA.getParamTypeForDecl()->isRecordType()) {
       Out << "$";
       auto *TPO = cast<TemplateParamObjectDecl>(ND);
       mangleTemplateArgValue(TPO->getType().getUnqualifiedType(),
-                             TPO->getValue());
+                             TPO->getValue(), TplArgKind::ClassNTTP);
+    } else if (const VarDecl *VD = dyn_cast<VarDecl>(ND)) {
+      mangleVarDecl(VD, cast<NonTypeTemplateParmDecl>(Parm),
+                    TA.getParamTypeForDecl());
     } else {
-      mangle(ND, TA.getParamTypeForDecl()->isReferenceType() ? "$E?" : "$1?");
+      mangle(ND, "$1?");
     }
     break;
   }
@@ -1527,12 +1837,12 @@ void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
       const CXXRecordDecl *RD = MPT->getMostRecentCXXRecordDecl();
       if (MPT->isMemberFunctionPointerType() &&
           !isa<FunctionTemplateDecl>(TD)) {
-        mangleMemberFunctionPointer(RD, nullptr);
+        mangleMemberFunctionPointer(RD, nullptr, nullptr, QualType());
         return;
       }
       if (MPT->isMemberDataPointer()) {
         if (!isa<FunctionTemplateDecl>(TD)) {
-          mangleMemberDataPointer(RD, nullptr);
+          mangleMemberDataPointer(RD, nullptr, nullptr, QualType());
           return;
         }
         // nullptr data pointers are always represented with a single field
@@ -1552,6 +1862,27 @@ void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
                          cast<NonTypeTemplateParmDecl>(Parm), T);
     break;
   }
+  case TemplateArgument::StructuralValue:
+    if (ValueDecl *D = getAsArrayToPointerDecayedDecl(
+            TA.getStructuralValueType(), TA.getAsStructuralValue())) {
+      // Mangle the result of array-to-pointer decay as if it were a reference
+      // to the original declaration, to match MSVC's behavior. This can result
+      // in mangling collisions in some cases!
+      return mangleTemplateArg(
+          TD, TemplateArgument(D, TA.getStructuralValueType()), Parm);
+    }
+    Out << "$";
+    if (cast<NonTypeTemplateParmDecl>(Parm)
+            ->getType()
+            ->getContainedDeducedType()) {
+      Out << "M";
+      mangleType(TA.getNonTypeTemplateArgumentType(), SourceRange(), QMM_Drop);
+    }
+    mangleTemplateArgValue(TA.getStructuralValueType(),
+                           TA.getAsStructuralValue(),
+                           TplArgKind::StructuralValue,
+                           /*WithScalarType=*/false);
+    break;
   case TemplateArgument::Expression:
     mangleExpression(TA.getAsExpr(), cast<NonTypeTemplateParmDecl>(Parm));
     break;
@@ -1594,6 +1925,7 @@ void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
 
 void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
                                                      const APValue &V,
+                                                     TplArgKind TAK,
                                                      bool WithScalarType) {
   switch (V.getKind()) {
   case APValue::None:
@@ -1623,21 +1955,93 @@ void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
       mangleType(T, SourceRange(), QMM_Escape);
 
     APValue::LValueBase Base = V.getLValueBase();
-    if (Base.isNull())
-      Out << "0A@";
-    else if (auto *VD = Base.dyn_cast<const ValueDecl*>())
-      mangle(VD, T->isReferenceType() ? "E?" : "1?");
-    else
-      break;
 
-    // FIXME: MSVC doesn't support template arguments referring to subobjects
-    // yet (it either mangles such template arguments as null pointers or
-    // small integers or crashes). It's probably the intent to mangle the
-    // declaration followed by an offset, but that's not what actually happens.
-    // For now just bail.
-    if (!V.hasLValuePath() || !V.getLValuePath().empty() ||
-        V.isLValueOnePastTheEnd())
-      break;
+    // this might not cover every case but did cover issue 97756
+    // see test CodeGen/ms_mangler_templatearg_opte
+    if (V.isLValueOnePastTheEnd()) {
+      Out << "5E";
+      auto *VD = Base.dyn_cast<const ValueDecl *>();
+      if (VD)
+        mangle(VD);
+      Out << "@";
+      return;
+    }
+
+    if (!V.hasLValuePath() || V.getLValuePath().empty()) {
+      // Taking the address of a complete object has a special-case mangling.
+      if (Base.isNull()) {
+        // MSVC emits 0A@ for null pointers. Generalize this for arbitrary
+        // integers cast to pointers.
+        // FIXME: This mangles 0 cast to a pointer the same as a null pointer,
+        // even in cases where the two are different values.
+        Out << "0";
+        mangleNumber(V.getLValueOffset().getQuantity());
+      } else if (!V.hasLValuePath()) {
+        // FIXME: This can only happen as an extension. Invent a mangling.
+        Error("template argument (extension not comaptible with ms mangler)");
+        return;
+      } else if (auto *VD = Base.dyn_cast<const ValueDecl*>()) {
+        Out << "E";
+        mangle(VD);
+      } else {
+        Error("template argument (undeclared base)");
+        return;
+      }
+    } else {
+      if (TAK == TplArgKind::ClassNTTP && T->isPointerType())
+        Out << "5";
+
+      SmallVector<char, 2> EntryTypes;
+      SmallVector<std::function<void()>, 2> EntryManglers;
+      QualType ET = Base.getType();
+      for (APValue::LValuePathEntry E : V.getLValuePath()) {
+        if (auto *AT = ET->getAsArrayTypeUnsafe()) {
+          EntryTypes.push_back('C');
+          EntryManglers.push_back([this, I = E.getAsArrayIndex()] {
+            Out << '0';
+            mangleNumber(I);
+            Out << '@';
+          });
+          ET = AT->getElementType();
+          continue;
+        }
+
+        const Decl *D = E.getAsBaseOrMember().getPointer();
+        if (auto *FD = dyn_cast<FieldDecl>(D)) {
+          ET = FD->getType();
+          if (const auto *RD = ET->getAsRecordDecl())
+            if (RD->isAnonymousStructOrUnion())
+              continue;
+        } else {
+          ET = getASTContext().getRecordType(cast<CXXRecordDecl>(D));
+          // Bug in MSVC: fully qualified name of base class should be used for
+          // mangling to prevent collisions e.g. on base classes with same names
+          // in different namespaces.
+        }
+
+        EntryTypes.push_back('6');
+        EntryManglers.push_back([this, D] {
+          mangleUnqualifiedName(cast<NamedDecl>(D));
+          Out << '@';
+        });
+      }
+
+      for (auto I = EntryTypes.rbegin(), E = EntryTypes.rend(); I != E; ++I)
+        Out << *I;
+
+      auto *VD = Base.dyn_cast<const ValueDecl*>();
+      if (!VD) {
+        Error("template argument (null value decl)");
+        return;
+      }
+      Out << (TAK == TplArgKind::ClassNTTP ? 'E' : '1');
+      mangle(VD);
+
+      for (const std::function<void()> &Mangler : EntryManglers)
+        Mangler();
+      if (TAK == TplArgKind::ClassNTTP && T->isPointerType())
+        Out << '@';
+    }
 
     return;
   }
@@ -1646,20 +2050,22 @@ void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
     if (WithScalarType)
       mangleType(T, SourceRange(), QMM_Escape);
 
-    // FIXME: The below manglings don't include a conversion, so bail if there
-    // would be one. MSVC mangles the (possibly converted) value of the
-    // pointer-to-member object as if it were a struct, leading to collisions
-    // in some cases.
-    if (!V.getMemberPointerPath().empty())
-      break;
-
     const CXXRecordDecl *RD =
         T->castAs<MemberPointerType>()->getMostRecentCXXRecordDecl();
     const ValueDecl *D = V.getMemberPointerDecl();
-    if (T->isMemberDataPointerType())
-      mangleMemberDataPointer(RD, D, "");
-    else
-      mangleMemberFunctionPointer(RD, cast_or_null<CXXMethodDecl>(D), "");
+    if (TAK == TplArgKind::ClassNTTP) {
+      if (T->isMemberDataPointerType())
+        mangleMemberDataPointerInClassNTTP(RD, D);
+      else
+        mangleMemberFunctionPointerInClassNTTP(RD,
+                                               cast_or_null<CXXMethodDecl>(D));
+    } else {
+      if (T->isMemberDataPointerType())
+        mangleMemberDataPointer(RD, D, nullptr, QualType(), "");
+      else
+        mangleMemberFunctionPointer(RD, cast_or_null<CXXMethodDecl>(D), nullptr,
+                                    QualType(), "");
+    }
     return;
   }
 
@@ -1671,11 +2077,12 @@ void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
 
     unsigned BaseIndex = 0;
     for (const CXXBaseSpecifier &B : RD->bases())
-      mangleTemplateArgValue(B.getType(), V.getStructBase(BaseIndex++));
+      mangleTemplateArgValue(B.getType(), V.getStructBase(BaseIndex++), TAK);
     for (const FieldDecl *FD : RD->fields())
-      if (!FD->isUnnamedBitfield())
+      if (!FD->isUnnamedBitField())
         mangleTemplateArgValue(FD->getType(),
-                               V.getStructField(FD->getFieldIndex()));
+                               V.getStructField(FD->getFieldIndex()), TAK,
+                               /*WithScalarType*/ true);
     Out << '@';
     return;
   }
@@ -1685,8 +2092,7 @@ void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
     mangleType(T, SourceRange(), QMM_Escape);
     if (const FieldDecl *FD = V.getUnionField()) {
       mangleUnqualifiedName(FD);
-      mangleTemplateArgValue(FD->getType(), V.getUnionValue(),
-                             /*WithType*/false);
+      mangleTemplateArgValue(FD->getType(), V.getUnionValue(), TAK);
     }
     Out << '@';
     return;
@@ -1718,7 +2124,7 @@ void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
       const APValue &ElemV = I < V.getArrayInitializedElts()
                                  ? V.getArrayInitializedElt(I)
                                  : V.getArrayFiller();
-      mangleTemplateArgValue(ElemT, ElemV, /*WithType*/false);
+      mangleTemplateArgValue(ElemT, ElemV, TAK);
       Out << '@';
     }
     Out << '@';
@@ -1735,22 +2141,23 @@ void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
     mangleType(ElemT, SourceRange(), QMM_Escape);
     for (unsigned I = 0, N = V.getVectorLength(); I != N; ++I) {
       const APValue &ElemV = V.getVectorElt(I);
-      mangleTemplateArgValue(ElemT, ElemV, /*WithType*/false);
+      mangleTemplateArgValue(ElemT, ElemV, TAK);
       Out << '@';
     }
     Out << "@@";
     return;
   }
 
-  case APValue::AddrLabelDiff:
-  case APValue::FixedPoint:
-    break;
+  case APValue::AddrLabelDiff: {
+    Error("template argument (value type: address label diff)");
+    return;
   }
 
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(
-      DiagnosticsEngine::Error, "cannot mangle this template argument yet");
-  Diags.Report(DiagID);
+  case APValue::FixedPoint: {
+    Error("template argument (value type: fixed point)");
+    return;
+  }
+  }
 }
 
 void MicrosoftCXXNameMangler::mangleObjCProtocol(const ObjCProtocolDecl *PD) {
@@ -1760,9 +2167,9 @@ void MicrosoftCXXNameMangler::mangleObjCProtocol(const ObjCProtocolDecl *PD) {
 
   Stream << "?$";
   Extra.mangleSourceName("Protocol");
-  Extra.mangleArtificialTagType(TTK_Struct, PD->getName());
+  Extra.mangleArtificialTagType(TagTypeKind::Struct, PD->getName());
 
-  mangleArtificialTagType(TTK_Struct, TemplateMangling, {"__ObjC"});
+  mangleArtificialTagType(TagTypeKind::Struct, TemplateMangling, {"__ObjC"});
 }
 
 void MicrosoftCXXNameMangler::mangleObjCLifetime(const QualType Type,
@@ -1791,7 +2198,7 @@ void MicrosoftCXXNameMangler::mangleObjCLifetime(const QualType Type,
   Extra.manglePointerExtQualifiers(Quals, Type);
   Extra.mangleType(Type, Range);
 
-  mangleArtificialTagType(TTK_Struct, TemplateMangling, {"__ObjC"});
+  mangleArtificialTagType(TagTypeKind::Struct, TemplateMangling, {"__ObjC"});
 }
 
 void MicrosoftCXXNameMangler::mangleObjCKindOfType(const ObjCObjectType *T,
@@ -1805,10 +2212,10 @@ void MicrosoftCXXNameMangler::mangleObjCKindOfType(const ObjCObjectType *T,
   Extra.mangleSourceName("KindOf");
   Extra.mangleType(QualType(T, 0)
                        .stripObjCKindOfType(getASTContext())
-                       ->getAs<ObjCObjectType>(),
+                       ->castAs<ObjCObjectType>(),
                    Quals, Range);
 
-  mangleArtificialTagType(TTK_Struct, TemplateMangling, {"__ObjC"});
+  mangleArtificialTagType(TagTypeKind::Struct, TemplateMangling, {"__ObjC"});
 }
 
 void MicrosoftCXXNameMangler::mangleQualifiers(Qualifiers Quals,
@@ -2009,7 +2416,8 @@ void MicrosoftCXXNameMangler::manglePassObjectSizeArg(
   if (Found == FunArgBackReferences.end()) {
     std::string Name =
         Dynamic ? "__pass_dynamic_object_size" : "__pass_object_size";
-    mangleArtificialTagType(TTK_Enum, Name + llvm::utostr(Type), {"__clang"});
+    mangleArtificialTagType(TagTypeKind::Enum, Name + llvm::utostr(Type),
+                            {"__clang"});
 
     if (FunArgBackReferences.size() < 10) {
       size_t Size = FunArgBackReferences.size();
@@ -2090,7 +2498,58 @@ void MicrosoftCXXNameMangler::mangleAddressSpaceType(QualType T,
 
   Extra.mangleType(T, Range, QMM_Escape);
   mangleQualifiers(Qualifiers(), false);
-  mangleArtificialTagType(TTK_Struct, ASMangling, {"__clang"});
+  mangleArtificialTagType(TagTypeKind::Struct, ASMangling, {"__clang"});
+}
+
+void MicrosoftCXXNameMangler::mangleAutoReturnType(QualType T,
+                                                   QualifierMangleMode QMM) {
+  assert(getASTContext().getLangOpts().isCompatibleWithMSVC(
+             LangOptions::MSVC2019) &&
+         "Cannot mangle MSVC 2017 auto return types!");
+
+  if (isa<AutoType>(T)) {
+    const auto *AT = T->getContainedAutoType();
+    Qualifiers Quals = T.getLocalQualifiers();
+
+    if (QMM == QMM_Result)
+      Out << '?';
+    if (QMM != QMM_Drop)
+      mangleQualifiers(Quals, false);
+    Out << (AT->isDecltypeAuto() ? "_T" : "_P");
+    return;
+  }
+
+  T = T.getDesugaredType(getASTContext());
+  Qualifiers Quals = T.getLocalQualifiers();
+
+  switch (QMM) {
+  case QMM_Drop:
+  case QMM_Result:
+    break;
+  case QMM_Mangle:
+    mangleQualifiers(Quals, false);
+    break;
+  default:
+    llvm_unreachable("QMM_Escape unexpected");
+  }
+
+  const Type *ty = T.getTypePtr();
+  switch (ty->getTypeClass()) {
+  case Type::MemberPointer:
+    mangleAutoReturnType(cast<MemberPointerType>(ty), Quals);
+    break;
+  case Type::Pointer:
+    mangleAutoReturnType(cast<PointerType>(ty), Quals);
+    break;
+  case Type::LValueReference:
+    mangleAutoReturnType(cast<LValueReferenceType>(ty), Quals);
+    break;
+  case Type::RValueReference:
+    mangleAutoReturnType(cast<RValueReferenceType>(ty), Quals);
+    break;
+  default:
+    llvm_unreachable("Invalid type expected");
+  }
 }
 
 void MicrosoftCXXNameMangler::mangleType(QualType T, SourceRange Range,
@@ -2272,13 +2731,13 @@ void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T, Qualifiers,
     llvm_unreachable("placeholder types shouldn't get to name mangling");
 
   case BuiltinType::ObjCId:
-    mangleArtificialTagType(TTK_Struct, "objc_object");
+    mangleArtificialTagType(TagTypeKind::Struct, "objc_object");
     break;
   case BuiltinType::ObjCClass:
-    mangleArtificialTagType(TTK_Struct, "objc_class");
+    mangleArtificialTagType(TagTypeKind::Struct, "objc_class");
     break;
   case BuiltinType::ObjCSel:
-    mangleArtificialTagType(TTK_Struct, "objc_selector");
+    mangleArtificialTagType(TagTypeKind::Struct, "objc_selector");
     break;
 
 #define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \
@@ -2288,27 +2747,27 @@ void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T, Qualifiers,
 #include "clang/Basic/OpenCLImageTypes.def"
   case BuiltinType::OCLSampler:
     Out << "PA";
-    mangleArtificialTagType(TTK_Struct, "ocl_sampler");
+    mangleArtificialTagType(TagTypeKind::Struct, "ocl_sampler");
     break;
   case BuiltinType::OCLEvent:
     Out << "PA";
-    mangleArtificialTagType(TTK_Struct, "ocl_event");
+    mangleArtificialTagType(TagTypeKind::Struct, "ocl_event");
     break;
   case BuiltinType::OCLClkEvent:
     Out << "PA";
-    mangleArtificialTagType(TTK_Struct, "ocl_clkevent");
+    mangleArtificialTagType(TagTypeKind::Struct, "ocl_clkevent");
     break;
   case BuiltinType::OCLQueue:
     Out << "PA";
-    mangleArtificialTagType(TTK_Struct, "ocl_queue");
+    mangleArtificialTagType(TagTypeKind::Struct, "ocl_queue");
     break;
   case BuiltinType::OCLReserveID:
     Out << "PA";
-    mangleArtificialTagType(TTK_Struct, "ocl_reserveid");
+    mangleArtificialTagType(TagTypeKind::Struct, "ocl_reserveid");
     break;
-#define EXT_OPAQUE_TYPE(ExtType, Id, Ext) \
-  case BuiltinType::Id: \
-    mangleArtificialTagType(TTK_Struct, "ocl_" #ExtType); \
+#define EXT_OPAQUE_TYPE(ExtType, Id, Ext)                                      \
+  case BuiltinType::Id:                                                        \
+    mangleArtificialTagType(TagTypeKind::Struct, "ocl_" #ExtType);             \
     break;
 #include "clang/Basic/OpenCLExtensionTypes.def"
 
@@ -2317,19 +2776,51 @@ void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T, Qualifiers,
     break;
 
   case BuiltinType::Float16:
-    mangleArtificialTagType(TTK_Struct, "_Float16", {"__clang"});
+    mangleArtificialTagType(TagTypeKind::Struct, "_Float16", {"__clang"});
     break;
 
   case BuiltinType::Half:
-    mangleArtificialTagType(TTK_Struct, "_Half", {"__clang"});
+    if (!getASTContext().getLangOpts().HLSL)
+      mangleArtificialTagType(TagTypeKind::Struct, "_Half", {"__clang"});
+    else if (getASTContext().getLangOpts().NativeHalfType)
+      Out << "$f16@";
+    else
+      Out << "$halff@";
     break;
+
+  case BuiltinType::BFloat16:
+    mangleArtificialTagType(TagTypeKind::Struct, "__bf16", {"__clang"});
+    break;
+
+  case BuiltinType::MFloat8:
+    mangleArtificialTagType(TagTypeKind::Struct, "__mfp8", {"__clang"});
+    break;
+
+#define WASM_REF_TYPE(InternalName, MangledName, Id, SingletonId, AS)          \
+  case BuiltinType::Id:                                                        \
+    mangleArtificialTagType(TagTypeKind::Struct, MangledName);                 \
+    mangleArtificialTagType(TagTypeKind::Struct, MangledName, {"__clang"});    \
+    break;
+
+#include "clang/Basic/WebAssemblyReferenceTypes.def"
+
+#define HLSL_INTANGIBLE_TYPE(Name, Id, SingletonId)                            \
+  case BuiltinType::Id:                                                        \
+    mangleArtificialTagType(TagTypeKind::Struct, #Name);                       \
+    break;
+#include "clang/Basic/HLSLIntangibleTypes.def"
 
 #define SVE_TYPE(Name, Id, SingletonId) \
   case BuiltinType::Id:
+#define SVE_SCALAR_TYPE(Name, MangledName, Id, SingletonId, Bits)
 #include "clang/Basic/AArch64SVEACLETypes.def"
-#define PPC_MMA_VECTOR_TYPE(Name, Id, Size) \
+#define PPC_VECTOR_TYPE(Name, Id, Size) \
   case BuiltinType::Id:
 #include "clang/Basic/PPCTypes.def"
+#define RVV_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
+#include "clang/Basic/RISCVVTypes.def"
+#define AMDGPU_TYPE(Name, Id, SingletonId, Width, Align) case BuiltinType::Id:
+#include "clang/Basic/AMDGPUTypes.def"
   case BuiltinType::ShortAccum:
   case BuiltinType::Accum:
   case BuiltinType::LongAccum:
@@ -2354,13 +2845,11 @@ void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T, Qualifiers,
   case BuiltinType::SatUShortFract:
   case BuiltinType::SatUFract:
   case BuiltinType::SatULongFract:
-  case BuiltinType::BFloat16:
+  case BuiltinType::Ibm128:
   case BuiltinType::Float128: {
-    DiagnosticsEngine &Diags = Context.getDiags();
-    unsigned DiagID = Diags.getCustomDiagID(
-        DiagnosticsEngine::Error, "cannot mangle this built-in %0 type yet");
-    Diags.Report(Range.getBegin(), DiagID)
-        << T->getName(Context.getASTContext().getPrintingPolicy()) << Range;
+    Error(Range.getBegin(), "built-in type: ",
+          T->getName(Context.getASTContext().getPrintingPolicy()))
+        << Range;
     break;
   }
   }
@@ -2403,7 +2892,7 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
   if (const CXXMethodDecl *MD = dyn_cast_or_null<CXXMethodDecl>(D)) {
     if (MD->getParent()->isLambda())
       IsInLambda = true;
-    if (MD->isInstance())
+    if (MD->isImplicitObjectMemberFunction())
       HasThisQuals = true;
     if (isa<CXXDestructorDecl>(MD)) {
       IsStructor = true;
@@ -2427,7 +2916,7 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
     mangleQualifiers(Quals, /*IsMember=*/false);
   }
 
-  mangleCallingConvention(CC);
+  mangleCallingConvention(CC, Range);
 
   // <return-type> ::= <type>
   //               ::= @ # structors (they have no declared return type)
@@ -2457,7 +2946,7 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
         // Copy constructor closure always takes an unqualified reference.
         mangleFunctionArgumentType(getASTContext().getLValueReferenceType(
                                        Proto->getParamType(0)
-                                           ->getAs<LValueReferenceType>()
+                                           ->castAs<LValueReferenceType>()
                                            ->getPointeeType(),
                                        /*SpelledAsLValue=*/true),
                                    Range);
@@ -2469,7 +2958,7 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
       return;
     }
     Out << '@';
-  } else if (IsInLambda && D && isa<CXXConversionDecl>(D)) {
+  } else if (IsInLambda && isa_and_nonnull<CXXConversionDecl>(D)) {
     // The only lambda conversion operators are to function pointers, which
     // can differ by their calling convention and are typically deduced.  So
     // we make sure that this type gets mangled properly.
@@ -2481,17 +2970,59 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
       // can differ by their calling convention and are typically deduced.  So
       // we make sure that this type gets mangled properly.
       mangleType(ResultType, Range, QMM_Result);
-    } else if (const auto *AT = dyn_cast_or_null<AutoType>(
-                   ResultType->getContainedAutoType())) {
-      Out << '?';
-      mangleQualifiers(ResultType.getLocalQualifiers(), /*IsMember=*/false);
-      Out << '?';
+    } else if (IsInLambda) {
+      if (const auto *AT = ResultType->getContainedAutoType()) {
+        assert(AT->getKeyword() != AutoTypeKeyword::GNUAutoType &&
+               "shouldn't need to mangle __auto_type!");
+        Out << '?';
+        mangleQualifiers(ResultType.getLocalQualifiers(), /*IsMember=*/false);
+        Out << '?';
+        mangleSourceName(AT->isDecltypeAuto() ? "<decltype-auto>" : "<auto>");
+        Out << '@';
+      } else {
+        Out << '@';
+      }
+    } else if (const auto *AT = ResultType->getContainedAutoType()) {
       assert(AT->getKeyword() != AutoTypeKeyword::GNUAutoType &&
              "shouldn't need to mangle __auto_type!");
-      mangleSourceName(AT->isDecltypeAuto() ? "<decltype-auto>" : "<auto>");
-      Out << '@';
-    } else if (IsInLambda) {
-      Out << '@';
+
+      // If we have any pointer types with the clang address space extension
+      // then defer to the custom clang mangling to keep backwards
+      // compatibility. See `mangleType(const PointerType *T, Qualifiers Quals,
+      // SourceRange Range)` for details.
+      auto UseClangMangling = [](QualType ResultType) {
+        QualType T = ResultType;
+        while (isa<PointerType>(T.getTypePtr())) {
+          T = T->getPointeeType();
+          if (T.getQualifiers().hasAddressSpace())
+            return true;
+        }
+        return false;
+      };
+
+      if (getASTContext().getLangOpts().isCompatibleWithMSVC(
+              LangOptions::MSVC2019) &&
+          !UseClangMangling(ResultType)) {
+        if (D && !D->getPrimaryTemplate()) {
+          Out << '@';
+        } else {
+          if (D && D->getPrimaryTemplate()) {
+            const FunctionProtoType *FPT = D->getPrimaryTemplate()
+                                               ->getTemplatedDecl()
+                                               ->getFirstDecl()
+                                               ->getType()
+                                               ->castAs<FunctionProtoType>();
+            ResultType = FPT->getReturnType();
+          }
+          mangleAutoReturnType(ResultType, QMM_Result);
+        }
+      } else {
+        Out << '?';
+        mangleQualifiers(ResultType.getLocalQualifiers(), /*IsMember=*/false);
+        Out << '?';
+        mangleSourceName(AT->isDecltypeAuto() ? "<decltype-auto>" : "<auto>");
+        Out << '@';
+      }
     } else {
       if (ResultType->isVoidType())
         ResultType = ResultType.getUnqualifiedType();
@@ -2512,6 +3043,10 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
   } else {
     // Happens for function pointer type arguments for example.
     for (unsigned I = 0, E = Proto->getNumParams(); I != E; ++I) {
+      // Explicit object parameters are prefixed by "_V".
+      if (I == 0 && D && D->getParamDecl(I)->isExplicitObjectParameter())
+        Out << "_V";
+
       mangleFunctionArgumentType(Proto->getParamType(I), Range);
       // Mangle each pass_object_size parameter as if it's a parameter of enum
       // type passed directly after the parameter with the pass_object_size
@@ -2577,7 +3112,7 @@ void MicrosoftCXXNameMangler::mangleFunctionClass(const FunctionDecl *FD) {
       case AS_none:
         llvm_unreachable("Unsupported access specifier");
       case AS_private:
-        if (MD->isStatic())
+        if (!MD->isImplicitObjectMemberFunction())
           Out << 'C';
         else if (IsVirtual)
           Out << 'E';
@@ -2585,7 +3120,7 @@ void MicrosoftCXXNameMangler::mangleFunctionClass(const FunctionDecl *FD) {
           Out << 'A';
         break;
       case AS_protected:
-        if (MD->isStatic())
+        if (!MD->isImplicitObjectMemberFunction())
           Out << 'K';
         else if (IsVirtual)
           Out << 'M';
@@ -2593,7 +3128,7 @@ void MicrosoftCXXNameMangler::mangleFunctionClass(const FunctionDecl *FD) {
           Out << 'I';
         break;
       case AS_public:
-        if (MD->isStatic())
+        if (!MD->isImplicitObjectMemberFunction())
           Out << 'S';
         else if (IsVirtual)
           Out << 'U';
@@ -2604,7 +3139,8 @@ void MicrosoftCXXNameMangler::mangleFunctionClass(const FunctionDecl *FD) {
     Out << 'Y';
   }
 }
-void MicrosoftCXXNameMangler::mangleCallingConvention(CallingConv CC) {
+void MicrosoftCXXNameMangler::mangleCallingConvention(CallingConv CC,
+                                                      SourceRange Range) {
   // <calling-convention> ::= A # __cdecl
   //                      ::= B # __export __cdecl
   //                      ::= C # __pascal
@@ -2616,7 +3152,14 @@ void MicrosoftCXXNameMangler::mangleCallingConvention(CallingConv CC) {
   //                      ::= I # __fastcall
   //                      ::= J # __export __fastcall
   //                      ::= Q # __vectorcall
+  //                      ::= S # __attribute__((__swiftcall__)) // Clang-only
+  //                      ::= W # __attribute__((__swiftasynccall__))
+  //                      ::= U # __attribute__((__preserve_most__))
+  //                      ::= V # __attribute__((__preserve_none__)) //
+  //                      Clang-only
+  //                            // Clang-only
   //                      ::= w # __regcall
+  //                      ::= x # __regcall4
   // The 'export' calling conventions are from a bygone era
   // (*cough*Win16*cough*) when functions were declared for export with
   // that keyword. (It didn't actually export them, it just made them so
@@ -2625,22 +3168,52 @@ void MicrosoftCXXNameMangler::mangleCallingConvention(CallingConv CC) {
 
   switch (CC) {
     default:
-      llvm_unreachable("Unsupported CC for mangling");
+      break;
     case CC_Win64:
     case CC_X86_64SysV:
-    case CC_C: Out << 'A'; break;
-    case CC_X86Pascal: Out << 'C'; break;
-    case CC_X86ThisCall: Out << 'E'; break;
-    case CC_X86StdCall: Out << 'G'; break;
-    case CC_X86FastCall: Out << 'I'; break;
-    case CC_X86VectorCall: Out << 'Q'; break;
-    case CC_Swift: Out << 'S'; break;
-    case CC_PreserveMost: Out << 'U'; break;
-    case CC_X86RegCall: Out << 'w'; break;
+    case CC_C:
+      Out << 'A';
+      return;
+    case CC_X86Pascal:
+      Out << 'C';
+      return;
+    case CC_X86ThisCall:
+      Out << 'E';
+      return;
+    case CC_X86StdCall:
+      Out << 'G';
+      return;
+    case CC_X86FastCall:
+      Out << 'I';
+      return;
+    case CC_X86VectorCall:
+      Out << 'Q';
+      return;
+    case CC_Swift:
+      Out << 'S';
+      return;
+    case CC_SwiftAsync:
+      Out << 'W';
+      return;
+    case CC_PreserveMost:
+      Out << 'U';
+      return;
+    case CC_PreserveNone:
+      Out << 'V';
+      return;
+    case CC_X86RegCall:
+      if (getASTContext().getLangOpts().RegCall4)
+        Out << "x";
+      else
+        Out << "w";
+      return;
   }
+
+  Error(Range.getBegin(), "calling convention") << Range;
 }
-void MicrosoftCXXNameMangler::mangleCallingConvention(const FunctionType *T) {
-  mangleCallingConvention(T->getCallConv());
+void MicrosoftCXXNameMangler::mangleCallingConvention(const FunctionType *T,
+                                                      SourceRange Range) {
+  mangleCallingConvention(T->getCallConv(), Range);
 }
 
 void MicrosoftCXXNameMangler::mangleThrowSpecification(
@@ -2657,11 +3230,7 @@ void MicrosoftCXXNameMangler::mangleType(const UnresolvedUsingType *T,
                                          Qualifiers, SourceRange Range) {
   // Probably should be mangled as a template instantiation; need to see what
   // VC does first.
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this unresolved dependent type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "unresolved dependent type") << Range;
 }
 
 // <type>        ::= <union-type> | <struct-type> | <class-type> | <enum-type>
@@ -2671,19 +3240,19 @@ void MicrosoftCXXNameMangler::mangleType(const UnresolvedUsingType *T,
 // <enum-type>   ::= W4 <name>
 void MicrosoftCXXNameMangler::mangleTagTypeKind(TagTypeKind TTK) {
   switch (TTK) {
-    case TTK_Union:
-      Out << 'T';
-      break;
-    case TTK_Struct:
-    case TTK_Interface:
-      Out << 'U';
-      break;
-    case TTK_Class:
-      Out << 'V';
-      break;
-    case TTK_Enum:
-      Out << "W4";
-      break;
+  case TagTypeKind::Union:
+    Out << 'T';
+    break;
+  case TagTypeKind::Struct:
+  case TagTypeKind::Interface:
+    Out << 'U';
+    break;
+  case TagTypeKind::Class:
+    Out << 'V';
+    break;
+  case TagTypeKind::Enum:
+    Out << "W4";
+    break;
   }
 }
 void MicrosoftCXXNameMangler::mangleType(const EnumType *T, Qualifiers,
@@ -2709,8 +3278,8 @@ void MicrosoftCXXNameMangler::mangleArtificialTagType(
   // Always start with the unqualified name.
   mangleSourceName(UnqualifiedName);
 
-  for (auto I = NestedNames.rbegin(), E = NestedNames.rend(); I != E; ++I)
-    mangleSourceName(*I);
+  for (StringRef N : llvm::reverse(NestedNames))
+    mangleSourceName(N);
 
   // Terminate the whole name with an '@'.
   Out << '@';
@@ -2768,11 +3337,8 @@ void MicrosoftCXXNameMangler::mangleArrayType(const ArrayType *T) {
       // The dependent expression has to be folded into a constant (TODO).
       const DependentSizedArrayType *DSAT =
         getASTContext().getAsDependentSizedArrayType(ElementTy);
-      DiagnosticsEngine &Diags = Context.getDiags();
-      unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-        "cannot mangle this dependent-length array yet");
-      Diags.Report(DSAT->getSizeExpr()->getExprLoc(), DiagID)
-        << DSAT->getBracketsRange();
+      Error(DSAT->getSizeExpr()->getExprLoc(), "dependent-length")
+          << DSAT->getBracketsRange();
       return;
     } else {
       break;
@@ -2784,6 +3350,11 @@ void MicrosoftCXXNameMangler::mangleArrayType(const ArrayType *T) {
   for (const llvm::APInt &Dimension : Dimensions)
     mangleNumber(Dimension.getLimitedValue());
   mangleType(ElementTy, SourceRange(), QMM_Escape);
+}
+
+void MicrosoftCXXNameMangler::mangleType(const ArrayParameterType *T,
+                                         Qualifiers, SourceRange) {
+  mangleArrayType(cast<ConstantArrayType>(T));
 }
 
 // <type>                   ::= <pointer-to-member-type>
@@ -2807,20 +3378,20 @@ void MicrosoftCXXNameMangler::mangleType(const MemberPointerType *T,
 
 void MicrosoftCXXNameMangler::mangleType(const TemplateTypeParmType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this template type parameter type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Out << '?';
+
+  llvm::SmallString<64> Name;
+  Name += "<TTPT_";
+  Name += llvm::utostr(T->getDepth());
+  Name += "_";
+  Name += llvm::utostr(T->getIndex());
+  Name += ">";
+  mangleSourceName(Name);
 }
 
 void MicrosoftCXXNameMangler::mangleType(const SubstTemplateTypeParmPackType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this substituted parameter pack yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "substituted parameter pack") << Range;
 }
 
 // <type> ::= <pointer-type>
@@ -2893,11 +3464,11 @@ void MicrosoftCXXNameMangler::mangleType(const ComplexType *T, Qualifiers,
   Extra.mangleSourceName("_Complex");
   Extra.mangleType(ElementType, Range, QMM_Escape);
 
-  mangleArtificialTagType(TTK_Struct, TemplateMangling, {"__clang"});
+  mangleArtificialTagType(TagTypeKind::Struct, TemplateMangling, {"__clang"});
 }
 
 // Returns true for types that mangleArtificialTagType() gets called for with
-// TTK_Union, TTK_Struct, TTK_Class and where compatibility with MSVC's
+// TagTypeKind Union, Struct, Class and where compatibility with MSVC's
 // mangling matters.
 // (It doesn't matter for Objective-C types and the like that cl.exe doesn't
 // support.)
@@ -2918,23 +3489,29 @@ bool MicrosoftCXXNameMangler::isArtificialTagType(QualType T) const {
 
 void MicrosoftCXXNameMangler::mangleType(const VectorType *T, Qualifiers Quals,
                                          SourceRange Range) {
-  const BuiltinType *ET = T->getElementType()->getAs<BuiltinType>();
-  assert(ET && "vectors with non-builtin elements are unsupported");
+  QualType EltTy = T->getElementType();
+  const BuiltinType *ET = EltTy->getAs<BuiltinType>();
+  const BitIntType *BitIntTy = EltTy->getAs<BitIntType>();
+  assert((ET || BitIntTy) &&
+         "vectors with non-builtin/_BitInt elements are unsupported");
   uint64_t Width = getASTContext().getTypeSize(T);
   // Pattern match exactly the typedefs in our intrinsic headers.  Anything that
   // doesn't match the Intel types uses a custom mangling below.
   size_t OutSizeBefore = Out.tell();
   if (!isa<ExtVectorType>(T)) {
-    if (getASTContext().getTargetInfo().getTriple().isX86()) {
+    if (getASTContext().getTargetInfo().getTriple().isX86() && ET) {
       if (Width == 64 && ET->getKind() == BuiltinType::LongLong) {
-        mangleArtificialTagType(TTK_Union, "__m64");
+        mangleArtificialTagType(TagTypeKind::Union, "__m64");
       } else if (Width >= 128) {
         if (ET->getKind() == BuiltinType::Float)
-          mangleArtificialTagType(TTK_Union, "__m" + llvm::utostr(Width));
+          mangleArtificialTagType(TagTypeKind::Union,
+                                  "__m" + llvm::utostr(Width));
         else if (ET->getKind() == BuiltinType::LongLong)
-          mangleArtificialTagType(TTK_Union, "__m" + llvm::utostr(Width) + 'i');
+          mangleArtificialTagType(TagTypeKind::Union,
+                                  "__m" + llvm::utostr(Width) + 'i');
         else if (ET->getKind() == BuiltinType::Double)
-          mangleArtificialTagType(TTK_Struct, "__m" + llvm::utostr(Width) + 'd');
+          mangleArtificialTagType(TagTypeKind::Struct,
+                                  "__m" + llvm::utostr(Width) + 'd');
       }
     }
   }
@@ -2950,10 +3527,11 @@ void MicrosoftCXXNameMangler::mangleType(const VectorType *T, Qualifiers Quals,
     MicrosoftCXXNameMangler Extra(Context, Stream);
     Stream << "?$";
     Extra.mangleSourceName("__vector");
-    Extra.mangleType(QualType(ET, 0), Range, QMM_Escape);
+    Extra.mangleType(QualType(ET ? static_cast<const Type *>(ET) : BitIntTy, 0),
+                     Range, QMM_Escape);
     Extra.mangleIntegerLiteral(llvm::APSInt::getUnsigned(T->getNumElements()));
 
-    mangleArtificialTagType(TTK_Union, TemplateMangling, {"__clang"});
+    mangleArtificialTagType(TagTypeKind::Union, TemplateMangling, {"__clang"});
   }
 }
 
@@ -2964,52 +3542,33 @@ void MicrosoftCXXNameMangler::mangleType(const ExtVectorType *T,
 
 void MicrosoftCXXNameMangler::mangleType(const DependentVectorType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(
-      DiagnosticsEngine::Error,
-      "cannot mangle this dependent-sized vector type yet");
-  Diags.Report(Range.getBegin(), DiagID) << Range;
+  Error(Range.getBegin(), "dependent-sized vector type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const DependentSizedExtVectorType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this dependent-sized extended vector type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "dependent-sized extended vector type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const ConstantMatrixType *T,
                                          Qualifiers quals, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                          "Cannot mangle this matrix type yet");
-  Diags.Report(Range.getBegin(), DiagID) << Range;
+  Error(Range.getBegin(), "matrix type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const DependentSizedMatrixType *T,
                                          Qualifiers quals, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(
-      DiagnosticsEngine::Error,
-      "Cannot mangle this dependent-sized matrix type yet");
-  Diags.Report(Range.getBegin(), DiagID) << Range;
+  Error(Range.getBegin(), "dependent-sized matrix type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const DependentAddressSpaceType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(
-      DiagnosticsEngine::Error,
-      "cannot mangle this dependent address space type yet");
-  Diags.Report(Range.getBegin(), DiagID) << Range;
+  Error(Range.getBegin(), "dependent address space type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const ObjCInterfaceType *T, Qualifiers,
                                          SourceRange) {
   // ObjC interfaces have structs underlying them.
-  mangleTagTypeKind(TTK_Struct);
+  mangleTagTypeKind(TagTypeKind::Struct);
   mangleName(T->getDecl());
 }
 
@@ -3029,7 +3588,7 @@ void MicrosoftCXXNameMangler::mangleType(const ObjCObjectType *T,
   TemplateArgBackReferences.swap(OuterTemplateArgsContext);
   NameBackReferences.swap(OuterTemplateContext);
 
-  mangleTagTypeKind(TTK_Struct);
+  mangleTagTypeKind(TagTypeKind::Struct);
 
   Out << "?$";
   if (T->isObjCId())
@@ -3073,97 +3632,64 @@ void MicrosoftCXXNameMangler::mangleType(const InjectedClassNameType *,
 
 void MicrosoftCXXNameMangler::mangleType(const TemplateSpecializationType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this template specialization type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "template specialization type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const DependentNameType *T, Qualifiers,
                                          SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this dependent name type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "dependent name type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(
     const DependentTemplateSpecializationType *T, Qualifiers,
     SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this dependent template specialization type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "dependent template specialization type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const PackExpansionType *T, Qualifiers,
                                          SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this pack expansion yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "pack expansion") << Range;
+}
+
+void MicrosoftCXXNameMangler::mangleType(const PackIndexingType *T,
+                                         Qualifiers Quals, SourceRange Range) {
+  manglePointerCVQualifiers(Quals);
+  mangleType(T->getSelectedType(), Range);
 }
 
 void MicrosoftCXXNameMangler::mangleType(const TypeOfType *T, Qualifiers,
                                          SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this typeof(type) yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "typeof(type)") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const TypeOfExprType *T, Qualifiers,
                                          SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this typeof(expression) yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "typeof(expression)") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const DecltypeType *T, Qualifiers,
                                          SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this decltype() yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "decltype()") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const UnaryTransformType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this unary transform type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "unary transform type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const AutoType *T, Qualifiers,
                                          SourceRange Range) {
   assert(T->getDeducedType().isNull() && "expecting a dependent type!");
 
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this 'auto' type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "'auto' type") << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(
     const DeducedTemplateSpecializationType *T, Qualifiers, SourceRange Range) {
   assert(T->getDeducedType().isNull() && "expecting a dependent type!");
 
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this deduced class template specialization type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Error(Range.getBegin(), "deduced class template specialization type")
+      << Range;
 }
 
 void MicrosoftCXXNameMangler::mangleType(const AtomicType *T, Qualifiers,
@@ -3177,7 +3703,7 @@ void MicrosoftCXXNameMangler::mangleType(const AtomicType *T, Qualifiers,
   Extra.mangleSourceName("_Atomic");
   Extra.mangleType(ValueType, Range, QMM_Escape);
 
-  mangleArtificialTagType(TTK_Struct, TemplateMangling, {"__clang"});
+  mangleArtificialTagType(TagTypeKind::Struct, TemplateMangling, {"__clang"});
 }
 
 void MicrosoftCXXNameMangler::mangleType(const PipeType *T, Qualifiers,
@@ -3192,7 +3718,7 @@ void MicrosoftCXXNameMangler::mangleType(const PipeType *T, Qualifiers,
   Extra.mangleType(ElementType, Range, QMM_Escape);
   Extra.mangleIntegerLiteral(llvm::APSInt::get(T->isReadOnly()));
 
-  mangleArtificialTagType(TTK_Struct, TemplateMangling, {"__clang"});
+  mangleArtificialTagType(TagTypeKind::Struct, TemplateMangling, {"__clang"});
 }
 
 void MicrosoftMangleContextImpl::mangleCXXName(GlobalDecl GD,
@@ -3207,40 +3733,42 @@ void MicrosoftMangleContextImpl::mangleCXXName(GlobalDecl GD,
   if (auto *CD = dyn_cast<CXXConstructorDecl>(D)) {
     auto Type = GD.getCtorType();
     MicrosoftCXXNameMangler mangler(*this, MHO, CD, Type);
-    return mangler.mangle(D);
+    return mangler.mangle(GD);
   }
 
   if (auto *DD = dyn_cast<CXXDestructorDecl>(D)) {
     auto Type = GD.getDtorType();
     MicrosoftCXXNameMangler mangler(*this, MHO, DD, Type);
-    return mangler.mangle(D);
+    return mangler.mangle(GD);
   }
 
   MicrosoftCXXNameMangler Mangler(*this, MHO);
-  return Mangler.mangle(D);
+  return Mangler.mangle(GD);
 }
 
-void MicrosoftCXXNameMangler::mangleType(const ExtIntType *T, Qualifiers,
+void MicrosoftCXXNameMangler::mangleType(const BitIntType *T, Qualifiers,
                                          SourceRange Range) {
   llvm::SmallString<64> TemplateMangling;
   llvm::raw_svector_ostream Stream(TemplateMangling);
   MicrosoftCXXNameMangler Extra(Context, Stream);
   Stream << "?$";
   if (T->isUnsigned())
-    Extra.mangleSourceName("_UExtInt");
+    Extra.mangleSourceName("_UBitInt");
   else
-    Extra.mangleSourceName("_ExtInt");
+    Extra.mangleSourceName("_BitInt");
   Extra.mangleIntegerLiteral(llvm::APSInt::getUnsigned(T->getNumBits()));
 
-  mangleArtificialTagType(TTK_Struct, TemplateMangling, {"__clang"});
+  mangleArtificialTagType(TagTypeKind::Struct, TemplateMangling, {"__clang"});
 }
 
-void MicrosoftCXXNameMangler::mangleType(const DependentExtIntType *T,
+void MicrosoftCXXNameMangler::mangleType(const DependentBitIntType *T,
                                          Qualifiers, SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(
-      DiagnosticsEngine::Error, "cannot mangle this DependentExtInt type yet");
-  Diags.Report(Range.getBegin(), DiagID) << Range;
+  Error(Range.getBegin(), "DependentBitInt type") << Range;
+}
+
+void MicrosoftCXXNameMangler::mangleType(const HLSLAttributedResourceType *T,
+                                         Qualifiers, SourceRange Range) {
+  llvm_unreachable("HLSL uses Itanium name mangling");
 }
 
 // <this-adjustment> ::= <no-adjustment> | <static-adjustment> |
@@ -3342,6 +3870,7 @@ void MicrosoftMangleContextImpl::mangleVirtualMemPtrThunk(
 
 void MicrosoftMangleContextImpl::mangleThunk(const CXXMethodDecl *MD,
                                              const ThunkInfo &Thunk,
+                                             bool /*ElideOverrideInfo*/,
                                              raw_ostream &Out) {
   msvc_hashing_ostream MHO(Out);
   MicrosoftCXXNameMangler Mangler(*this, MHO);
@@ -3363,9 +3892,11 @@ void MicrosoftMangleContextImpl::mangleThunk(const CXXMethodDecl *MD,
       DeclForFPT->getType()->castAs<FunctionProtoType>(), MD);
 }
 
-void MicrosoftMangleContextImpl::mangleCXXDtorThunk(
-    const CXXDestructorDecl *DD, CXXDtorType Type,
-    const ThisAdjustment &Adjustment, raw_ostream &Out) {
+void MicrosoftMangleContextImpl::mangleCXXDtorThunk(const CXXDestructorDecl *DD,
+                                                    CXXDtorType Type,
+                                                    const ThunkInfo &Thunk,
+                                                    bool /*ElideOverrideInfo*/,
+                                                    raw_ostream &Out) {
   // FIXME: Actually, the dtor thunk should be emitted for vector deleting
   // dtors rather than scalar deleting dtors. Just use the vector deleting dtor
   // mangling manually until we support both deleting dtor types.
@@ -3374,6 +3905,7 @@ void MicrosoftMangleContextImpl::mangleCXXDtorThunk(
   MicrosoftCXXNameMangler Mangler(*this, MHO, DD, Type);
   Mangler.getStream() << "??_E";
   Mangler.mangleName(DD->getParent());
+  auto &Adjustment = Thunk.This;
   mangleThunkThisAdjustment(DD->getAccess(), Adjustment, Mangler, MHO);
   Mangler.mangleFunctionType(DD->getType()->castAs<FunctionProtoType>(), DD);
 }
@@ -3396,6 +3928,12 @@ void MicrosoftMangleContextImpl::mangleCXXVFTable(
   for (const CXXRecordDecl *RD : BasePath)
     Mangler.mangleName(RD);
   Mangler.getStream() << '@';
+}
+
+void MicrosoftMangleContextImpl::mangleCXXVTable(const CXXRecordDecl *Derived,
+                                                 raw_ostream &Out) {
+  // TODO: Determine appropriate mangling for MSABI
+  mangleCXXVFTable(Derived, {}, Out);
 }
 
 void MicrosoftMangleContextImpl::mangleCXXVBTable(
@@ -3423,8 +3961,8 @@ void MicrosoftMangleContextImpl::mangleCXXRTTI(QualType T, raw_ostream &Out) {
   Mangler.getStream() << "@8";
 }
 
-void MicrosoftMangleContextImpl::mangleCXXRTTIName(QualType T,
-                                                   raw_ostream &Out) {
+void MicrosoftMangleContextImpl::mangleCXXRTTIName(
+    QualType T, raw_ostream &Out, bool NormalizeIntegers = false) {
   MicrosoftCXXNameMangler Mangler(*this, Out);
   Mangler.getStream() << '.';
   Mangler.mangleType(T, SourceRange(), MicrosoftCXXNameMangler::QMM_Result);
@@ -3487,7 +4025,7 @@ void MicrosoftMangleContextImpl::mangleCXXCatchableType(
   // FIXME: It is known that the Ctor is present in 2013, and in 2017.7
   // (_MSC_VER 1914) and newer, and that it's omitted in 2015 and 2017.4
   // (_MSC_VER 1911), but it's unknown when exactly it reappeared (1914?
-  // Or 1912, 1913 aleady?).
+  // Or 1912, 1913 already?).
   bool OmitCopyCtor = getASTContext().getLangOpts().isCompatibleWithMSVC(
                           LangOptions::MSVC2015) &&
                       !getASTContext().getLangOpts().isCompatibleWithMSVC(
@@ -3555,20 +4093,20 @@ void MicrosoftMangleContextImpl::mangleCXXRTTICompleteObjectLocator(
   llvm::raw_svector_ostream Stream(VFTableMangling);
   mangleCXXVFTable(Derived, BasePath, Stream);
 
-  if (VFTableMangling.startswith("??@")) {
-    assert(VFTableMangling.endswith("@"));
+  if (VFTableMangling.starts_with("??@")) {
+    assert(VFTableMangling.ends_with("@"));
     Out << VFTableMangling << "??_R4@";
     return;
   }
 
-  assert(VFTableMangling.startswith("??_7") ||
-         VFTableMangling.startswith("??_S"));
+  assert(VFTableMangling.starts_with("??_7") ||
+         VFTableMangling.starts_with("??_S"));
 
-  Out << "??_R4" << StringRef(VFTableMangling).drop_front(4);
+  Out << "??_R4" << VFTableMangling.str().drop_front(4);
 }
 
 void MicrosoftMangleContextImpl::mangleSEHFilterExpression(
-    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
+    GlobalDecl EnclosingDecl, raw_ostream &Out) {
   msvc_hashing_ostream MHO(Out);
   MicrosoftCXXNameMangler Mangler(*this, MHO);
   // The function body is in the same comdat as the function with the handler,
@@ -3580,7 +4118,7 @@ void MicrosoftMangleContextImpl::mangleSEHFilterExpression(
 }
 
 void MicrosoftMangleContextImpl::mangleSEHFinallyBlock(
-    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
+    GlobalDecl EnclosingDecl, raw_ostream &Out) {
   msvc_hashing_ostream MHO(Out);
   MicrosoftCXXNameMangler Mangler(*this, MHO);
   // The function body is in the same comdat as the function with the handler,
@@ -3591,12 +4129,13 @@ void MicrosoftMangleContextImpl::mangleSEHFinallyBlock(
   Mangler.mangleName(EnclosingDecl);
 }
 
-void MicrosoftMangleContextImpl::mangleTypeName(QualType T, raw_ostream &Out) {
+void MicrosoftMangleContextImpl::mangleCanonicalTypeName(
+    QualType T, raw_ostream &Out, bool NormalizeIntegers = false) {
   // This is just a made up unique string for the purposes of tbaa.  undname
   // does *not* know how to demangle it.
   MicrosoftCXXNameMangler Mangler(*this, Out);
   Mangler.getStream() << '?';
-  Mangler.mangleType(T, SourceRange());
+  Mangler.mangleType(T.getCanonicalType(), SourceRange());
 }
 
 void MicrosoftMangleContextImpl::mangleReferenceTemporary(
@@ -3604,7 +4143,8 @@ void MicrosoftMangleContextImpl::mangleReferenceTemporary(
   msvc_hashing_ostream MHO(Out);
   MicrosoftCXXNameMangler Mangler(*this, MHO);
 
-  Mangler.getStream() << "?$RT" << ManglingNumber << '@';
+  Mangler.getStream() << "?";
+  Mangler.mangleSourceName("$RT" + llvm::utostr(ManglingNumber));
   Mangler.mangle(VD, "");
 }
 
@@ -3613,7 +4153,8 @@ void MicrosoftMangleContextImpl::mangleThreadSafeStaticGuardVariable(
   msvc_hashing_ostream MHO(Out);
   MicrosoftCXXNameMangler Mangler(*this, MHO);
 
-  Mangler.getStream() << "?$TSS" << GuardNum << '@';
+  Mangler.getStream() << "?";
+  Mangler.mangleSourceName("$TSS" + llvm::utostr(GuardNum));
   Mangler.mangleNestedName(VD);
   Mangler.getStream() << "@4HA";
 }
@@ -3714,10 +4255,8 @@ void MicrosoftMangleContextImpl::mangleStringLiteral(const StringLiteral *SL,
   // char bar[42] = "foobar";
   // Where it is truncated or zero-padded to fit the array. This is the length
   // used for mangling, and any trailing null-bytes also need to be mangled.
-  unsigned StringLength = getASTContext()
-                              .getAsConstantArrayType(SL->getType())
-                              ->getSize()
-                              .getZExtValue();
+  unsigned StringLength =
+      getASTContext().getAsConstantArrayType(SL->getType())->getZExtSize();
   unsigned StringByteLength = StringLength * SL->getCharByteWidth();
 
   // <char-type>: The "kind" of string literal is encoded into the mangled name.
@@ -3768,7 +4307,7 @@ void MicrosoftMangleContextImpl::mangleStringLiteral(const StringLiteral *SL,
     // - ?[A-Z]: The range from \xc1 to \xda.
     // - ?[0-9]: The set of [,/\:. \n\t'-].
     // - ?$XX: A fallback which maps nibbles.
-    if (isIdentifierBody(Byte, /*AllowDollar=*/true)) {
+    if (isAsciiIdentifierContinue(Byte, /*AllowDollar=*/true)) {
       Mangler.getStream() << Byte;
     } else if (isLetter(Byte & 0x7f)) {
       Mangler.getStream() << '?' << static_cast<char>(Byte & 0x7f);
@@ -3799,7 +4338,59 @@ void MicrosoftMangleContextImpl::mangleStringLiteral(const StringLiteral *SL,
   Mangler.getStream() << '@';
 }
 
-MicrosoftMangleContext *
-MicrosoftMangleContext::create(ASTContext &Context, DiagnosticsEngine &Diags) {
-  return new MicrosoftMangleContextImpl(Context, Diags);
+void MicrosoftCXXNameMangler::mangleAutoReturnType(const MemberPointerType *T,
+                                                   Qualifiers Quals) {
+  QualType PointeeType = T->getPointeeType();
+  manglePointerCVQualifiers(Quals);
+  manglePointerExtQualifiers(Quals, PointeeType);
+  if (const FunctionProtoType *FPT = PointeeType->getAs<FunctionProtoType>()) {
+    Out << '8';
+    mangleName(T->getClass()->castAs<RecordType>()->getDecl());
+    mangleFunctionType(FPT, nullptr, true);
+  } else {
+    mangleQualifiers(PointeeType.getQualifiers(), true);
+    mangleName(T->getClass()->castAs<RecordType>()->getDecl());
+    mangleAutoReturnType(PointeeType, QMM_Drop);
+  }
+}
+
+void MicrosoftCXXNameMangler::mangleAutoReturnType(const PointerType *T,
+                                                   Qualifiers Quals) {
+  QualType PointeeType = T->getPointeeType();
+  assert(!PointeeType.getQualifiers().hasAddressSpace() &&
+         "Unexpected address space mangling required");
+
+  manglePointerCVQualifiers(Quals);
+  manglePointerExtQualifiers(Quals, PointeeType);
+
+  if (const FunctionProtoType *FPT = PointeeType->getAs<FunctionProtoType>()) {
+    Out << '6';
+    mangleFunctionType(FPT);
+  } else {
+    mangleAutoReturnType(PointeeType, QMM_Mangle);
+  }
+}
+
+void MicrosoftCXXNameMangler::mangleAutoReturnType(const LValueReferenceType *T,
+                                                   Qualifiers Quals) {
+  QualType PointeeType = T->getPointeeType();
+  assert(!Quals.hasConst() && !Quals.hasVolatile() && "unexpected qualifier!");
+  Out << 'A';
+  manglePointerExtQualifiers(Quals, PointeeType);
+  mangleAutoReturnType(PointeeType, QMM_Mangle);
+}
+
+void MicrosoftCXXNameMangler::mangleAutoReturnType(const RValueReferenceType *T,
+                                                   Qualifiers Quals) {
+  QualType PointeeType = T->getPointeeType();
+  assert(!Quals.hasConst() && !Quals.hasVolatile() && "unexpected qualifier!");
+  Out << "$$Q";
+  manglePointerExtQualifiers(Quals, PointeeType);
+  mangleAutoReturnType(PointeeType, QMM_Mangle);
+}
+
+MicrosoftMangleContext *MicrosoftMangleContext::create(ASTContext &Context,
+                                                       DiagnosticsEngine &Diags,
+                                                       bool IsAux) {
+  return new MicrosoftMangleContextImpl(Context, Diags, IsAux);
 }

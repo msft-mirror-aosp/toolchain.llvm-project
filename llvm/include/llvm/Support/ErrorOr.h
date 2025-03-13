@@ -15,6 +15,7 @@
 #ifndef LLVM_SUPPORT_ERROROR_H
 #define LLVM_SUPPORT_ERROROR_H
 
+#include "llvm/Support/AlignOf.h"
 #include <cassert>
 #include <system_error>
 #include <type_traits>
@@ -55,7 +56,7 @@ template<class T>
 class ErrorOr {
   template <class OtherT> friend class ErrorOr;
 
-  static constexpr bool isRef = std::is_reference<T>::value;
+  static constexpr bool isRef = std::is_reference_v<T>;
 
   using wrap = std::reference_wrapper<std::remove_reference_t<T>>;
 
@@ -84,7 +85,7 @@ public:
 
   template <class OtherT>
   ErrorOr(OtherT &&Val,
-          std::enable_if_t<std::is_convertible<OtherT, T>::value> * = nullptr)
+          std::enable_if_t<std::is_convertible_v<OtherT, T>> * = nullptr)
       : HasError(false) {
     new (getStorage()) storage_type(std::forward<OtherT>(Val));
   }
@@ -95,15 +96,14 @@ public:
 
   template <class OtherT>
   ErrorOr(const ErrorOr<OtherT> &Other,
-          std::enable_if_t<std::is_convertible<OtherT, T>::value> * = nullptr) {
+          std::enable_if_t<std::is_convertible_v<OtherT, T>> * = nullptr) {
     copyConstruct(Other);
   }
 
   template <class OtherT>
   explicit ErrorOr(
       const ErrorOr<OtherT> &Other,
-      std::enable_if_t<!std::is_convertible<OtherT, const T &>::value> * =
-          nullptr) {
+      std::enable_if_t<!std::is_convertible_v<OtherT, const T &>> * = nullptr) {
     copyConstruct(Other);
   }
 
@@ -113,7 +113,7 @@ public:
 
   template <class OtherT>
   ErrorOr(ErrorOr<OtherT> &&Other,
-          std::enable_if_t<std::is_convertible<OtherT, T>::value> * = nullptr) {
+          std::enable_if_t<std::is_convertible_v<OtherT, T>> * = nullptr) {
     moveConstruct(std::move(Other));
   }
 
@@ -122,7 +122,7 @@ public:
   template <class OtherT>
   explicit ErrorOr(
       ErrorOr<OtherT> &&Other,
-      std::enable_if_t<!std::is_convertible<OtherT, T>::value> * = nullptr) {
+      std::enable_if_t<!std::is_convertible_v<OtherT, T>> * = nullptr) {
     moveConstruct(std::move(Other));
   }
 
@@ -252,8 +252,8 @@ private:
   }
 
   union {
-    std::aligned_union_t<1, storage_type> TStorage;
-    std::aligned_union_t<1, std::error_code> ErrorStorage;
+    AlignedCharArrayUnion<storage_type> TStorage;
+    AlignedCharArrayUnion<std::error_code> ErrorStorage;
   };
   bool HasError : 1;
 };

@@ -15,17 +15,26 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/TableGen/Main.h"
+#include "TGLexer.h"
 #include "TGParser.h"
-#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SMLoc.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
-#include <algorithm>
-#include <cstdio>
+#include "llvm/TableGen/TGTimer.h"
+#include "llvm/TableGen/TableGenBackend.h"
+#include <memory>
+#include <string>
 #include <system_error>
+#include <utility>
 using namespace llvm;
 
 static cl::opt<std::string>
@@ -55,6 +64,10 @@ WriteIfChanged("write-if-changed", cl::desc("Only write output if it changed"));
 static cl::opt<bool>
 TimePhases("time-phases", cl::desc("Time phases of parser and backend"));
 
+static cl::opt<bool> NoWarnOnUnusedTemplateArgs(
+    "no-warn-on-unused-template-args",
+    cl::desc("Disable unused template argument warnings."));
+
 static int reportError(const char *ProgName, Twine Msg) {
   errs() << ProgName << ": " << Msg;
   errs().flush();
@@ -70,7 +83,7 @@ static int createDependencyFile(const TGParser &Parser, const char *argv0) {
     return reportError(argv0, "the option -d must be used together with -o\n");
 
   std::error_code EC;
-  ToolOutputFile DepOut(DependFilename, EC, sys::fs::OF_None);
+  ToolOutputFile DepOut(DependFilename, EC, sys::fs::OF_Text);
   if (EC)
     return reportError(argv0, "error opening " + DependFilename + ":" +
                                   EC.message() + "\n");
@@ -83,17 +96,19 @@ static int createDependencyFile(const TGParser &Parser, const char *argv0) {
   return 0;
 }
 
-int llvm::TableGenMain(const char *argv0, TableGenMainFn *MainFn) {
+int llvm::TableGenMain(const char *argv0,
+                       std::function<TableGenMainFn> MainFn) {
   RecordKeeper Records;
+  TGTimer &Timer = Records.getTimer();
 
   if (TimePhases)
-    Records.startPhaseTiming();
+    Timer.startPhaseTiming();
 
   // Parse the input file.
 
-  Records.startTimer("Parse, build records");
+  Timer.startTimer("Parse, build records");
   ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
-      MemoryBuffer::getFileOrSTDIN(InputFilename);
+      MemoryBuffer::getFileOrSTDIN(InputFilename, /*IsText=*/true);
   if (std::error_code EC = FileOrErr.getError())
     return reportError(argv0, "Could not open input file '" + InputFilename +
                                   "': " + EC.message() + "\n");
@@ -107,18 +122,27 @@ int llvm::TableGenMain(const char *argv0, TableGenMainFn *MainFn) {
   // it later.
   SrcMgr.setIncludeDirs(IncludeDirs);
 
-  TGParser Parser(SrcMgr, MacroNames, Records);
+  TGParser Parser(SrcMgr, MacroNames, Records, NoWarnOnUnusedTemplateArgs);
 
   if (Parser.ParseFile())
     return 1;
-  Records.stopTimer();
+  Timer.stopTimer();
+
+  // Return early if any other errors were generated during parsing
+  // (e.g., assert failures).
+  if (ErrorsPrinted > 0)
+    return reportError(argv0, Twine(ErrorsPrinted) + " errors.\n");
 
   // Write output to memory.
-  Records.startBackendTimer("Backend overall");
+  Timer.startBackendTimer("Backend overall");
   std::string OutString;
   raw_string_ostream Out(OutString);
-  unsigned status = MainFn(Out, Records);
-  Records.stopBackendTimer();
+  unsigned status = 0;
+  // ApplyCallback will return true if it did not apply any callback. In that
+  // case, attempt to apply the MainFn.
+  if (TableGen::Emitter::ApplyCallback(Records, Out))
+    status = MainFn ? MainFn(Out, Records) : 1;
+  Timer.stopBackendTimer();
   if (status)
     return 1;
 
@@ -131,29 +155,30 @@ int llvm::TableGenMain(const char *argv0, TableGenMainFn *MainFn) {
       return Ret;
   }
 
-  Records.startTimer("Write output");
+  Timer.startTimer("Write output");
   bool WriteFile = true;
   if (WriteIfChanged) {
     // Only updates the real output file if there are any differences.
     // This prevents recompilation of all the files depending on it if there
     // aren't any.
-    if (auto ExistingOrErr = MemoryBuffer::getFile(OutputFilename))
-      if (std::move(ExistingOrErr.get())->getBuffer() == Out.str())
+    if (auto ExistingOrErr =
+            MemoryBuffer::getFile(OutputFilename, /*IsText=*/true))
+      if (std::move(ExistingOrErr.get())->getBuffer() == OutString)
         WriteFile = false;
   }
   if (WriteFile) {
     std::error_code EC;
-    ToolOutputFile OutFile(OutputFilename, EC, sys::fs::OF_None);
+    ToolOutputFile OutFile(OutputFilename, EC, sys::fs::OF_Text);
     if (EC)
       return reportError(argv0, "error opening " + OutputFilename + ": " +
                                     EC.message() + "\n");
-    OutFile.os() << Out.str();
+    OutFile.os() << OutString;
     if (ErrorsPrinted == 0)
       OutFile.keep();
   }
-  
-  Records.stopTimer();
-  Records.stopPhaseTiming();
+
+  Timer.stopTimer();
+  Timer.stopPhaseTiming();
 
   if (ErrorsPrinted > 0)
     return reportError(argv0, Twine(ErrorsPrinted) + " errors.\n");

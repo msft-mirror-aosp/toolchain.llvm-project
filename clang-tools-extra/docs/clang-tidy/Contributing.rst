@@ -22,6 +22,8 @@ There are a few tools particularly useful when developing clang-tidy checks:
     check, it will create the check, update the CMake file and create a test;
   * ``rename_check.py`` does what the script name suggests, renames an existing
     check;
+  * :program:`pp-trace` logs method calls on `PPCallbacks` for a source file
+    and is invaluable in understanding the preprocessor mechanism;
   * :program:`clang-query` is invaluable for interactive prototyping of AST
     matchers and exploration of the Clang AST;
   * `clang-check`_ with the ``-ast-dump`` (and optionally ``-ast-dump-filter``)
@@ -70,6 +72,14 @@ let's start!
 .. _Using Clang Tools: https://clang.llvm.org/docs/ClangTools.html
 .. _How To Setup Clang Tooling For LLVM: https://clang.llvm.org/docs/HowToSetupToolingForLLVM.html
 
+When you `configure the CMake build <https://llvm.org/docs/GettingStarted.html#local-llvm-configuration>`_,
+make sure that you enable the ``clang`` and ``clang-tools-extra`` projects to
+build :program:`clang-tidy`.
+Because your new check will have associated documentation, you will also want to install
+`Sphinx <https://www.sphinx-doc.org/en/master/>`_ and enable it in the CMake configuration.
+To save build time of the core Clang libraries you may want to only enable the ``X86``
+target in the CMake configuration.
+
 
 The Directory Structure
 -----------------------
@@ -117,22 +127,23 @@ Writing a clang-tidy Check
 
 So you have an idea of a useful check for :program:`clang-tidy`.
 
-First, if you're not familiar with LLVM development, read through the `Getting
-Started with LLVM`_ document for instructions on setting up your workflow and
+First, if you're not familiar with LLVM development, read through the `Getting Started 
+with the LLVM System`_ document for instructions on setting up your workflow and
 the `LLVM Coding Standards`_ document to familiarize yourself with the coding
-style used in the project. For code reviews we mostly use `LLVM Phabricator`_.
+style used in the project. For code reviews we currently use `LLVM Github`_,
+though historically we used Phabricator.
 
-.. _Getting Started with LLVM: https://llvm.org/docs/GettingStarted.html
+.. _Getting Started with the LLVM System: https://llvm.org/docs/GettingStarted.html
 .. _LLVM Coding Standards: https://llvm.org/docs/CodingStandards.html
-.. _LLVM Phabricator: https://llvm.org/docs/Phabricator.html
+.. _LLVM Github: https://github.com/llvm/llvm-project
 
 Next, you need to decide which module the check belongs to. Modules
 are located in subdirectories of `clang-tidy/
-<https://github.com/llvm/llvm-project/tree/master/clang-tools-extra/clang-tidy/>`_
+<https://github.com/llvm/llvm-project/tree/main/clang-tools-extra/clang-tidy/>`_
 and contain checks targeting a certain aspect of code quality (performance,
 readability, etc.), certain coding style or standard (Google, LLVM, CERT, etc.)
-or a widely used API (e.g. MPI). Their names are same as user-facing check
-groups names described :ref:`above <checks-groups-table>`.
+or a widely used API (e.g. MPI). Their names are the same as the user-facing
+check group names described :ref:`above <checks-groups-table>`.
 
 After choosing the module and the name for the check, run the
 ``clang-tidy/add_new_check.py`` script to create the skeleton of the check and
@@ -211,15 +222,238 @@ can further inspect them and report diagnostics.
 
 (If you want to see an example of a useful check, look at
 `clang-tidy/google/ExplicitConstructorCheck.h
-<https://github.com/llvm/llvm-project/blob/master/clang-tools-extra/clang-tidy/google/ExplicitConstructorCheck.h>`_
+<https://github.com/llvm/llvm-project/blob/main/clang-tools-extra/clang-tidy/google/ExplicitConstructorCheck.h>`_
 and `clang-tidy/google/ExplicitConstructorCheck.cpp
 <https://reviews.llvm.org/diffusion/L/browse/clang-tools-extra/trunk/clang-tidy/google/ExplicitConstructorCheck.cpp>`_).
+
+If you need to interact with macros or preprocessor directives, you will want to
+override the method ``registerPPCallbacks``.  The ``add_new_check.py`` script
+does not generate an override for this method in the starting point for your
+new check.
+
+If your check applies only under a specific set of language options, be sure
+to override the method ``isLanguageVersionSupported`` to reflect that.
+
+Check development tips
+----------------------
+
+Writing your first check can be a daunting task, particularly if you are unfamiliar
+with the LLVM and Clang code bases.  Here are some suggestions for orienting yourself
+in the codebase and working on your check incrementally.
+
+Guide to useful documentation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Many of the support classes created for LLVM are used by Clang, such as `StringRef
+<https://llvm.org/docs/ProgrammersManual.html#the-stringref-class>`_
+and `SmallVector <https://llvm.org/docs/ProgrammersManual.html#llvm-adt-smallvector-h>`_.
+These and other commonly used classes are described in the `Important and useful LLVM APIs
+<https://llvm.org/docs/ProgrammersManual.html#important-and-useful-llvm-apis>`_ and
+`Picking the Right Data Structure for the Task
+<https://llvm.org/docs/ProgrammersManual.html#picking-the-right-data-structure-for-a-task>`_
+sections of the `LLVM Programmer's Manual
+<https://llvm.org/docs/ProgrammersManual.html>`_.  You don't need to memorize all the
+details of these classes; the generated `doxygen documentation <https://llvm.org/doxygen/>`_
+has everything if you need it.  In the header `LLVM/ADT/STLExtras.h
+<https://llvm.org/doxygen/STLExtras_8h.html>`_ you'll find useful versions of the STL
+algorithms that operate on LLVM containers, such as `llvm::all_of
+<https://llvm.org/doxygen/STLExtras_8h.html#func-members>`_.
+
+Clang is implemented on top of LLVM and introduces its own set of classes that you
+will interact with while writing your check.  When a check issues diagnostics and
+fix-its, these are associated with locations in the source code.  Source code locations,
+source files, ranges of source locations and the `SourceManager
+<https://clang.llvm.org/doxygen/classclang_1_1SourceManager.html>`_ class provide
+the mechanisms for describing such locations.  These and
+other topics are described in the `"Clang" CFE Internals Manual
+<https://clang.llvm.org/docs/InternalsManual.html>`_.  Whereas the doxygen generated
+documentation serves as a reference to the internals of Clang, this document serves
+as a guide to other developers.  Topics in that manual of interest to a check developer
+are:
+
+- `The Clang "Basic" Library
+  <https://clang.llvm.org/docs/InternalsManual.html#the-clang-basic-library>`_ for
+  information about diagnostics, fix-it hints and source locations.
+- `The Lexer and Preprocessor Library
+  <https://clang.llvm.org/docs/InternalsManual.html#the-lexer-and-preprocessor-library>`_
+  for information about tokens, lexing (transforming characters into tokens) and the
+  preprocessor.
+- `The AST Library
+  <https://clang.llvm.org/docs/InternalsManual.html#the-ast-library>`_
+  for information about how C++ source statements are represented as an abstract syntax
+  tree (AST).
+
+Most checks will interact with C++ source code via the AST.  Some checks will interact
+with the preprocessor.  The input source file is lexed and preprocessed and then parsed
+into the AST.  Once the AST is fully constructed, the check is run by applying the check's
+registered AST matchers against the AST and invoking the check with the set of matched
+nodes from the AST.  Monitoring the actions of the preprocessor is detached from the
+AST construction, but a check can collect information during preprocessing for later
+use by the check when nodes are matched by the AST.
+
+Every syntactic (and sometimes semantic) element of the C++ source code is represented by
+different classes in the AST.  You select the portions of the AST you're interested in
+by composing AST matcher functions.  You will want to study carefully the `AST Matcher
+Reference <https://clang.llvm.org/docs/LibASTMatchersReference.html>`_ to understand
+the relationship between the different matcher functions.
+
+Using the Transformer library
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The Transformer library allows you to write a check that transforms source code by
+expressing the transformation as a ``RewriteRule``.  The Transformer library provides
+functions for composing edits to source code to create rewrite rules.  Unless you need
+to perform low-level source location manipulation, you may want to consider writing your
+check with the Transformer library.  The `Clang Transformer Tutorial
+<https://clang.llvm.org/docs/ClangTransformerTutorial.html>`_ describes the Transformer
+library in detail.
+
+To use the Transformer library, make the following changes to the code generated by
+the ``add_new_check.py`` script:
+
+- Include ``../utils/TransformerClangTidyCheck.h`` instead of ``../ClangTidyCheck.h``
+- Change the base class of your check from ``ClangTidyCheck`` to ``TransformerClangTidyCheck``
+- Delete the override of the ``registerMatchers`` and ``check`` methods in your check class.
+- Write a function that creates the ``RewriteRule`` for your check.
+- Call the function in your check's constructor to pass the rewrite rule to
+  ``TransformerClangTidyCheck``'s constructor.
+
+Developing your check incrementally
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The best way to develop your check is to start with the simple test cases and increase
+complexity incrementally.  The test file created by the ``add_new_check.py`` script is
+a starting point for your test cases.  A rough outline of the process looks like this:
+
+- Write a test case for your check.
+- Prototype matchers on the test file using :program:`clang-query`.
+- Capture the working matchers in the ``registerMatchers`` method.
+- Issue the necessary diagnostics and fix-its in the ``check`` method.
+- Add the necessary ``CHECK-MESSAGES`` and ``CHECK-FIXES`` annotations to your
+  test case to validate the diagnostics and fix-its.
+- Build the target ``check-clang-tools`` to confirm the test passes.
+- Repeat the process until all aspects of your check are covered by tests.
+
+The quickest way to prototype your matcher is to use :program:`clang-query` to
+interactively build up your matcher.  For complicated matchers, build up a matching
+expression incrementally and use :program:`clang-query`'s ``let`` command to save named
+matching expressions to simplify your matcher.
+
+.. code-block:: console
+
+  clang-query> let c1 cxxRecordDecl()
+  clang-query> match c1
+
+Alternatively, pressing the tab key after a previous matcher's open parentheses 
+would also show which matchers can be chained with the previous matcher, 
+though some matchers that work may not be listed. Note that tab completion 
+does not currently work on Windows.
+
+Just like breaking up a huge function into smaller chunks with 
+intention-revealing names can help you understand a complex algorithm, breaking 
+up a matcher into smaller matchers with intention-revealing names can help 
+you understand a complicated matcher.  
+
+Once you have a working :program:`clang-query` matcher, the C++ API matchers 
+will be the same or similar to your interactively constructed matcher (there 
+can be cases where they differ slightly). You can use local variables to preserve 
+your intention-revealing names that you applied to nested matchers.
+
+Creating private matchers
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Sometimes you want to match a specific aspect of the AST that isn't provided by the
+existing AST matchers.  You can create your own private matcher using the same
+infrastructure as the public matchers.  A private matcher can simplify the processing
+in your ``check`` method by eliminating complex hand-crafted AST traversal of the
+matched nodes.  Using the private matcher allows you to select the desired portions
+of the AST directly in the matcher and refer to it by a bound name in the ``check``
+method.
+
+Unit testing helper code
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Private custom matchers are a good example of auxiliary support code for your check
+that can be tested with a unit test.  It will be easier to test your matchers or
+other support classes by writing a unit test than by writing a ``FileCheck`` integration
+test.  The ``ASTMatchersTests`` target contains unit tests for the public AST matcher
+classes and is a good source of testing idioms for matchers.
+
+You can build the Clang-tidy unit tests by building the ``ClangTidyTests`` target.
+Test targets in LLVM and Clang are excluded from the "build all" style action of
+IDE-based CMake generators, so you need to explicitly build the target for the unit
+tests to be built.
+
+Making your check robust
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Once you've covered your check with the basic "happy path" scenarios, you'll want to
+torture your check with as many edge cases as you can cover in order to ensure your
+check is robust.  Running your check on a large code base, such as Clang/LLVM, is a
+good way to catch things you forgot to account for in your matchers.  However, the
+LLVM code base may be insufficient for testing purposes as it was developed against a
+particular set of coding styles and quality measures.  The larger the corpus of code
+the check is tested against, the higher confidence the community will have in the
+check's efficacy and false positive rate.
+
+Some suggestions to ensure your check is robust:
+
+- Create header files that contain code matched by your check.
+- Validate that fix-its are properly applied to test header files with
+  :program:`clang-tidy`.  You will need to perform this test manually until
+  automated support for checking messages and fix-its is added to the
+  ``check_clang_tidy.py`` script.
+- Define macros that contain code matched by your check.
+- Define template classes that contain code matched by your check.
+- Define template specializations that contain code matched by your check.
+- Test your check under both Windows and Linux environments.
+- Watch out for high false positive rates.  Ideally, a check would have no false
+  positives, but given that matching against an AST is not control- or data flow-
+  sensitive, a number of false positives are expected.  The higher the false
+  positive rate, the less likely the check will be adopted in practice.
+  Mechanisms should be put in place to help the user manage false positives.
+- There are two primary mechanisms for managing false positives: supporting a
+  code pattern which allows the programmer to silence the diagnostic in an ad
+  hoc manner and check configuration options to control the behavior of the check.
+- Consider supporting a code pattern to allow the programmer to silence the
+  diagnostic whenever such a code pattern can clearly express the programmer's
+  intent.  For example, allowing an explicit cast to ``void`` to silence an
+  unused variable diagnostic.
+- Consider adding check configuration options to allow the user to opt into
+  more aggressive checking behavior without burdening users for the common
+  high-confidence cases.
+
+Documenting your check
+^^^^^^^^^^^^^^^^^^^^^^
+
+The ``add_new_check.py`` script creates entries in the
+`release notes <https://clang.llvm.org/extra/ReleaseNotes.html>`_, the list of
+checks and a new file for the check documentation itself.  It is recommended that you
+have a concise summation of what your check does in a single sentence that is repeated
+in the release notes, as the first sentence in the doxygen comments in the header file
+for your check class and as the first sentence of the check documentation.  Avoid the
+phrase "this check" in your check summation and check documentation.
+
+If your check relates to a published coding guideline (C++ Core Guidelines, MISRA, etc.)
+or style guide, provide links to the relevant guideline or style guide sections in your
+check documentation.
+
+Provide enough examples of the diagnostics and fix-its provided by the check so that a
+user can easily understand what will happen to their code when the check is run.
+If there are exceptions or limitations to your check, document them thoroughly.  This
+will help users understand the scope of the diagnostics and fix-its provided by the check.
+
+Building the target ``docs-clang-tools-html`` will run the Sphinx documentation generator
+and create documentation HTML files in the tools/clang/tools/extra/docs/html directory in
+your build tree.  Make sure that your check is correctly shown in the release notes and the
+list of checks.  Make sure that the formatting and structure of your check's documentation
+looks correct.
 
 
 Registering your Check
 ----------------------
 
-(The ``add_new_check.py`` takes care of registering the check in an existing
+(The ``add_new_check.py`` script takes care of registering the check in an existing
 module. If you want to create a new module or know the details, read on.)
 
 The check should be registered in the corresponding module with a distinct name:
@@ -256,7 +490,7 @@ Add this near the ``ClangTidyModuleRegistry::Add<MyModule>`` variable:
 
 And this to the main translation unit of the :program:`clang-tidy` binary (or
 the binary you link the ``clang-tidy`` library in)
-``clang-tidy/tool/ClangTidyMain.cpp``:
+``clang-tidy/ClangTidyForceLinker.h``:
 
 .. code-block:: c++
 
@@ -285,8 +519,8 @@ the check implements and what the current values are (e.g. for the
   public:
     MyCheck(StringRef Name, ClangTidyContext *Context)
       : ClangTidyCheck(Name, Context),
-        SomeOption(Options.get("SomeOption1", -1U)),
-        SomeOption(Options.get("SomeOption2", "some default")) {}
+        SomeOption1(Options.get("SomeOption1", -1U)),
+        SomeOption2(Options.get("SomeOption2", "some default")) {}
 
     void storeOptions(ClangTidyOptions::OptionMap &Opts) override {
       Options.store(Opts, "SomeOption1", SomeOption1);
@@ -300,23 +534,23 @@ be set in a ``.clang-tidy`` file in the following way:
 .. code-block:: yaml
 
   CheckOptions:
-    - key: my-check.SomeOption1
-      value: 123
-    - key: my-check.SomeOption2
-      value: 'some other value'
+    my-check.SomeOption1: 123
+    my-check.SomeOption2: 'some other value'
 
 If you need to specify check options on a command line, you can use the inline
 YAML format:
 
 .. code-block:: console
 
-  $ clang-tidy -config="{CheckOptions: [{key: a, value: b}, {key: x, value: y}]}" ...
+  $ clang-tidy -config="{CheckOptions: {a: b, x: y}}" ...
 
 
 Testing Checks
 --------------
 
-To run tests for :program:`clang-tidy` use the command:
+To run tests for :program:`clang-tidy`, build the ``check-clang-tools`` target.
+For instance, if you configured your CMake build with the ninja project generator,
+use the command:
 
 .. code-block:: console
 
@@ -361,7 +595,7 @@ to incorrect parts of the input. Use ``[[@LINE+X]]``/``[[@LINE-X]]``
 substitutions and distinct function and variable names in the test code.
 
 Here's an example of a test using the ``check_clang_tidy.py`` script (the full
-source code is at `test/clang-tidy/google-readability-casting.cpp`_):
+source code is at `test/clang-tidy/checkers/google/readability-casting.cpp`_):
 
 .. code-block:: c++
 
@@ -394,7 +628,6 @@ Here's an example:
    // CHECK-FIXES-USING-B-NOT: using a::B;$
    // CHECK-FIXES-NOT: using a::C;$
 
-
 There are many dark corners in the C++ language, and it may be difficult to make
 your check work perfectly in all cases, especially if it issues fix-it hints. The
 most frequent pitfalls are macros and templates:
@@ -411,10 +644,56 @@ most frequent pitfalls are macros and templates:
    macro expansions/template instantiations, but easily break some other
    expansions/instantiations.
 
+If you need multiple files to exercise all the aspects of your check, it is
+recommended you place them in a subdirectory named for the check under the ``Inputs``
+directory for the module containing your check.  This keeps the test directory from
+getting cluttered.
+
+If you need to validate how your check interacts with system header files, a set
+of simulated system header files is located in the ``checkers/Inputs/Headers``
+directory.  The path to this directory is available in a lit test with the variable
+``%clang_tidy_headers``.
+
 .. _lit: https://llvm.org/docs/CommandGuide/lit.html
 .. _FileCheck: https://llvm.org/docs/CommandGuide/FileCheck.html
-.. _test/clang-tidy/google-readability-casting.cpp: https://reviews.llvm.org/diffusion/L/browse/clang-tools-extra/trunk/test/clang-tidy/google-readability-casting.cpp
+.. _test/clang-tidy/checkers/google/readability-casting.cpp: https://github.com/llvm/llvm-project/blob/main/clang-tools-extra/test/clang-tidy/checkers/google/readability-casting.cpp
 
+Out-of-tree check plugins
+-------------------------
+
+
+Developing an out-of-tree check as a plugin largely follows the steps
+outlined above, including creating a new module and doing the hacks to 
+register the module. The plugin is a shared library whose code lives outside
+the clang-tidy build system. Build and link this shared library against
+LLVM as done for other kinds of Clang plugins. If using CMake, use the keyword
+``MODULE`` while invoking ``add_library`` or ``llvm_add_library``.
+
+The plugin can be loaded by passing `-load` to `clang-tidy` in addition to the
+names of the checks to enable.
+
+.. code-block:: console
+
+  $ clang-tidy --checks=-*,my-explicit-constructor -list-checks -load myplugin.so
+
+There is no expectations regarding ABI and API stability, so the plugin must be
+compiled against the version of clang-tidy that will be loading the plugin.
+
+The plugins can use threads, TLS, or any other facilities available to in-tree
+code which is accessible from the external headers.
+
+Note that testing out-of-tree checks might involve getting ``llvm-lit`` from an LLVM 
+installation compiled from source. See `Getting Started with the LLVM System`_ for ways 
+to do so.
+
+Alternatively, get `lit`_ following the `test-suite guide`_ and get the `FileCheck`_ binary, 
+and write a version of `check_clang_tidy.py`_ to suit your needs.
+
+.. _Getting Started with the LLVM System: https://llvm.org/docs/GettingStarted.html
+.. _test-suite guide: https://llvm.org/docs/TestSuiteGuide.html
+.. _lit: https://llvm.org/docs/CommandGuide/lit.html
+.. _FileCheck: https://llvm.org/docs/CommandGuide/FileCheck.html
+.. _check_clang_tidy.py: https://github.com/llvm/llvm-project/blob/main/clang-tools-extra/test/clang-tidy/check_clang_tidy.py
 
 Running clang-tidy on LLVM
 --------------------------
@@ -440,10 +719,10 @@ warnings and errors. The script provides multiple configuration flags.
 
 * To restrict the files examined you can provide one or more regex arguments
   that the file names are matched against.
-  ``run-clang-tidy.py clang-tidy/.*Check\.cpp`` will only analyze clang-tidy
-  checks. It may also be necessary to restrict the header files warnings are
-  displayed from using the ``-header-filter`` flag. It has the same behavior
-  as the corresponding :program:`clang-tidy` flag.
+  ``run-clang-tidy.py clang-tidy/.*Check\.cpp`` will only analyze `clang-tidy`
+  checks. It may also be necessary to restrict the header files that warnings
+  are displayed from by using the ``-header-filter`` and ``-exclude-header-filter`` flags. 
+  They have the same behavior as the corresponding :program:`clang-tidy` flags.
 
 * To apply suggested fixes ``-fix`` can be passed as an argument. This gathers
   all changes in a temporary directory and applies them. Passing ``-format``
@@ -475,7 +754,7 @@ It can also store that data as JSON files for further processing. Example output
 
 .. code-block:: console
 
-  $ clang-tidy -enable-check-profile -store-check-profile=.  -checks=-*,readability-function-size source.cpp
+  $ clang-tidy -enable-check-profile -store-check-profile=. -checks=-*,readability-function-size source.cpp
   $ # Note that there won't be timings table printed to the console.
   $ ls /tmp/out/
   20180516161318717446360-source.cpp.json

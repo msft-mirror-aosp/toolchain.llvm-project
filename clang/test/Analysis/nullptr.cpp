@@ -1,4 +1,4 @@
-// RUN: %clang_analyze_cc1 -std=c++11 -Wno-conversion-null -analyzer-checker=core,debug.ExprInspection -analyzer-store region -analyzer-output=text -verify %s
+// RUN: %clang_analyze_cc1 -std=c++11 -Wno-conversion-null -analyzer-checker=core,debug.ExprInspection -analyzer-output=text -verify %s
 
 void clang_analyzer_eval(int);
 
@@ -64,7 +64,7 @@ void zoo1backwards() {
 
 typedef __INTPTR_TYPE__ intptr_t;
 void zoo1multiply() {
-  char **p = 0; // FIXME-should-be-note:{{'p' initialized to a null pointer value}}
+  char **p = 0; // expected-note{{'p' initialized to a null pointer value}}
   delete *((char **)((intptr_t)p * 2)); // expected-warning{{Dereference of null pointer}}
                    // expected-note@-1{{Dereference of null pointer}}
 }
@@ -173,3 +173,19 @@ void test_address_space_bind() {
   AS1 AS_ATTRIBUTE &r = *pa;
   r.x = 0; // no-warning
 }
+
+namespace ArrMemWithCtorInitializer {
+struct ArrayMem {
+  int* ptrArr[1];
+  int* memPtr;
+  ArrayMem() : ptrArr{nullptr}, memPtr{nullptr} {}
+  // expected-note@-1{{Storing null pointer value}}
+};
+
+void tp() {
+  ArrayMem obj; // expected-note{{Calling default constructor for 'ArrayMem'}}
+                // expected-note@-1{{Returning from default constructor for 'ArrayMem'}}
+  *obj.ptrArr[0] = 0; // expected-warning{{Dereference of null pointer}}
+                       // expected-note@-1{{Dereference of null pointer}}
+}
+} // namespace ArrMemWithCtorInitializer

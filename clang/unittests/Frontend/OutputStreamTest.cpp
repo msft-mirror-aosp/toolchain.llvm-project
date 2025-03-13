@@ -13,6 +13,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/FrontendTool/Utils.h"
 #include "clang/Lex/PreprocessorOptions.h"
+#include "llvm/Support/VirtualFileSystem.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -37,12 +38,12 @@ TEST(FrontendOutputTests, TestOutputStream) {
 
   Compiler.setOutputStream(std::move(IRStream));
   Compiler.setInvocation(std::move(Invocation));
-  Compiler.createDiagnostics();
+  Compiler.createDiagnostics(*llvm::vfs::getRealFileSystem());
 
   bool Success = ExecuteCompilerInvocation(&Compiler);
   EXPECT_TRUE(Success);
   EXPECT_TRUE(!IRBuffer.empty());
-  EXPECT_TRUE(StringRef(IRBuffer.data()).startswith("BC"));
+  EXPECT_TRUE(StringRef(IRBuffer.data()).starts_with("BC"));
 }
 
 TEST(FrontendOutputTests, TestVerboseOutputStreamShared) {
@@ -62,12 +63,13 @@ TEST(FrontendOutputTests, TestVerboseOutputStreamShared) {
   Compiler.setInvocation(std::move(Invocation));
   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions();
   Compiler.createDiagnostics(
+      *llvm::vfs::getRealFileSystem(),
       new TextDiagnosticPrinter(llvm::nulls(), &*DiagOpts), true);
   Compiler.setVerboseOutputStream(VerboseStream);
 
   bool Success = ExecuteCompilerInvocation(&Compiler);
   EXPECT_FALSE(Success);
-  EXPECT_TRUE(!VerboseStream.str().empty());
+  EXPECT_TRUE(!VerboseBuffer.empty());
   EXPECT_TRUE(StringRef(VerboseBuffer.data()).contains("errors generated"));
 }
 
@@ -91,6 +93,7 @@ TEST(FrontendOutputTests, TestVerboseOutputStreamOwned) {
     Compiler.setInvocation(std::move(Invocation));
     IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions();
     Compiler.createDiagnostics(
+        *llvm::vfs::getRealFileSystem(),
         new TextDiagnosticPrinter(llvm::nulls(), &*DiagOpts), true);
     Compiler.setVerboseOutputStream(std::move(VerboseStream));
 
@@ -100,4 +103,13 @@ TEST(FrontendOutputTests, TestVerboseOutputStreamOwned) {
   EXPECT_TRUE(!VerboseBuffer.empty());
   EXPECT_TRUE(StringRef(VerboseBuffer.data()).contains("errors generated"));
 }
+
+TEST(FrontendOutputTests, TestVerboseOutputStreamOwnedNotLeaked) {
+  CompilerInstance Compiler;
+  Compiler.setVerboseOutputStream(std::make_unique<raw_null_ostream>());
+
+  // Trust leak sanitizer bots to catch a leak here.
+  Compiler.setVerboseOutputStream(llvm::nulls());
 }
+
+} // anonymous namespace

@@ -23,7 +23,34 @@ namespace mlir {
 struct CallInterfaceCallable : public PointerUnion<SymbolRefAttr, Value> {
   using PointerUnion<SymbolRefAttr, Value>::PointerUnion;
 };
-} // end namespace mlir
+
+class CallOpInterface;
+
+namespace call_interface_impl {
+
+/// Resolve the callable operation for given callee to a CallableOpInterface, or
+/// nullptr if a valid callable was not resolved.  `symbolTable` is an optional
+/// parameter that will allow for using a cached symbol table for symbol lookups
+/// instead of performing an O(N) scan.
+Operation *resolveCallable(CallOpInterface call,
+                           SymbolTableCollection *symbolTable = nullptr);
+
+} // namespace call_interface_impl
+
+} // namespace mlir
+
+namespace llvm {
+
+// Allow llvm::cast style functions.
+template <typename To>
+struct CastInfo<To, mlir::CallInterfaceCallable>
+    : public CastInfo<To, mlir::CallInterfaceCallable::PointerUnion> {};
+
+template <typename To>
+struct CastInfo<To, const mlir::CallInterfaceCallable>
+    : public CastInfo<To, const mlir::CallInterfaceCallable::PointerUnion> {};
+
+} // namespace llvm
 
 /// Include the generated interface declarations.
 #include "mlir/Interfaces/CallInterfaces.h.inc"

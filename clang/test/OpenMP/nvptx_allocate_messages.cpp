@@ -1,6 +1,6 @@
 // RUN: %clang_cc1 -verify -fopenmp -triple x86_64-apple-darwin10.6.0 -fopenmp-targets=nvptx64-nvidia-cuda  -emit-llvm-bc -o %t-host.bc %s
-// RUN: %clang_cc1 -verify -DDEVICE -fopenmp -triple nvptx64-nvidia-cuda -fopenmp-targets=nvptx64-nvidia-cuda -fsyntax-only %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-host.bc
-// RUN: %clang_cc1 -verify -DDEVICE -DREQUIRES -fopenmp -triple nvptx64-nvidia-cuda -fopenmp-targets=nvptx64-nvidia-cuda -fsyntax-only %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-host.bc
+// RUN: %clang_cc1 -verify -DDEVICE -fopenmp -triple nvptx64-nvidia-cuda -fopenmp-targets=nvptx64-nvidia-cuda -fsyntax-only %s -fopenmp-is-target-device -fopenmp-host-ir-file-path %t-host.bc
+// RUN: %clang_cc1 -verify -DDEVICE -DREQUIRES -fopenmp -triple nvptx64-nvidia-cuda -fopenmp-targets=nvptx64-nvidia-cuda -fsyntax-only %s -fopenmp-is-target-device -fopenmp-host-ir-file-path %t-host.bc
 #if !defined(DEVICE) || defined(REQUIRES)
 // expected-no-diagnostics
 #endif // DEVICE
@@ -81,8 +81,7 @@ int main () {
 #endif // DEVICE && !REQUIRES
 #pragma omp allocate(b)
 #if defined(DEVICE) && !defined(REQUIRES)
-// expected-note@+3 {{in instantiation of function template specialization 'foo<int>' requested here}}
-// expected-note@+2 {{called by 'main'}}
+// expected-note@+2 2{{called by 'main'}}
 #endif // DEVICE && !REQUIRES
   return (foo<int>() + bar());
 }

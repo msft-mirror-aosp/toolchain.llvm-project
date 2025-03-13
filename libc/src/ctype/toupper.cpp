@@ -7,18 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/ctype/toupper.h"
-#include "src/ctype/ctype_utils.h"
+#include "src/__support/ctype_utils.h"
 
 #include "src/__support/common.h"
+#include "src/__support/macros/config.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
-// TODO: Currently restricted to default locale.
-// These should be extended using locale information.
-int LLVM_LIBC_ENTRYPOINT(toupper)(int c) {
-  if (internal::islower(c))
-    return c + 'A' - 'a';
-  return c;
-}
+LLVM_LIBC_FUNCTION(int, toupper, (int c)) { return internal::toupper(c); }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

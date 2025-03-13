@@ -1,5 +1,5 @@
-; RUN: llc -march=bpfel -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
-; RUN: llc -march=bpfeb -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
+; RUN: llc -mtriple=bpfel -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
+; RUN: llc -mtriple=bpfeb -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
 
 ; Source code:
 ;   enum { A = -1, B = 2 } a;
@@ -22,7 +22,7 @@
 ; CHECK-NEXT:        .long   28
 ; CHECK-NEXT:        .long   5
 ; CHECK-NEXT:        .long   0                       # BTF_KIND_ENUM(id = 1)
-; CHECK-NEXT:        .long   100663298               # 0x6000002
+; CHECK-NEXT:        .long   2248146946              # 0x86000002
 ; CHECK-NEXT:        .long   4
 ; CHECK-NEXT:        .long   1
 ; CHECK-NEXT:        .long   -1

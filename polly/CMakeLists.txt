@@ -1,8 +1,15 @@
 # Check if this is a in tree build.
 if (NOT DEFINED LLVM_MAIN_SRC_DIR)
   project(Polly)
-  cmake_minimum_required(VERSION 3.13.4)
+  cmake_minimum_required(VERSION 3.20.0)
+  set(POLLY_STANDALONE_BUILD TRUE)
+endif()
+set(LLVM_SUBPROJECT_TITLE "Polly")
 
+# Must go below project(..)
+include(GNUInstallDirs)
+
+if(POLLY_STANDALONE_BUILD)
   # Where is LLVM installed?
   find_package(LLVM CONFIG REQUIRED)
   set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${LLVM_CMAKE_DIR})
@@ -14,22 +21,15 @@ if (NOT DEFINED LLVM_MAIN_SRC_DIR)
 
   # Sources available, too?
   if (LLVM_BUILD_MAIN_SRC_DIR)
-    set(LLVM_SOURCE_ROOT ${LLVM_BUILD_MAIN_SRC_DIR} CACHE PATH
-      "Path to LLVM source tree")
+    set(default_llvm_src "${LLVM_BUILD_MAIN_SRC_DIR}")
   else()
-    execute_process(COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config" --src-root
-      OUTPUT_VARIABLE MAIN_SRC_DIR
-      OUTPUT_STRIP_TRAILING_WHITESPACE)
-    set(LLVM_SOURCE_ROOT ${MAIN_SRC_DIR} CACHE PATH "Path to LLVM source tree")
+    set(default_llvm_src "${CMAKE_CURRENT_SOURCE_DIR}/../llvm")
   endif()
+  set(LLVM_SOURCE_ROOT ${default_llvm_src} CACHE PATH "Path to LLVM source tree")
 
   # Enable unit tests if available.
   set(POLLY_GTEST_AVAIL 0)
-  set(UNITTEST_DIR ${LLVM_SOURCE_ROOT}/utils/unittest)
-  if(EXISTS ${UNITTEST_DIR}/googletest/include/gtest/gtest.h)
-    if (NOT TARGET gtest)
-      add_subdirectory(${UNITTEST_DIR} utils/unittest)
-    endif()
+  if(TARGET llvm_gtest)
     set(POLLY_GTEST_AVAIL 1)
   endif()
 
@@ -48,10 +48,15 @@ endif ()
 set(POLLY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(POLLY_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
-# Add path for custom modules
-set(CMAKE_MODULE_PATH
-  ${CMAKE_MODULE_PATH}
-  "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
+if(NOT DEFINED LLVM_COMMON_CMAKE_UTILS)
+  set(LLVM_COMMON_CMAKE_UTILS ${POLLY_SOURCE_DIR}/../cmake)
+endif()
+
+# Make sure that our source directory is on the current cmake module path so that
+# we can include cmake files from this directory.
+list(INSERT CMAKE_MODULE_PATH 0
+  "${POLLY_SOURCE_DIR}/cmake"
+  "${LLVM_COMMON_CMAKE_UTILS}/Modules"
   )
 
 include("polly_macros")
@@ -68,35 +73,7 @@ else ()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions -fno-rtti")
 endif ()
 
-# Add path for custom modules
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${POLLY_SOURCE_DIR}/cmake")
-
 SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-
-option(POLLY_ENABLE_GPGPU_CODEGEN "Enable GPGPU code generation feature" OFF)
-set(GPU_CODEGEN FALSE)
-if (POLLY_ENABLE_GPGPU_CODEGEN)
-  # Do not require CUDA/OpenCL, as GPU code generation test cases can be run
-  # without a CUDA/OpenCL library.
-  if ("NVPTX" IN_LIST LLVM_TARGETS_TO_BUILD)
-    FIND_PACKAGE(CUDA)
-    FIND_PACKAGE(OpenCL)
-    set(GPU_CODEGEN TRUE)
-  else()
-    message(WARNING "The LLVM NVPTX target is required for GPU code generation")
-  endif()
-endif(POLLY_ENABLE_GPGPU_CODEGEN)
-
-
-# Support GPGPU code generation if the library is available.
-if (CUDA_FOUND)
-  add_definitions(-DHAS_LIBCUDART)
-  INCLUDE_DIRECTORIES( ${CUDA_INCLUDE_DIRS} )
-endif(CUDA_FOUND)
-if (OpenCL_FOUND)
-  add_definitions(-DHAS_LIBOPENCL)
-  INCLUDE_DIRECTORIES( ${OpenCL_INCLUDE_DIR} )
-endif(OpenCL_FOUND)
 
 option(POLLY_BUNDLED_ISL "Use the bundled version of libisl included in Polly" ON)
 if (NOT POLLY_BUNDLED_ISL)
@@ -122,18 +99,26 @@ include_directories(
 
 if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
   install(DIRECTORY include/
-    DESTINATION include
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     FILES_MATCHING
     PATTERN "*.h"
     )
 
   install(DIRECTORY ${POLLY_BINARY_DIR}/include/
-    DESTINATION include
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     FILES_MATCHING
     PATTERN "*.h"
     PATTERN "CMakeFiles" EXCLUDE
     )
 endif()
+
+# add_llvm_pass_plugin() already declares the option, but we need access to
+# it earlier than that.
+set(link_into_tools_default OFF)
+if (LLVM_TOOL_POLLY_BUILD)
+  set(link_into_tools_default ON)
+endif()
+option(LLVM_POLLY_LINK_INTO_TOOLS "Statically link Polly into tools (if available)" ${link_into_tools_default})
 
 add_definitions( -D_GNU_SOURCE )
 
@@ -143,7 +128,6 @@ add_subdirectory(test)
 if (POLLY_GTEST_AVAIL)
   add_subdirectory(unittests)
 endif ()
-add_subdirectory(tools)
 add_subdirectory(cmake)
 # TODO: docs.
 
@@ -178,8 +162,7 @@ foreach (file IN LISTS files)
 endforeach ()
 
 add_custom_target(polly-check-format DEPENDS ${check_format_depends})
-set_target_properties(polly-check-format PROPERTIES FOLDER "Polly")
+set_target_properties(polly-check-format PROPERTIES FOLDER "Polly/Metatargets")
 
 add_custom_target(polly-update-format DEPENDS ${update_format_depends})
-set_target_properties(polly-update-format PROPERTIES FOLDER "Polly")
-
+set_target_properties(polly-update-format PROPERTIES FOLDER "Polly/Metatargets")

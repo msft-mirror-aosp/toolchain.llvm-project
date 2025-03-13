@@ -38,7 +38,10 @@ public:
 protected:
   friend class lldb_private::RegisterContextUnwind;
 
-  struct RegisterLocation {
+  /// An UnwindPlan::Row::AbstractRegisterLocation, combined with the register
+  /// context and memory for a specific stop point, is used to create a
+  /// ConcreteRegisterLocation.
+  struct ConcreteRegisterLocation {
     enum RegisterLocationTypes {
       eRegisterNotSaved = 0, // register was not preserved by callee.  If
                              // volatile reg, is unavailable
@@ -90,7 +93,8 @@ protected:
   // Iterate over the RegisterContextUnwind's in our m_frames vector, look for
   // the first one that has a saved location for this reg.
   bool SearchForSavedLocationForRegister(
-      uint32_t lldb_regnum, lldb_private::UnwindLLDB::RegisterLocation &regloc,
+      uint32_t lldb_regnum,
+      lldb_private::UnwindLLDB::ConcreteRegisterLocation &regloc,
       uint32_t starting_frame_num, bool pc_register);
 
   /// Provide the list of user-specified trap handler functions
@@ -109,17 +113,17 @@ protected:
 
 private:
   struct Cursor {
-    lldb::addr_t start_pc; // The start address of the function/symbol for this
-                           // frame - current pc if unknown
-    lldb::addr_t cfa;      // The canonical frame address for this stack frame
+    lldb::addr_t start_pc =
+        LLDB_INVALID_ADDRESS; // The start address of the function/symbol for
+                              // this frame - current pc if unknown
+    lldb::addr_t cfa = LLDB_INVALID_ADDRESS; // The canonical frame address for
+                                             // this stack frame
     lldb_private::SymbolContext sctx; // A symbol context we'll contribute to &
                                       // provide to the StackFrame creation
     RegisterContextLLDBSP
         reg_ctx_lldb_sp; // These are all RegisterContextUnwind's
 
-    Cursor()
-        : start_pc(LLDB_INVALID_ADDRESS), cfa(LLDB_INVALID_ADDRESS), sctx(),
-          reg_ctx_lldb_sp() {}
+    Cursor() = default;
 
   private:
     Cursor(const Cursor &) = delete;

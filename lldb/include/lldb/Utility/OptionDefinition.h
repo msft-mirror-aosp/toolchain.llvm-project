@@ -12,6 +12,8 @@
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-private-types.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/MathExtras.h"
+#include <climits>
 #include <cstdint>
 
 namespace lldb_private {
@@ -36,7 +38,7 @@ struct OptionDefinition {
   /// If not empty, an array of enum values.
   OptionEnumValues enum_values;
   /// The kind of completion for this option.
-  /// Contains values of the CommandCompletions::CommonCompletionTypes enum.
+  /// Contains values of the lldb::CompletionType enum.
   uint32_t completion_type;
   /// Type of argument this option takes.
   lldb::CommandArgumentType argument_type;
@@ -47,7 +49,8 @@ struct OptionDefinition {
   /// Whether this has a short option character.
   bool HasShortOption() const {
     // See the short_option documentation for more.
-    return llvm::isPrint(short_option);
+    return llvm::isUInt<CHAR_BIT>(short_option) &&
+           llvm::isPrint(short_option);
   }
 };
 } // namespace lldb_private

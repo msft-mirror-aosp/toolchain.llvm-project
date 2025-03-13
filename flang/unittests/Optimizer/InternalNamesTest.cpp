@@ -8,32 +8,31 @@
 
 #include "flang/Optimizer/Support/InternalNames.h"
 #include "gtest/gtest.h"
+#include <optional>
 #include <string>
 
 using namespace fir;
 using llvm::SmallVector;
-using llvm::StringRef;
 
 struct DeconstructedName {
+  DeconstructedName(llvm::StringRef name) : name{name} {}
   DeconstructedName(llvm::ArrayRef<std::string> modules,
-      llvm::Optional<std::string> host, llvm::StringRef name,
-      llvm::ArrayRef<std::int64_t> kinds)
-      : modules{modules.begin(), modules.end()}, host{host}, name{name},
-        kinds{kinds.begin(), kinds.end()} {}
+      llvm::ArrayRef<std::string> procs, std::int64_t blockId,
+      llvm::StringRef name, llvm::ArrayRef<std::int64_t> kinds)
+      : modules{modules}, procs{procs}, blockId{blockId}, name{name},
+        kinds{kinds} {}
 
   bool isObjEqual(const NameUniquer::DeconstructedName &actualObj) {
-    if ((actualObj.name == name) && (actualObj.modules == modules) &&
-        (actualObj.host == host) && (actualObj.kinds == kinds)) {
-      return true;
-    }
-    return false;
+    return actualObj.modules == modules && actualObj.procs == procs &&
+        actualObj.blockId == blockId && actualObj.name == name &&
+        actualObj.kinds == kinds;
   }
 
-private:
-  llvm::SmallVector<std::string, 2> modules;
-  llvm::Optional<std::string> host;
+  llvm::SmallVector<std::string> modules;
+  llvm::SmallVector<std::string> procs;
+  std::int64_t blockId;
   std::string name;
-  llvm::SmallVector<std::int64_t, 4> kinds;
+  llvm::SmallVector<std::int64_t> kinds;
 };
 
 void validateDeconstructedName(
@@ -47,163 +46,213 @@ void validateDeconstructedName(
 }
 
 TEST(InternalNamesTest, doCommonBlockTest) {
-  NameUniquer obj;
-  std::string actual = obj.doCommonBlock("hello");
-  std::string actualBlank = obj.doCommonBlock("");
-  std::string expectedMangledName = "_QBhello";
-  std::string expectedMangledNameBlank = "_QB";
+  std::string actual = NameUniquer::doCommonBlock("hello");
+  std::string actualBlank = NameUniquer::doCommonBlock("");
+  std::string expectedMangledName = "_QChello";
+  std::string expectedMangledNameBlank = "_QC";
   ASSERT_EQ(actual, expectedMangledName);
   ASSERT_EQ(actualBlank, expectedMangledNameBlank);
 }
 
 TEST(InternalNamesTest, doGeneratedTest) {
-  NameUniquer obj;
-  std::string actual = obj.doGenerated("@MAIN");
+  std::string actual = NameUniquer::doGenerated("@MAIN");
   std::string expectedMangledName = "_QQ@MAIN";
   ASSERT_EQ(actual, expectedMangledName);
 
-  std::string actual1 = obj.doGenerated("@_ZNSt8ios_base4InitC1Ev");
+  std::string actual1 = NameUniquer::doGenerated("@_ZNSt8ios_base4InitC1Ev");
   std::string expectedMangledName1 = "_QQ@_ZNSt8ios_base4InitC1Ev";
   ASSERT_EQ(actual1, expectedMangledName1);
 
-  std::string actual2 = obj.doGenerated("_QQ@MAIN");
+  std::string actual2 = NameUniquer::doGenerated("_QQ@MAIN");
   std::string expectedMangledName2 = "_QQ_QQ@MAIN";
   ASSERT_EQ(actual2, expectedMangledName2);
 }
 
 TEST(InternalNamesTest, doConstantTest) {
-  NameUniquer obj;
-  std::string actual = obj.doConstant({"mod1", "mod2"}, {"foo"}, "Hello");
+  std::string actual =
+      NameUniquer::doConstant({"mod1", "mod2"}, {"foo"}, 0, "Hello");
   std::string expectedMangledName = "_QMmod1Smod2FfooEChello";
   ASSERT_EQ(actual, expectedMangledName);
 }
 
 TEST(InternalNamesTest, doProcedureTest) {
-  NameUniquer obj;
-  std::string actual = obj.doProcedure({"mod1", "mod2"}, {}, "HeLLo");
+  std::string actual = NameUniquer::doProcedure({"mod1", "mod2"}, {}, "HeLLo");
   std::string expectedMangledName = "_QMmod1Smod2Phello";
   ASSERT_EQ(actual, expectedMangledName);
 }
 
 TEST(InternalNamesTest, doTypeTest) {
-  NameUniquer obj;
-  std::string actual = obj.doType({}, {}, "mytype", {4, -1});
+  std::string actual = NameUniquer::doType({}, {}, 0, "mytype", {4, -1});
   std::string expectedMangledName = "_QTmytypeK4KN1";
   ASSERT_EQ(actual, expectedMangledName);
 }
 
 TEST(InternalNamesTest, doIntrinsicTypeDescriptorTest) {
   using IntrinsicType = fir::NameUniquer::IntrinsicType;
-  NameUniquer obj;
-  std::string actual =
-      obj.doIntrinsicTypeDescriptor({}, {}, IntrinsicType::REAL, 42);
-  std::string expectedMangledName = "_QCrealK42";
+  std::string actual = NameUniquer::doIntrinsicTypeDescriptor(
+      {}, {}, 0, IntrinsicType::REAL, 42);
+  std::string expectedMangledName = "_QYIrealK42";
   ASSERT_EQ(actual, expectedMangledName);
 
-  actual = obj.doIntrinsicTypeDescriptor({}, {}, IntrinsicType::REAL, {});
-  expectedMangledName = "_QCrealK0";
+  actual = NameUniquer::doIntrinsicTypeDescriptor(
+      {}, {}, 0, IntrinsicType::REAL, {});
+  expectedMangledName = "_QYIrealK0";
   ASSERT_EQ(actual, expectedMangledName);
 
-  actual = obj.doIntrinsicTypeDescriptor({}, {}, IntrinsicType::INTEGER, 3);
-  expectedMangledName = "_QCintegerK3";
+  actual = NameUniquer::doIntrinsicTypeDescriptor(
+      {}, {}, 0, IntrinsicType::INTEGER, 3);
+  expectedMangledName = "_QYIintegerK3";
   ASSERT_EQ(actual, expectedMangledName);
 
-  actual = obj.doIntrinsicTypeDescriptor({}, {}, IntrinsicType::LOGICAL, 2);
-  expectedMangledName = "_QClogicalK2";
+  actual = NameUniquer::doIntrinsicTypeDescriptor(
+      {}, {}, 0, IntrinsicType::LOGICAL, 2);
+  expectedMangledName = "_QYIlogicalK2";
   ASSERT_EQ(actual, expectedMangledName);
 
-  actual = obj.doIntrinsicTypeDescriptor({}, {}, IntrinsicType::CHARACTER, 4);
-  expectedMangledName = "_QCcharacterK4";
+  actual = NameUniquer::doIntrinsicTypeDescriptor(
+      {}, {}, 0, IntrinsicType::CHARACTER, 4);
+  expectedMangledName = "_QYIcharacterK4";
   ASSERT_EQ(actual, expectedMangledName);
 
-  actual = obj.doIntrinsicTypeDescriptor({}, {}, IntrinsicType::COMPLEX, 4);
-  expectedMangledName = "_QCcomplexK4";
+  actual = NameUniquer::doIntrinsicTypeDescriptor(
+      {}, {}, 0, IntrinsicType::COMPLEX, 4);
+  expectedMangledName = "_QYIcomplexK4";
   ASSERT_EQ(actual, expectedMangledName);
 }
 
 TEST(InternalNamesTest, doDispatchTableTest) {
-  NameUniquer obj;
-  std::string actual = obj.doDispatchTable({}, {}, "MyTYPE", {2, 8, 18});
+  std::string actual =
+      NameUniquer::doDispatchTable({}, {}, 0, "MyTYPE", {2, 8, 18});
   std::string expectedMangledName = "_QDTmytypeK2K8K18";
   ASSERT_EQ(actual, expectedMangledName);
 }
 
-TEST(InternalNamesTest, doTypeDescriptorTest) {
-  NameUniquer obj;
-  std::string actual = obj.doTypeDescriptor(
-      {StringRef("moD1")}, {StringRef("foo")}, "MyTYPE", {2, 8});
-  std::string expectedMangledName = "_QMmod1FfooCTmytypeK2K8";
-  ASSERT_EQ(actual, expectedMangledName);
-}
-
 TEST(InternalNamesTest, doVariableTest) {
-  NameUniquer obj;
-  std::string actual = obj.doVariable(
-      {"mod1", "mod2"}, {""}, "intvar"); // Function is present and is blank.
+  std::string actual = NameUniquer::doVariable(
+      {"mod1", "mod2"}, {""}, 0, "intvar"); // Function is present and is blank.
   std::string expectedMangledName = "_QMmod1Smod2FEintvar";
   ASSERT_EQ(actual, expectedMangledName);
 
-  std::string actual2 = obj.doVariable(
-      {"mod1", "mod2"}, {}, "intVariable"); // Function is not present.
+  std::string actual2 = NameUniquer::doVariable(
+      {"mod1", "mod2"}, {}, 0, "intVariable"); // Function is not present.
   std::string expectedMangledName2 = "_QMmod1Smod2Eintvariable";
   ASSERT_EQ(actual2, expectedMangledName2);
 }
 
 TEST(InternalNamesTest, doProgramEntry) {
-  NameUniquer obj;
-  llvm::StringRef actual = obj.doProgramEntry();
+  llvm::StringRef actual = NameUniquer::doProgramEntry();
   std::string expectedMangledName = "_QQmain";
   ASSERT_EQ(actual.str(), expectedMangledName);
 }
 
+TEST(InternalNamesTest, doNamelistGroup) {
+  std::string actual = NameUniquer::doNamelistGroup({"mod1"}, {}, "nlg");
+  std::string expectedMangledName = "_QMmod1Nnlg";
+  ASSERT_EQ(actual, expectedMangledName);
+}
+
 TEST(InternalNamesTest, deconstructTest) {
-  NameUniquer obj;
-  std::pair actual = obj.deconstruct("_QBhello");
+  std::pair actual = NameUniquer::deconstruct("_QChello");
   auto expectedNameKind = NameUniquer::NameKind::COMMON;
   struct DeconstructedName expectedComponents {
-    {}, {}, "hello", {}
+    {}, {}, 0, "hello", {}
   };
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
 }
 
 TEST(InternalNamesTest, complexdeconstructTest) {
   using NameKind = fir::NameUniquer::NameKind;
-  NameUniquer obj;
-  std::pair actual = obj.deconstruct("_QMmodSs1modSs2modFsubPfun");
+  std::pair actual = NameUniquer::deconstruct("_QMmodSs1modSs2modFsubPfun");
   auto expectedNameKind = NameKind::PROCEDURE;
   struct DeconstructedName expectedComponents = {
-      {"mod", "s1mod", "s2mod"}, {"sub"}, "fun", {}};
+      {"mod", "s1mod", "s2mod"}, {"sub"}, 0, "fun", {}};
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
 
-  actual = obj.deconstruct("_QPsub");
+  actual = NameUniquer::deconstruct("_QPsub");
   expectedNameKind = NameKind::PROCEDURE;
-  expectedComponents = {{}, {}, "sub", {}};
+  expectedComponents = {{}, {}, 0, "sub", {}};
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
 
-  actual = obj.deconstruct("_QBvariables");
+  actual = NameUniquer::deconstruct("_QCvariables");
   expectedNameKind = NameKind::COMMON;
-  expectedComponents = {{}, {}, "variables", {}};
+  expectedComponents = {{}, {}, 0, "variables", {}};
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
 
-  actual = obj.deconstruct("_QMmodEintvar");
+  actual = NameUniquer::deconstruct("_QMmodEintvar");
   expectedNameKind = NameKind::VARIABLE;
-  expectedComponents = {{"mod"}, {}, "intvar", {}};
+  expectedComponents = {{"mod"}, {}, 0, "intvar", {}};
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
 
-  actual = obj.deconstruct("_QMmodECpi");
+  actual = NameUniquer::deconstruct("_QMmodECpi");
   expectedNameKind = NameKind::CONSTANT;
-  expectedComponents = {{"mod"}, {}, "pi", {}};
+  expectedComponents = {{"mod"}, {}, 0, "pi", {}};
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
 
-  actual = obj.deconstruct("_QTyourtypeK4KN6");
+  actual = NameUniquer::deconstruct("_QTyourtypeK4KN6");
   expectedNameKind = NameKind::DERIVED_TYPE;
-  expectedComponents = {{}, {}, "yourtype", {4, -6}};
+  expectedComponents = {{}, {}, 0, "yourtype", {4, -6}};
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
 
-  actual = obj.deconstruct("_QDTt");
+  actual = NameUniquer::deconstruct("_QDTt");
   expectedNameKind = NameKind::DISPATCH_TABLE;
-  expectedComponents = {{}, {}, "t", {}};
+  expectedComponents = {{}, {}, 0, "t", {}};
   validateDeconstructedName(actual, expectedNameKind, expectedComponents);
+
+  actual = NameUniquer::deconstruct("_QFmstartNmpitop");
+  expectedNameKind = NameKind::NAMELIST_GROUP;
+  expectedComponents = {{}, {"mstart"}, 0, "mpitop", {}};
+  validateDeconstructedName(actual, expectedNameKind, expectedComponents);
+}
+
+TEST(InternalNamesTest, needExternalNameMangling) {
+  ASSERT_FALSE(
+      NameUniquer::needExternalNameMangling("_QMmodSs1modSs2modFsubPfun"));
+  ASSERT_FALSE(NameUniquer::needExternalNameMangling("omp_num_thread"));
+  ASSERT_FALSE(NameUniquer::needExternalNameMangling(""));
+  ASSERT_FALSE(NameUniquer::needExternalNameMangling("_QDTmytypeK2K8K18"));
+  ASSERT_FALSE(NameUniquer::needExternalNameMangling("exit_"));
+  ASSERT_FALSE(NameUniquer::needExternalNameMangling("_QFfooEx"));
+  ASSERT_FALSE(NameUniquer::needExternalNameMangling("_QFmstartNmpitop"));
+  ASSERT_TRUE(NameUniquer::needExternalNameMangling("_QPfoo"));
+  ASSERT_TRUE(NameUniquer::needExternalNameMangling("_QPbar"));
+  ASSERT_TRUE(NameUniquer::needExternalNameMangling("_QCa"));
+}
+
+TEST(InternalNamesTest, isExternalFacingUniquedName) {
+  std::pair result = NameUniquer::deconstruct("_QMmodSs1modSs2modFsubPfun");
+
+  ASSERT_FALSE(NameUniquer::isExternalFacingUniquedName(result));
+  result = NameUniquer::deconstruct("omp_num_thread");
+  ASSERT_FALSE(NameUniquer::isExternalFacingUniquedName(result));
+  result = NameUniquer::deconstruct("");
+  ASSERT_FALSE(NameUniquer::isExternalFacingUniquedName(result));
+  result = NameUniquer::deconstruct("_QDTmytypeK2K8K18");
+  ASSERT_FALSE(NameUniquer::isExternalFacingUniquedName(result));
+  result = NameUniquer::deconstruct("exit_");
+  ASSERT_FALSE(NameUniquer::isExternalFacingUniquedName(result));
+  result = NameUniquer::deconstruct("_QPfoo");
+  ASSERT_TRUE(NameUniquer::isExternalFacingUniquedName(result));
+  result = NameUniquer::deconstruct("_QPbar");
+  ASSERT_TRUE(NameUniquer::isExternalFacingUniquedName(result));
+  result = NameUniquer::deconstruct("_QCa");
+  ASSERT_TRUE(NameUniquer::isExternalFacingUniquedName(result));
+}
+
+TEST(InternalNamesTest, getTypeDescriptorName) {
+  std::string derivedTypeName = "_QMdispatch1Tp1";
+  std::string expectedBindingTableName = "_QMdispatch1E.dt.p1";
+  ASSERT_EQ(expectedBindingTableName,
+      fir::NameUniquer::getTypeDescriptorName(derivedTypeName));
+  ASSERT_EQ("", fir::NameUniquer::getTypeDescriptorName("_QMdispatch1Pp1"));
+}
+
+TEST(InternalNamesTest, getTypeDescriptorBindingTableName) {
+  std::string derivedTypeName = "_QMdispatch1Tp1";
+  std::string expectedBindingTableName = "_QMdispatch1E.v.p1";
+  ASSERT_EQ(expectedBindingTableName,
+      fir::NameUniquer::getTypeDescriptorBindingTableName(derivedTypeName));
+  ASSERT_EQ("",
+      fir::NameUniquer::getTypeDescriptorBindingTableName("_QMdispatch1Pp1"));
 }
 
 // main() from gtest_main

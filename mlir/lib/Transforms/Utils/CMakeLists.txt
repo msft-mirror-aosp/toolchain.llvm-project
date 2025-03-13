@@ -1,25 +1,27 @@
 add_mlir_library(MLIRTransformUtils
+  CFGToSCF.cpp
+  CommutativityUtils.cpp
+  ControlFlowSinkUtils.cpp
   DialectConversion.cpp
   FoldUtils.cpp
   GreedyPatternRewriteDriver.cpp
+  Inliner.cpp
   InliningUtils.cpp
-  LoopFusionUtils.cpp
-  LoopUtils.cpp
+  LoopInvariantCodeMotionUtils.cpp
+  OneToNTypeConversion.cpp
   RegionUtils.cpp
-  Utils.cpp
+  WalkPatternRewriteDriver.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Transforms
 
-  DEPENDS
-  MLIRStandardOpsIncGen
-
   LINK_LIBS PUBLIC
-  MLIRAffine
   MLIRAnalysis
-  MLIRLoopAnalysis
-  MLIRSCF
-  MLIRPass
+  MLIRCallInterfaces
+  MLIRControlFlowInterfaces
+  MLIRFunctionInterfaces
+  MLIRLoopLikeInterface
+  MLIRSideEffectInterfaces
+  MLIRSubsetOpInterface
   MLIRRewrite
-  MLIRStandard
   )

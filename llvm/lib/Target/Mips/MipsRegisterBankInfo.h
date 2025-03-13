@@ -13,7 +13,7 @@
 #ifndef LLVM_LIB_TARGET_MIPS_MIPSREGISTERBANKINFO_H
 #define LLVM_LIB_TARGET_MIPS_MIPSREGISTERBANKINFO_H
 
-#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
+#include "llvm/CodeGen/RegisterBankInfo.h"
 
 #define GET_REGBANK_DECLARATIONS
 #include "MipsGenRegisterBank.inc"
@@ -32,9 +32,6 @@ class MipsRegisterBankInfo final : public MipsGenRegisterBankInfo {
 public:
   MipsRegisterBankInfo(const TargetRegisterInfo &TRI);
 
-  const RegisterBank &getRegBankFromRegClass(const TargetRegisterClass &RC,
-                                             LLT) const override;
-
   const InstructionMapping &
   getInstrMapping(const MachineInstr &MI) const override;
 
@@ -42,7 +39,8 @@ public:
   /// G_UNMERGE and erase instructions that became dead in the process. We
   /// manually assign bank to def operand of all new instructions that were
   /// created in the process since they will not end up in RegBankSelect loop.
-  void applyMappingImpl(const OperandsMapper &OpdMapper) const override;
+  void applyMappingImpl(MachineIRBuilder &Builder,
+                        const OperandsMapper &OpdMapper) const override;
 
   /// RegBankSelect determined that s64 operand is better to be split into two
   /// s32 operands in gprb. Here we manually set register banks of def operands
@@ -150,7 +148,7 @@ private:
 
   class TypeInfoForMF {
     /// MachineFunction name is used to recognise when MF changes.
-    std::string MFName = "";
+    std::string MFName;
     /// <key, value> : value is vector of all MachineInstrs that are waiting for
     /// key to figure out type of some of its ambiguous operands.
     DenseMap<const MachineInstr *, SmallVector<const MachineInstr *, 2>>

@@ -15,15 +15,16 @@
 //    assign(InputIterator first, InputIterator last,
 //           flag_type f = regex_constants::ECMAScript);
 
-#include <regex>
 #include <cassert>
+#include <regex>
+#include <string>
 
 #include "test_macros.h"
 #include "test_iterators.h"
 
 int main(int, char**)
 {
-    typedef input_iterator<std::string::const_iterator> I;
+    typedef cpp17_input_iterator<std::string::const_iterator> I;
     typedef forward_iterator<std::string::const_iterator> F;
     std::string s4("(a([bc]))");
     std::regex r2;

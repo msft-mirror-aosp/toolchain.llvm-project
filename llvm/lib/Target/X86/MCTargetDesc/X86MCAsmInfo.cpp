@@ -11,10 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86MCAsmInfo.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/TargetParser/Triple.h"
 using namespace llvm;
 
 enum AsmWriterFlavorTy {
@@ -23,9 +23,9 @@ enum AsmWriterFlavorTy {
   ATT = 0, Intel = 1
 };
 
-static cl::opt<AsmWriterFlavorTy> AsmWriterFlavor(
+static cl::opt<AsmWriterFlavorTy> X86AsmSyntax(
     "x86-asm-syntax", cl::init(ATT), cl::Hidden,
-    cl::desc("Choose style of code to emit from X86 backend:"),
+    cl::desc("Select the assembly style for input"),
     cl::values(clEnumValN(ATT, "att", "Emit AT&T-style assembly"),
                clEnumValN(Intel, "intel", "Emit Intel-style assembly")));
 
@@ -41,9 +41,7 @@ X86MCAsmInfoDarwin::X86MCAsmInfoDarwin(const Triple &T) {
   if (is64Bit)
     CodePointerSize = CalleeSaveStackSlotSize = 8;
 
-  AssemblerDialect = AsmWriterFlavor;
-
-  TextAlignFillValue = 0x90;
+  AssemblerDialect = X86AsmSyntax;
 
   if (!is64Bit)
     Data64bitsDirective = nullptr;       // we can't emit a 64-bit unit
@@ -81,7 +79,7 @@ void X86ELFMCAsmInfo::anchor() { }
 
 X86ELFMCAsmInfo::X86ELFMCAsmInfo(const Triple &T) {
   bool is64Bit = T.getArch() == Triple::x86_64;
-  bool isX32 = T.getEnvironment() == Triple::GNUX32;
+  bool isX32 = T.isX32();
 
   // For ELF, x86-64 pointer size depends on the ABI.
   // For x86-64 without the x32 ABI, pointer size is 8. For x86 and for x86-64
@@ -91,9 +89,7 @@ X86ELFMCAsmInfo::X86ELFMCAsmInfo(const Triple &T) {
   // OTOH, stack slot size is always 8 for x86-64, even with the x32 ABI.
   CalleeSaveStackSlotSize = is64Bit ? 8 : 4;
 
-  AssemblerDialect = AsmWriterFlavor;
-
-  TextAlignFillValue = 0x90;
+  AssemblerDialect = X86AsmSyntax;
 
   // Debug Information
   SupportsDebugInformation = true;
@@ -130,9 +126,7 @@ X86MCAsmInfoMicrosoft::X86MCAsmInfoMicrosoft(const Triple &Triple) {
 
   ExceptionsType = ExceptionHandling::WinEH;
 
-  AssemblerDialect = AsmWriterFlavor;
-
-  TextAlignFillValue = 0x90;
+  AssemblerDialect = X86AsmSyntax;
 
   AllowAtInName = true;
 }
@@ -144,13 +138,17 @@ X86MCAsmInfoMicrosoftMASM::X86MCAsmInfoMicrosoftMASM(const Triple &Triple)
   DollarIsPC = true;
   SeparatorString = "\n";
   CommentString = ";";
-  AllowSymbolAtNameStart = true;
+  AllowAdditionalComments = false;
+  AllowQuestionAtStartOfIdentifier = true;
+  AllowDollarAtStartOfIdentifier = true;
+  AllowAtAtStartOfIdentifier = true;
 }
 
 void X86MCAsmInfoGNUCOFF::anchor() { }
 
 X86MCAsmInfoGNUCOFF::X86MCAsmInfoGNUCOFF(const Triple &Triple) {
-  assert(Triple.isOSWindows() && "Windows is the only supported COFF target");
+  assert(Triple.isOSWindowsOrUEFI() &&
+         "Windows and UEFI are the only supported COFF targets");
   if (Triple.getArch() == Triple::x86_64) {
     PrivateGlobalPrefix = ".L";
     PrivateLabelPrefix = ".L";
@@ -161,9 +159,7 @@ X86MCAsmInfoGNUCOFF::X86MCAsmInfoGNUCOFF(const Triple &Triple) {
     ExceptionsType = ExceptionHandling::DwarfCFI;
   }
 
-  AssemblerDialect = AsmWriterFlavor;
-
-  TextAlignFillValue = 0x90;
+  AssemblerDialect = X86AsmSyntax;
 
   AllowAtInName = true;
 }

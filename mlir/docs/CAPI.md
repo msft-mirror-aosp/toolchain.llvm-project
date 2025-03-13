@@ -2,6 +2,8 @@
 
 **Current status: Under development, API unstable, built by default.**
 
+[TOC]
+
 ## Design
 
 Many languages can interoperate with C but have a harder time with C++ due to
@@ -107,7 +109,7 @@ these are represented as instances of `MlirStringRef` structure that contains a
 pointer to the first character of the string fragment (`str`) and the fragment
 length (`length`). Note that the fragment is _not necessarily_ null-terminated,
 the `length` field must be used to identify the last character. `MlirStringRef`
-is a non-owning pointer, the caller is in charge of perfoming the copy or
+is a non-owning pointer, the caller is in charge of performing the copy or
 ensuring that the pointee outlives all uses of `MlirStringRef`.
 
 ### Printing
@@ -194,3 +196,23 @@ counterparts. `wrap` converts a C++ class into a C structure and `unwrap` does
 the inverse conversion. Once the C++ object is available, the API implementation
 should rely on `isa` to implement `mlirXIsAY` and is expected to use `cast`
 inside other API calls.
+
+### Extensions for Interfaces
+
+Interfaces can follow the example of IR interfaces and should be placed in the
+appropriate library (e.g., common interfaces in `mlir-c/Interfaces` and
+dialect-specific interfaces in their dialect library). Similarly to other type
+hierarchies, interfaces are not expected to have objects of their own type and
+instead operate on top-level objects: `MlirAttribute`, `MlirOperation` and
+`MlirType`. Static interface methods are expected to take as leading argument a
+canonical identifier of the class, `MlirStringRef` with the name for operations
+and `MlirTypeID` for attributes and types, followed by `MlirContext` in which
+the interfaces are registered.
+
+Individual interfaces are expected provide a `mlir<InterfaceName>TypeID()`
+function that can be used to check whether an object or a class implements this
+interface using `mlir<Attribute/Operation/Type>ImplementsInterface` or
+`mlir<Attribute/Operation?Type>ImplementsInterfaceStatic` functions,
+respectively. Rationale: C++ `isa` only works when an object exists, static
+methods are usually dispatched to using templates; lookup by `TypeID` in
+`MLIRContext` works even without an object.

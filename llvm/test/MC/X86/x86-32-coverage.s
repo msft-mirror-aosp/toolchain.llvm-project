@@ -10476,16 +10476,16 @@
 // CHECK: 	vmxon	305419896
         	vmxon	0x12345678
 
-// CHECK: 	vmrun %eax
+// CHECK: 	vmrun
         	vmrun %eax
 
 // CHECK: 	vmmcall
         	vmmcall
 
-// CHECK: 	vmload %eax
+// CHECK: 	vmload
         	vmload %eax
 
-// CHECK: 	vmsave %eax
+// CHECK: 	vmsave
         	vmsave %eax
 
 // CHECK: 	stgi
@@ -10494,10 +10494,10 @@
 // CHECK: 	clgi
         	clgi
 
-// CHECK: 	skinit %eax
+// CHECK: 	skinit
         	skinit %eax
 
-// CHECK: 	invlpga %eax, %ecx
+// CHECK: 	invlpga
         	invlpga %eax, %ecx
 
 // CHECK:   blendvps	%xmm0, (%eax), %xmm1   # encoding: [0x66,0x0f,0x38,0x14,0x08]
@@ -10744,6 +10744,14 @@ btcl $4, (%eax)
 // CHECK:  encoding: [0x0f,0x01,0xfc]
         	clzero
 
+// CHECK: 	tlbsync	
+// CHECK:  encoding: [0x0f,0x01,0xff]
+        	tlbsync
+
+// CHECK: 	invlpgb
+// CHECK:  encoding: [0x0f,0x01,0xfe]
+        	invlpgb %eax, %edx 
+
 // CHECK: lock addl %esi, (%edi)
 // INTEL: lock add dword ptr [edi], esi
 // CHECK:  encoding: [0xf0,0x01,0x37]
@@ -10782,7 +10790,7 @@ btcl $4, (%eax)
           movdir64b 485498096, %ecx
 
 // CHECK: movdir64b 485498096, %cx
-// CHECK: # encoding: [0x67,0x66,0x0f,0x38,0xf8,0x0d,0xf0,0x1c,0xf0,0x1c]
+// CHECK: # encoding: [0x67,0x66,0x0f,0x38,0xf8,0x0e,0xf0,0x1c]
           movdir64b 485498096, %cx
 
 // CHECK: movdir64b (%edx), %eax
@@ -10869,6 +10877,10 @@ enqcmd  (%bx,%di), %di
 // CHECK: encoding: [0x67,0xf2,0x0f,0x38,0xf8,0x81,0xc0,0x1f]
 enqcmd  8128(%bx,%di), %ax
 
+// CHECK: enqcmd 485498096, %cx
+// CHECK: encoding: [0x67,0xf2,0x0f,0x38,0xf8,0x0e,0xf0,0x1c]
+enqcmd 485498096, %cx
+
 // CHECK: enqcmds (%bx,%di), %di
 // CHECK: encoding: [0x67,0xf3,0x0f,0x38,0xf8,0x39]
 enqcmds (%bx,%di), %di
@@ -10876,6 +10888,10 @@ enqcmds (%bx,%di), %di
 // CHECK: enqcmds 8128(%bx,%di), %ax
 // CHECK: encoding: [0x67,0xf3,0x0f,0x38,0xf8,0x81,0xc0,0x1f]
 enqcmds 8128(%bx,%di), %ax
+
+// CHECK: enqcmds 485498096, %cx
+// CHECK: encoding: [0x67,0xf3,0x0f,0x38,0xf8,0x0e,0xf0,0x1c]
+enqcmds 485498096, %cx
 
 // CHECK: serialize
 // CHECK: encoding: [0x0f,0x01,0xe8]

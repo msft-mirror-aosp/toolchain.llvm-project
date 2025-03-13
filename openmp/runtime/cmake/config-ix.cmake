@@ -16,8 +16,8 @@ include(CheckIncludeFile)
 include(CheckLibraryExists)
 include(CheckIncludeFiles)
 include(CheckSymbolExists)
-include(LibompCheckLinkerFlag)
 include(LibompCheckFortranFlag)
+include(LLVMCheckCompilerLinkerFlag)
 
 # Check for versioned symbols
 function(libomp_check_version_symbols retval)
@@ -27,7 +27,7 @@ function(libomp_check_version_symbols retval)
     void func2() { printf(\"World\"); }
     __asm__(\".symver func1, func@VER1\");
     __asm__(\".symver func2, func@VER2\");
-    int main() {
+    int main(void) {
       func1();
       func2();
       return 0;
@@ -48,17 +48,26 @@ function(libomp_check_architecture_flag flag retval)
 endfunction()
 
 # Checking CXX, Linker Flags
+
+# GCC silently accepts any -Wno-<foo> option, but warns about those options
+# being unrecognized only if the compilation triggers other warnings to be
+# printed. Therefore, check for whether the compiler supports options in the
+# form -W<foo>, and if supported, add the corresponding -Wno-<foo> option.
+
 check_cxx_compiler_flag(-fno-exceptions LIBOMP_HAVE_FNO_EXCEPTIONS_FLAG)
 check_cxx_compiler_flag(-fno-rtti LIBOMP_HAVE_FNO_RTTI_FLAG)
-check_cxx_compiler_flag(-Wno-class-memaccess LIBOMP_HAVE_WNO_CLASS_MEMACCESS_FLAG)
-check_cxx_compiler_flag(-Wno-covered-switch-default LIBOMP_HAVE_WNO_COVERED_SWITCH_DEFAULT_FLAG)
-check_cxx_compiler_flag(-Wno-frame-address LIBOMP_HAVE_WNO_FRAME_ADDRESS_FLAG)
-check_cxx_compiler_flag(-Wno-strict-aliasing LIBOMP_HAVE_WNO_STRICT_ALIASING_FLAG)
+check_cxx_compiler_flag(-Wclass-memaccess LIBOMP_HAVE_WCLASS_MEMACCESS_FLAG)
+check_cxx_compiler_flag(-Wcovered-switch-default LIBOMP_HAVE_WCOVERED_SWITCH_DEFAULT_FLAG)
+check_cxx_compiler_flag(-Wframe-address LIBOMP_HAVE_WFRAME_ADDRESS_FLAG)
+check_cxx_compiler_flag(-Wstrict-aliasing LIBOMP_HAVE_WSTRICT_ALIASING_FLAG)
 check_cxx_compiler_flag(-Wstringop-overflow=0 LIBOMP_HAVE_WSTRINGOP_OVERFLOW_FLAG)
-check_cxx_compiler_flag(-Wno-stringop-truncation LIBOMP_HAVE_WNO_STRINGOP_TRUNCATION_FLAG)
-check_cxx_compiler_flag(-Wno-switch LIBOMP_HAVE_WNO_SWITCH_FLAG)
-check_cxx_compiler_flag(-Wno-uninitialized LIBOMP_HAVE_WNO_UNINITIALIZED_FLAG)
-check_cxx_compiler_flag(-Wno-unused-but-set-variable LIBOMP_HAVE_WNO_UNUSED_BUT_SET_VARIABLE_FLAG)
+check_cxx_compiler_flag(-Wstringop-truncation LIBOMP_HAVE_WSTRINGOP_TRUNCATION_FLAG)
+check_cxx_compiler_flag(-Wswitch LIBOMP_HAVE_WSWITCH_FLAG)
+check_cxx_compiler_flag(-Wuninitialized LIBOMP_HAVE_WUNINITIALIZED_FLAG)
+check_cxx_compiler_flag(-Wreturn-type-c-linkage LIBOMP_HAVE_WRETURN_TYPE_C_LINKAGE_FLAG)
+check_cxx_compiler_flag(-Wcast-qual LIBOMP_HAVE_WCAST_QUAL_FLAG)
+check_cxx_compiler_flag(-Wint-to-void-pointer-cast LIBOMP_HAVE_WINT_TO_VOID_POINTER_CAST_FLAG)
+# check_cxx_compiler_flag(-Wconversion LIBOMP_HAVE_WCONVERSION_FLAG)
 check_cxx_compiler_flag(-msse2 LIBOMP_HAVE_MSSE2_FLAG)
 check_cxx_compiler_flag(-ftls-model=initial-exec LIBOMP_HAVE_FTLS_MODEL_FLAG)
 libomp_check_architecture_flag(-mmic LIBOMP_HAVE_MMIC_FLAG)
@@ -87,15 +96,14 @@ if(WIN32)
       )
     endforeach()
   endforeach()
-else()
-  # It is difficult to create a dummy assembly file that compiles into an
-  # executable for every architecture and then check the C compiler to
-  # see if -x assembler-with-cpp exists and works, so we assume it does for non-Windows.
-  set(LIBOMP_HAVE_X_ASSEMBLER_WITH_CPP_FLAG TRUE)
 endif()
 if(${LIBOMP_FORTRAN_MODULES})
   libomp_check_fortran_flag(-m32 LIBOMP_HAVE_M32_FORTRAN_FLAG)
 endif()
+
+# Check non-posix pthread API here before CMAKE_REQUIRED_DEFINITIONS gets messed up
+check_symbol_exists(pthread_setname_np "pthread.h" LIBOMP_HAVE_PTHREAD_SETNAME_NP)
+check_symbol_exists(pthread_set_name_np "pthread.h;pthread_np.h" LIBOMP_HAVE_PTHREAD_SET_NAME_NP)
 
 # Check for Unix shared memory
 check_symbol_exists(shm_open "sys/mman.h" LIBOMP_HAVE_SHM_OPEN_NO_LRT)
@@ -105,40 +113,61 @@ if (NOT LIBOMP_HAVE_SHM_OPEN_NO_LRT)
   set(CMAKE_REQUIRED_LIBRARIES)
 endif()
 
+# Check for aligned memory allocator function
+check_include_file(xmmintrin.h LIBOMP_HAVE_XMMINTRIN_H)
+set(OLD_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+if (LIBOMP_HAVE_XMMINTRIN_H)
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -DLIBOMP_HAVE_XMMINTRIN_H")
+endif()
+set(source_code "// check for _mm_malloc
+    #ifdef LIBOMP_HAVE_XMMINTRIN_H
+    #include <xmmintrin.h>
+    #endif
+    int main() { void *ptr = _mm_malloc(sizeof(int) * 1000, 64); _mm_free(ptr); return 0; }")
+check_cxx_source_compiles("${source_code}" LIBOMP_HAVE__MM_MALLOC)
+set(CMAKE_REQUIRED_FLAGS ${OLD_CMAKE_REQUIRED_FLAGS})
+check_symbol_exists(aligned_alloc "stdlib.h" LIBOMP_HAVE_ALIGNED_ALLOC)
+check_symbol_exists(posix_memalign "stdlib.h" LIBOMP_HAVE_POSIX_MEMALIGN)
+check_symbol_exists(_aligned_malloc "malloc.h" LIBOMP_HAVE__ALIGNED_MALLOC)
+
 # Check linker flags
 if(WIN32)
-  libomp_check_linker_flag(/SAFESEH LIBOMP_HAVE_SAFESEH_FLAG)
+  llvm_check_compiler_linker_flag(C /SAFESEH LIBOMP_HAVE_SAFESEH_FLAG)
 elseif(NOT APPLE)
-  libomp_check_linker_flag(-Wl,-x LIBOMP_HAVE_X_FLAG)
-  libomp_check_linker_flag(-Wl,--warn-shared-textrel LIBOMP_HAVE_WARN_SHARED_TEXTREL_FLAG)
-  libomp_check_linker_flag(-Wl,--as-needed LIBOMP_HAVE_AS_NEEDED_FLAG)
-  libomp_check_linker_flag("-Wl,--version-script=${LIBOMP_SRC_DIR}/exports_so.txt" LIBOMP_HAVE_VERSION_SCRIPT_FLAG)
-  libomp_check_linker_flag(-static-libgcc LIBOMP_HAVE_STATIC_LIBGCC_FLAG)
-  libomp_check_linker_flag(-Wl,-z,noexecstack LIBOMP_HAVE_Z_NOEXECSTACK_FLAG)
+  llvm_check_compiler_linker_flag(C -Wl,-x LIBOMP_HAVE_X_FLAG)
+  llvm_check_compiler_linker_flag(C -Wl,--as-needed LIBOMP_HAVE_AS_NEEDED_FLAG)
+  llvm_check_compiler_linker_flag(C "-Wl,--version-script=${LIBOMP_SRC_DIR}/exports_test_so.txt" LIBOMP_HAVE_VERSION_SCRIPT_FLAG)
+  llvm_check_compiler_linker_flag(C -static-libgcc LIBOMP_HAVE_STATIC_LIBGCC_FLAG)
+  llvm_check_compiler_linker_flag(C -Wl,-z,noexecstack LIBOMP_HAVE_Z_NOEXECSTACK_FLAG)
 endif()
 
 # Check Intel(R) C Compiler specific flags
-if(CMAKE_C_COMPILER_ID STREQUAL "Intel")
+if(CMAKE_C_COMPILER_ID STREQUAL "Intel" OR CMAKE_C_COMPILER_ID STREQUAL "IntelLLVM")
   check_cxx_compiler_flag(/Qlong_double LIBOMP_HAVE_LONG_DOUBLE_FLAG)
   check_cxx_compiler_flag(/Qdiag-disable:177 LIBOMP_HAVE_DIAG_DISABLE_177_FLAG)
   check_cxx_compiler_flag(/Qinline-min-size=1 LIBOMP_HAVE_INLINE_MIN_SIZE_FLAG)
   check_cxx_compiler_flag(-Qoption,cpp,--extended_float_types LIBOMP_HAVE_EXTENDED_FLOAT_TYPES_FLAG)
   check_cxx_compiler_flag(-falign-stack=maintain-16-byte LIBOMP_HAVE_FALIGN_STACK_FLAG)
   check_cxx_compiler_flag("-opt-streaming-stores never" LIBOMP_HAVE_OPT_STREAMING_STORES_FLAG)
-  libomp_check_linker_flag(-static-intel LIBOMP_HAVE_STATIC_INTEL_FLAG)
-  libomp_check_linker_flag(-no-intel-extensions LIBOMP_HAVE_NO_INTEL_EXTENSIONS_FLAG)
+  llvm_check_compiler_linker_flag(C -static-intel LIBOMP_HAVE_STATIC_INTEL_FLAG)
+  llvm_check_compiler_linker_flag(C -no-intel-extensions LIBOMP_HAVE_NO_INTEL_EXTENSIONS_FLAG)
   check_library_exists(irc_pic _intel_fast_memcpy "" LIBOMP_HAVE_IRC_PIC_LIBRARY)
 endif()
 
-# Checking Threading requirements
-find_package(Threads REQUIRED)
-if(WIN32)
-  if(NOT CMAKE_USE_WIN32_THREADS_INIT)
-    libomp_error_say("Need Win32 thread interface on Windows.")
-  endif()
-else()
-  if(NOT CMAKE_USE_PTHREADS_INIT)
-    libomp_error_say("Need pthread interface on Unix-like systems.")
+# Checking threading requirements. Note that compiling to WebAssembly threads
+# with either the Emscripten or wasi-threads flavor ends up using the pthreads
+# interface in a WebAssembly-compiled libc; CMake does not yet know how to
+# detect this.
+if (NOT WASM)
+  find_package(Threads REQUIRED)
+  if(WIN32)
+    if(NOT CMAKE_USE_WIN32_THREADS_INIT)
+      libomp_error_say("Need Win32 thread interface on Windows.")
+    endif()
+  else()
+    if(NOT CMAKE_USE_PTHREADS_INIT)
+      libomp_error_say("Need pthread interface on Unix-like systems.")
+    endif()
   endif()
 endif()
 
@@ -171,6 +200,10 @@ if (IA32 OR INTEL64)
       }
       int main() { int a = __kmp_umwait(0, 1000); return a; }")
   check_cxx_source_compiles("${source_code}" LIBOMP_HAVE_WAITPKG_INTRINSICS)
+  set(OLD_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+  if (LIBOMP_HAVE_MRTM_FLAG)
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -mrtm")
+  endif()
   set(source_code "// check for attribute rtm and rtm intrinsics
       #ifdef IMMINTRIN_H
       #include <immintrin.h>
@@ -187,41 +220,26 @@ if (IA32 OR INTEL64)
       int main() { int a = __kmp_xbegin(); return a; }")
   check_cxx_source_compiles("${source_code}" LIBOMP_HAVE_RTM_INTRINSICS)
   set(CMAKE_REQUIRED_DEFINITIONS)
+  set(CMAKE_REQUIRED_FLAGS ${OLD_CMAKE_REQUIRED_FLAGS})
 endif()
 
-# Find perl executable
-# Perl is used to create omp.h (and other headers) along with kmp_i18n_id.inc and kmp_i18n_default.inc
-find_package(Perl REQUIRED)
-# The perl scripts take the --os=/--arch= flags which expect a certain format for operating systems and arch's.
-# Until the perl scripts are removed, the most portable way to handle this is to have all operating systems that
-# are neither Windows nor Mac (Most Unix flavors) be considered lin to the perl scripts.  This is rooted
-# in that all the Perl scripts check the operating system and will fail if it isn't "valid".  This
-# temporary solution lets us avoid trying to enumerate all the possible OS values inside the Perl modules.
-if(WIN32)
-  set(LIBOMP_PERL_SCRIPT_OS win)
-elseif(APPLE)
-  set(LIBOMP_PERL_SCRIPT_OS mac)
-else()
-  set(LIBOMP_PERL_SCRIPT_OS lin)
-endif()
-if(IA32)
-  set(LIBOMP_PERL_SCRIPT_ARCH 32)
-elseif(MIC)
-  set(LIBOMP_PERL_SCRIPT_ARCH mic)
-elseif(INTEL64)
-  set(LIBOMP_PERL_SCRIPT_ARCH 32e)
-else()
-  set(LIBOMP_PERL_SCRIPT_ARCH ${LIBOMP_ARCH})
-endif()
+# Find python3 executable
+# Python3 is used to create kmp_i18n_id.inc and
+# kmp_i18n_default.inc and for Windows the *.def files.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 # Checking features
 # Check if version symbol assembler directives are supported
-libomp_check_version_symbols(LIBOMP_HAVE_VERSION_SYMBOLS)
+if (LIBOMP_HAVE_VERSION_SCRIPT_FLAG)
+  libomp_check_version_symbols(LIBOMP_HAVE_VERSION_SYMBOLS)
+else()
+  set(LIBOMP_HAVE_VERSION_SYMBOLS FALSE)
+endif()
 
 # Check if quad precision types are available
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
   set(LIBOMP_HAVE_QUAD_PRECISION TRUE)
-elseif(CMAKE_C_COMPILER_ID STREQUAL "Intel")
+elseif(CMAKE_C_COMPILER_ID STREQUAL "Intel" OR CMAKE_C_COMPILER_ID STREQUAL "IntelLLVM")
   if(LIBOMP_HAVE_EXTENDED_FLOAT_TYPES_FLAG)
     set(LIBOMP_HAVE_QUAD_PRECISION TRUE)
   else()
@@ -277,11 +295,13 @@ check_c_source_compiles("int main(int argc, char** argv) {
 check_c_source_compiles("__attribute__ ((weak)) int foo(int a) { return a*a; }
   int main(int argc, char** argv) {
   return foo(argc);}" LIBOMP_HAVE_WEAK_ATTRIBUTE)
-check_include_files("windows.h;psapi.h" LIBOMP_HAVE_PSAPI_H)
-check_library_exists(psapi EnumProcessModules "" LIBOMP_HAVE_LIBPSAPI)
-if(LIBOMP_HAVE_PSAPI_H AND LIBOMP_HAVE_LIBPSAPI)
-  set(LIBOMP_HAVE_PSAPI TRUE)
-endif()
+set(CMAKE_REQUIRED_LIBRARIES psapi)
+check_c_source_compiles("#include <windows.h>
+  #include <psapi.h>
+  int main(int artc, char** argv) {
+    return EnumProcessModules(NULL, NULL, 0, NULL);
+  }" LIBOMP_HAVE_PSAPI)
+set(CMAKE_REQUIRED_LIBRARIES)
 if(NOT LIBOMP_HAVE___BUILTIN_FRAME_ADDRESS)
   set(LIBOMP_HAVE_OMPT_SUPPORT FALSE)
 else()
@@ -290,20 +310,28 @@ else()
       (LIBOMP_ARCH STREQUAL i386) OR
 #      (LIBOMP_ARCH STREQUAL arm) OR
       (LIBOMP_ARCH STREQUAL aarch64) OR
+      (LIBOMP_ARCH STREQUAL aarch64_32) OR
+      (LIBOMP_ARCH STREQUAL aarch64_a64fx) OR
       (LIBOMP_ARCH STREQUAL ppc64le) OR
       (LIBOMP_ARCH STREQUAL ppc64) OR
-      (LIBOMP_ARCH STREQUAL riscv64))
+      (LIBOMP_ARCH STREQUAL riscv64) OR
+      (LIBOMP_ARCH STREQUAL loongarch64) OR
+      (LIBOMP_ARCH STREQUAL s390x))
      AND # OS supported?
-     ((WIN32 AND LIBOMP_HAVE_PSAPI) OR APPLE OR (NOT WIN32 AND LIBOMP_HAVE_WEAK_ATTRIBUTE)))
+     ((WIN32 AND LIBOMP_HAVE_PSAPI) OR APPLE OR
+      (NOT (WIN32 OR ${CMAKE_SYSTEM_NAME} MATCHES "AIX") AND LIBOMP_HAVE_WEAK_ATTRIBUTE)))
     set(LIBOMP_HAVE_OMPT_SUPPORT TRUE)
   else()
     set(LIBOMP_HAVE_OMPT_SUPPORT FALSE)
   endif()
 endif()
 
+set(LIBOMP_HAVE_OMPT_SUPPORT ${LIBOMP_HAVE_OMPT_SUPPORT} PARENT_SCOPE)
+
 # Check if HWLOC support is available
 if(${LIBOMP_USE_HWLOC})
-  set(CMAKE_REQUIRED_INCLUDES ${LIBOMP_HWLOC_INSTALL_DIR}/include)
+  find_path(LIBOMP_HWLOC_INCLUDE_DIR NAMES hwloc.h HINTS ${LIBOMP_HWLOC_INSTALL_DIR} PATH_SUFFIXES include)
+  set(CMAKE_REQUIRED_INCLUDES ${LIBOMP_HWLOC_INCLUDE_DIR})
   check_include_file(hwloc.h LIBOMP_HAVE_HWLOC_H)
   set(CMAKE_REQUIRED_INCLUDES)
   find_library(LIBOMP_HWLOC_LIBRARY

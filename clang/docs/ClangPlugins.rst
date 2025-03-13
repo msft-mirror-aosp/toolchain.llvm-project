@@ -92,11 +92,6 @@ The members of ``ParsedAttrInfo`` that a plugin attribute must define are:
    attribute, each of which consists of an attribute syntax and how the
    attribute name is spelled for that syntax. If the syntax allows a scope then
    the spelling must be "scope::attr" if a scope is present or "::attr" if not.
- * ``handleDeclAttribute``, which is the function that applies the attribute to
-   a declaration. It is responsible for checking that the attribute's arguments
-   are valid, and typically applies the attribute by adding an ``Attr`` to the
-   ``Decl``. It returns either ``AttributeApplied``, to indicate that the
-   attribute was successfully applied, or ``AttributeNotApplied`` if it wasn't.
 
 The members of ``ParsedAttrInfo`` that may need to be defined, depending on the
 attribute, are:
@@ -105,13 +100,25 @@ attribute, are:
    arguments to the attribute.
  * ``diagAppertainsToDecl``, which checks if the attribute has been used on the
    right kind of declaration and issues a diagnostic if not.
+ * ``handleDeclAttribute``, which is the function that applies the attribute to
+   a declaration. It is responsible for checking that the attribute's arguments
+   are valid, and typically applies the attribute by adding an ``Attr`` to the
+   ``Decl``. It returns either ``AttributeApplied``, to indicate that the
+   attribute was successfully applied, or ``AttributeNotApplied`` if it wasn't.
+ * ``diagAppertainsToStmt``, which checks if the attribute has been used on the
+   right kind of statement and issues a diagnostic if not.
+ * ``handleStmtAttribute``, which is the function that applies the attribute to
+   a statement. It is responsible for checking that the attribute's arguments
+   are valid, and typically applies the attribute by adding an ``Attr`` to the
+   ``Stmt``. It returns either ``AttributeApplied``, to indicate that the
+   attribute was successfully applied, or ``AttributeNotApplied`` if it wasn't.
  * ``diagLangOpts``, which checks if the attribute is permitted for the current
    language mode and issues a diagnostic if not.
  * ``existsInTarget``, which checks if the attribute is permitted for the given
    target.
 
 To see a working example of an attribute plugin, see `the Attribute.cpp example
-<https://github.com/llvm/llvm-project/blob/master/clang/examples/Attribute/Attribute.cpp>`_.
+<https://github.com/llvm/llvm-project/blob/main/clang/examples/Attribute/Attribute.cpp>`_.
 
 Putting it all together
 =======================
@@ -119,10 +126,32 @@ Putting it all together
 Let's look at an example plugin that prints top-level function names.  This
 example is checked into the clang repository; please take a look at
 the `latest version of PrintFunctionNames.cpp
-<https://github.com/llvm/llvm-project/blob/master/clang/examples/PrintFunctionNames/PrintFunctionNames.cpp>`_.
+<https://github.com/llvm/llvm-project/blob/main/clang/examples/PrintFunctionNames/PrintFunctionNames.cpp>`_.
 
 Running the plugin
 ==================
+
+
+Using the compiler driver
+--------------------------
+
+The Clang driver accepts the `-fplugin` option to load a plugin.
+Clang plugins can receive arguments from the compiler driver command
+line via the `fplugin-arg-<plugin name>-<argument>` option. Using this
+method, the plugin name cannot contain dashes itself, but the argument
+passed to the plugin can.
+
+
+.. code-block:: console
+
+  $ export BD=/path/to/build/directory
+  $ make -C $BD CallSuperAttr
+  $ clang++ -fplugin=$BD/lib/CallSuperAttr.so \
+            -fplugin-arg-call_super_plugin-help \
+            test.cpp
+
+If your plugin name contains dashes, either rename the plugin or used the
+cc1 command line options listed below.
 
 
 Using the cc1 command line
@@ -160,7 +189,7 @@ source tree:
             -plugin -Xclang print-fns
 
 Also see the print-function-name plugin example's
-`README <https://github.com/llvm/llvm-project/blob/master/clang/examples/PrintFunctionNames/README.txt>`_
+`README <https://github.com/llvm/llvm-project/blob/main/clang/examples/PrintFunctionNames/README.txt>`_
 
 
 Using the clang command line
@@ -178,3 +207,17 @@ action (i.e. the same as using `-add-plugin`):
   PluginASTAction::ActionType getActionType() override {
     return AddAfterMainAction;
   }
+
+Interaction with ``-clear-ast-before-backend``
+----------------------------------------------
+
+To reduce peak memory usage of the compiler, plugins are recommended to run
+*before* the main action, which is usually code generation. This is because
+having any plugins that run after the codegen action automatically turns off
+``-clear-ast-before-backend``.  ``-clear-ast-before-backend`` reduces peak
+memory by clearing the Clang AST after generating IR and before running IR
+optimizations. Use ``CmdlineBeforeMainAction`` or ``AddBeforeMainAction`` as
+``getActionType`` to run plugins while still benefitting from
+``-clear-ast-before-backend``. Plugins must make sure not to modify the AST,
+otherwise they should run after the main action.
+

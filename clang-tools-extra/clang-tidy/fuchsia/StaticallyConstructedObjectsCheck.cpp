@@ -10,9 +10,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace fuchsia {
+namespace clang::tidy::fuchsia {
 
 namespace {
 AST_MATCHER(Expr, isConstantInitializer) {
@@ -26,10 +24,10 @@ AST_MATCHER(VarDecl, isGlobalStatic) {
 
 void StaticallyConstructedObjectsCheck::registerMatchers(MatchFinder *Finder) {
   // Constructing global, non-trivial objects with static storage is
-  // disallowed, unless the object is statically initialized with a constexpr 
+  // disallowed, unless the object is statically initialized with a constexpr
   // constructor or has no explicit constructor.
   Finder->addMatcher(
-      traverse(ast_type_traits::TK_AsIs,
+      traverse(TK_AsIs,
                varDecl(
                    // Match global, statically stored objects...
                    isGlobalStatic(),
@@ -50,6 +48,4 @@ void StaticallyConstructedObjectsCheck::check(
                            "constexpr constructor instead");
 }
 
-} // namespace fuchsia
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::fuchsia

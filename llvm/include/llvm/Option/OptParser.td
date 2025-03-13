@@ -11,6 +11,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#ifndef LLVM_OPTION_OPTPARSER_TD
+#define LLVM_OPTION_OPTPARSER_TD
+
 // Define the kinds of options.
 
 class OptionKind<string name, int precedence = 0, bit sentinel = false> {
@@ -70,6 +73,13 @@ def RenderJoined : OptionFlag;
 // (only sensible on joined options).
 def RenderSeparate : OptionFlag;
 
+// Define Visibility categories
+
+class OptionVisibility {}
+
+// Explicit specifier for default visibility
+def DefaultVis : OptionVisibility;
+
 // Define the option group class.
 
 class OptionGroup<string name> {
@@ -78,9 +88,15 @@ class OptionGroup<string name> {
   string HelpText = ?;
   OptionGroup Group = ?;
   list<OptionFlag> Flags = [];
+  list<OptionVisibility> Visibility = [];
 }
 
 // Define the option class.
+
+class HelpTextVariant<list<OptionVisibility> visibilities, string text> {
+  list<OptionVisibility> Visibilities = visibilities;
+  string Text = text;
+}
 
 class Option<list<string> prefixes, string name, OptionKind kind> {
   string EnumName = ?; // Uses the def name if undefined.
@@ -90,17 +106,21 @@ class Option<list<string> prefixes, string name, OptionKind kind> {
   // Used by MultiArg option kind.
   int NumArgs = 0;
   string HelpText = ?;
+  list<HelpTextVariant> HelpTextsForVariants = [];
   string MetaVarName = ?;
   string Values = ?;
   code ValuesCode = ?;
   list<OptionFlag> Flags = [];
+  list<OptionVisibility> Visibility = [DefaultVis];
   OptionGroup Group = ?;
   Option Alias = ?;
   list<string> AliasArgs = [];
+  code MacroPrefix = "";
   code KeyPath = ?;
   code DefaultValue = ?;
   code ImpliedValue = ?;
   code ImpliedCheck = "false";
+  code ShouldParse = "true";
   bit ShouldAlwaysEmit = false;
   code NormalizerRetTy = ?;
   code NormalizedValuesScope = "";
@@ -136,66 +156,114 @@ class Alias<Option alias> { Option Alias = alias; }
 class AliasArgs<list<string> aliasargs> { list<string> AliasArgs = aliasargs; }
 class EnumName<string name> { string EnumName = name; }
 class Flags<list<OptionFlag> flags> { list<OptionFlag> Flags = flags; }
+class Visibility<list<OptionVisibility> visibility> {
+  list<OptionVisibility> Visibility = visibility;
+}
 class Group<OptionGroup group> { OptionGroup Group = group; }
 class HelpText<string text> { string HelpText = text; }
+class HelpTextForVariants<list<OptionVisibility> Visibilities, string text> {
+  list<HelpTextVariant> HelpTextsForVariants = [
+    HelpTextVariant<Visibilities, text>
+  ];
+}
+
 class MetaVarName<string name> { string MetaVarName = name; }
 class Values<string value> { string Values = value; }
 class ValuesCode<code valuecode> { code ValuesCode = valuecode; }
 
-// Helpers for defining marshalling information.
+// Helpers for defining marshalling information (typically used in Clang's -cc1
+// frontend).
 
-class ImpliedByAnyOf<list<Option> options, code value = "true"> {
-  code ImpliedCheck = !foldl("false", options, accumulator, option,
-                             !strconcat(accumulator, " || ", !cast<string>(option.KeyPath)));
+// The key path to the mapped field and the macro prefix for the resulting
+// definition database.
+class KeyPathAndMacro<string key_path_prefix, string key_path_base,
+                      string macro_prefix = ""> {
+  code KeyPath = !strconcat(key_path_prefix, key_path_base);
+  code MacroPrefix = macro_prefix;
+}
+
+// Mixin that implies the specified value for the current option when any of the
+// given key paths evaluates to true.
+class ImpliedByAnyOf<list<string> key_paths, code value = "true"> {
+  code ImpliedCheck = !foldl("false", key_paths, accumulator, key_path,
+                             !strconcat(accumulator, " || ", key_path));
   code ImpliedValue = value;
 }
 
-class MarshallingInfo<code keypath, code defaultvalue> {
-  code KeyPath = keypath;
+// Parent class for marshalled options (typically used in Clang's -cc1 frontend).
+class MarshallingInfo<KeyPathAndMacro kpm, code defaultvalue> {
+  code KeyPath = kpm.KeyPath;
+  code MacroPrefix = kpm.MacroPrefix;
   code DefaultValue = defaultvalue;
 }
 
-class MarshallingInfoString<code keypath, code defaultvalue>
-  : MarshallingInfo<keypath, defaultvalue> {}
+// Marshalled option accepting a string argument.
+class MarshallingInfoString<KeyPathAndMacro kpm, code defaultvalue="std::string()">
+  : MarshallingInfo<kpm, defaultvalue> {
+  code Normalizer = "normalizeString";
+  code Denormalizer = "denormalizeString";
+}
 
-class MarshallingInfoFlag<code keypath, code defaultvalue = "false">
-  : MarshallingInfo<keypath, defaultvalue> {
+// Marshalled option accepting an integer argument.
+class MarshallingInfoInt<KeyPathAndMacro kpm, code defaultvalue="0", code type="unsigned">
+  : MarshallingInfo<kpm, defaultvalue> {
+  code Normalizer = "normalizeStringIntegral<"#type#">";
+  code Denormalizer = "denormalizeString<"#type#">";
+}
+
+// Marshalled option accepting vector of strings.
+class MarshallingInfoStringVector<KeyPathAndMacro kpm>
+  : MarshallingInfo<kpm, "std::vector<std::string>({})"> {
+  code Normalizer = "normalizeStringVector";
+  code Denormalizer = "denormalizeStringVector";
+}
+
+// Marshalled option - single positive flag.
+class MarshallingInfoFlag<KeyPathAndMacro kpm, code defaultvalue = "false">
+  : MarshallingInfo<kpm, defaultvalue> {
   code Normalizer = "normalizeSimpleFlag";
   code Denormalizer = "denormalizeSimpleFlag";
 }
 
-class MarshallingInfoBitfieldFlag<code keypath, code value>
-  : MarshallingInfoFlag<keypath, "0u"> {
+// Marshalled option - single negative flag.
+class MarshallingInfoNegativeFlag<KeyPathAndMacro kpm, code defaultvalue = "true">
+  : MarshallingInfo<kpm, defaultvalue> {
+  code Normalizer = "normalizeSimpleNegativeFlag";
+  code Denormalizer = "denormalizeSimpleFlag";
+}
+
+// Marshalled option - single flag contributing to a bitfield.
+class MarshallingInfoBitfieldFlag<KeyPathAndMacro kpm, code value>
+  : MarshallingInfoFlag<kpm, "0u"> {
   code Normalizer = "makeFlagToValueNormalizer("#value#")";
   code ValueMerger = "mergeMaskValue";
   code ValueExtractor = "(extractMaskValue<unsigned, decltype("#value#"), "#value#">)";
 }
 
-class MarshallingInfoBooleanFlag<code keypath, code defaultvalue, code neg_name, string neg_spelling>
-  : MarshallingInfoFlag<keypath, defaultvalue> {
-  bit ShouldAlwaysEmit = 1;
-  code Normalizer = "makeBooleanFlagNormalizer(OPT_"#neg_name#")";
-  code Denormalizer = "makeBooleanFlagDenormalizer(\""#neg_spelling#"\")";
+// Implementation detail of BoolOption.
+class MarshallingInfoBooleanFlag<KeyPathAndMacro kpm, code defaultvalue, code value,
+                                 code other_value, code other_name>
+  : MarshallingInfoFlag<kpm, defaultvalue> {
+  code Normalizer = "makeBooleanOptionNormalizer("#value#", "#other_value#", OPT_"#other_name#")";
+  code Denormalizer = "makeBooleanOptionDenormalizer("#value#")";
+}
+
+// Marshalled option accepting any of the specified enum values.
+// Typically used with `Values`, `NormalizedValues` and `NormalizedValuesScope`.
+class MarshallingInfoEnum<KeyPathAndMacro kpm, code defaultvalue>
+  : MarshallingInfo<kpm, defaultvalue> {
+  code Normalizer = "normalizeSimpleEnum";
+  code Denormalizer = "denormalizeSimpleEnum";
 }
 
 // Mixins for additional marshalling attributes.
 
-class IsNegative {
-  code Normalizer = "normalizeSimpleNegativeFlag";
-}
+class ShouldParseIf<code condition> { code ShouldParse = condition; }
 class AlwaysEmit { bit ShouldAlwaysEmit = true; }
 class Normalizer<code normalizer> { code Normalizer = normalizer; }
 class Denormalizer<code denormalizer> { code Denormalizer = denormalizer; }
 class NormalizedValuesScope<code scope> { code NormalizedValuesScope = scope; }
-class NormalizedValues<list<code> definitions> { list<code> NormalizedValues = definitions; } 
-class DenormalizeString { code Denormalizer = "denormalizeString"; }
-class AutoNormalizeEnum {
-  code Normalizer = "normalizeSimpleEnum";
-  code Denormalizer = "denormalizeSimpleEnum";
-}
-class AutoNormalizeEnumJoined : AutoNormalizeEnum {
-  code Denormalizer = "denormalizeSimpleEnumJoined";
-}
+class NormalizedValues<list<code> definitions> { list<code> NormalizedValues = definitions; }
 class ValueMerger<code merger> { code ValueMerger = merger; }
 class ValueExtractor<code extractor> { code ValueExtractor = extractor; }
 
@@ -205,3 +273,5 @@ class ValueExtractor<code extractor> { code ValueExtractor = extractor; }
 // aren't duplicated).
 def INPUT : Option<[], "<input>", KIND_INPUT>;
 def UNKNOWN : Option<[], "<unknown>", KIND_UNKNOWN>;
+
+#endif // LLVM_OPTION_OPTPARSER_TD

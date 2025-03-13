@@ -1,6 +1,6 @@
 ; RUN: opt < %s -O1 -S | FileCheck %s
 
-; The attribute nomerge prevents the 3 bar() calls from being sunk/hoisted into 
+; The attribute nomerge prevents the 3 bar() calls from being sunk/hoisted into
 ; one inside a function. Check that there are still 3 tail calls.
 
 ; Test case for preventing sinking
@@ -42,8 +42,8 @@ if.end3:
 define void @hoist(i32 %i) {
 entry:
   %i.addr = alloca i32, align 4
-  store i32 %i, i32* %i.addr, align 4
-  %0 = load i32, i32* %i.addr, align 4
+  store i32 %i, ptr %i.addr, align 4
+  %0 = load i32, ptr %i.addr, align 4
   %cmp = icmp eq i32 %0, 5
   br i1 %cmp, label %if.then, label %if.else
 
@@ -52,7 +52,7 @@ if.then:
   unreachable
 
 if.else:
-  %1 = load i32, i32* %i.addr, align 4
+  %1 = load i32, ptr %i.addr, align 4
   %cmp1 = icmp eq i32 %i, 7
   br i1 %cmp1, label %if.then2, label %if.end
 

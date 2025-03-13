@@ -9,7 +9,7 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_MERGE_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_MERGE_H
 
-#include "Index.h"
+#include "index/Index.h"
 
 namespace clang {
 namespace clangd {
@@ -23,10 +23,6 @@ Symbol mergeSymbol(const Symbol &L, const Symbol &R);
 //  - the Dynamic index covers few files, but is relatively up-to-date.
 //  - the Static index covers a bigger set of files, but is relatively stale.
 // The returned index attempts to combine results, and avoid duplicates.
-//
-// FIXME: We don't have a mechanism in Index to track deleted symbols and
-// refs in dirty files, so the merged index may return stale symbols
-// and refs from Static index.
 class MergedIndex : public SymbolIndex {
   const SymbolIndex *Dynamic, *Static;
 
@@ -42,9 +38,14 @@ public:
               llvm::function_ref<void(const Symbol &)>) const override;
   bool refs(const RefsRequest &,
             llvm::function_ref<void(const Ref &)>) const override;
+  bool containedRefs(
+      const ContainedRefsRequest &,
+      llvm::function_ref<void(const ContainedRefsResult &)>) const override;
   void relations(const RelationsRequest &,
                  llvm::function_ref<void(const SymbolID &, const Symbol &)>)
       const override;
+  llvm::unique_function<IndexContents(llvm::StringRef) const>
+  indexedFiles() const override;
   size_t estimateMemoryUsage() const override {
     return Dynamic->estimateMemoryUsage() + Static->estimateMemoryUsage();
   }

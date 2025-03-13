@@ -1,4 +1,4 @@
-; RUN: opt %loadPolly -analyze -polly-scops -pass-remarks-analysis=.* < %s 2>&1 > /dev/null | FileCheck %s
+; RUN: opt %loadNPMPolly '-passes=print<polly-function-scops>' -pass-remarks-analysis=.* -disable-output < %s 2>&1 | FileCheck %s
 
 ; Make sure we hit the complexity bailout, and don't crash.
 ; CHECK: Low complexity assumption:       {  : false }

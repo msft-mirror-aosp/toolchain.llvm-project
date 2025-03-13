@@ -12,6 +12,29 @@
 
 using namespace lldb_private;
 
+TEST(RangeVector, SignedBaseType) {
+  using RangeVector = RangeVector<int32_t, uint32_t>;
+  using Entry = RangeVector::Entry;
+
+  RangeVector V;
+  V.Append(10, 5);
+  V.Append(-3, 6);
+  V.Append(-10, 3);
+  V.Sort();
+  EXPECT_THAT(V,
+              testing::ElementsAre(Entry(-10, 3), Entry(-3, 6), Entry(10, 5)));
+  Entry e = *V.begin();
+  EXPECT_EQ(e.GetRangeBase(), -10);
+  EXPECT_EQ(e.GetByteSize(), 3u);
+  EXPECT_EQ(e.GetRangeEnd(), -7);
+  EXPECT_TRUE(e.Contains(-10));
+  EXPECT_TRUE(e.Contains(-8));
+  EXPECT_FALSE(e.Contains(-7));
+  EXPECT_TRUE(e.Union(Entry(-8, 2)));
+  EXPECT_EQ(e, Entry(-10, 4));
+  EXPECT_EQ(e.Intersect(Entry(-7, 3)), Entry(-7, 1));
+}
+
 TEST(RangeVector, CombineConsecutiveRanges) {
   using RangeVector = RangeVector<uint32_t, uint32_t>;
   using Entry = RangeVector::Entry;
@@ -36,6 +59,61 @@ TEST(RangeVector, CombineConsecutiveRanges) {
   V.Sort();
   V.CombineConsecutiveRanges();
   EXPECT_THAT(V, testing::ElementsAre(Entry(0, 20)));
+}
+
+TEST(RangeVector, GetOverlaps) {
+  using RangeVector = RangeVector<uint32_t, uint32_t>;
+
+  RangeVector V1;
+  RangeVector V2;
+  RangeVector Expected;
+  // same range
+  V1.Append(0, 1);
+  V2.Append(0, 1);
+  Expected.Append(0, 1);
+
+  // no overlap
+  V1.Append(2, 2);
+  V2.Append(4, 1);
+
+  // same base overlap
+  V1.Append(10, 5);
+  V2.Append(10, 3);
+  Expected.Append(10, 3);
+
+  // same end overlap
+  V1.Append(27, 1);
+  V2.Append(20, 8);
+  Expected.Append(27, 1);
+
+  // smaller base overlap
+  V1.Append(33, 4);
+  V2.Append(30, 5);
+  Expected.Append(33, 2);
+
+  // larger base overlap
+  V1.Append(46, 3);
+  V2.Append(40, 7);
+  Expected.Append(46, 1);
+
+  // encompass 1 range
+  V1.Append(50, 9);
+  V2.Append(51, 7);
+  Expected.Append(51, 7);
+
+  // encompass 2 ranges
+  V1.Append(60, 9);
+  V2.Append(60, 3);
+  V2.Append(65, 3);
+  Expected.Append(60, 3);
+  Expected.Append(65, 3);
+
+  V1.Sort();
+  V2.Sort();
+  Expected.Sort();
+
+  EXPECT_EQ(RangeVector::GetOverlaps(V1, V2), Expected);
+  EXPECT_EQ(RangeVector::GetOverlaps(V2, V1), Expected);
 }
 
 using RangeDataVectorT = RangeDataVector<uint32_t, uint32_t, uint32_t>;

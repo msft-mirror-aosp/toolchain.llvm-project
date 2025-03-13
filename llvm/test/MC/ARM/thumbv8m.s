@@ -1,12 +1,12 @@
 // RUN: not llvm-mc -triple=thumbv8m.base -show-encoding < %s 2>%t \
-// RUN:   | FileCheck --check-prefix=CHECK-BASELINE --check-prefix=CHECK %s
-// RUN:     FileCheck --check-prefix=UNDEF-BASELINE --check-prefix=UNDEF < %t %s
+// RUN:   | FileCheck --check-prefix=CHECK %s
+// RUN:     FileCheck --check-prefixes=UNDEF-BASELINE,UNDEF < %t %s
 // RUN: not llvm-mc -triple=thumbv8m.main -show-encoding < %s 2>%t \
-// RUN:   | FileCheck --check-prefix=CHECK-MAINLINE --check-prefix=CHECK %s
-// RUN:     FileCheck --check-prefix=UNDEF-MAINLINE --check-prefix=UNDEF < %t %s
+// RUN:   | FileCheck --check-prefixes=CHECK-MAINLINE,CHECK %s
+// RUN:     FileCheck --check-prefixes=UNDEF-MAINLINE,UNDEF < %t %s
 // RUN: not llvm-mc -triple=thumbv8m.main -mattr=+dsp -show-encoding < %s 2>%t \
-// RUN:   | FileCheck --check-prefix=CHECK-MAINLINE_DSP --check-prefix=CHECK %s
-// RUN:     FileCheck --check-prefix=UNDEF-MAINLINE_DSP --check-prefix=UNDEF < %t %s
+// RUN:   | FileCheck --check-prefixes=CHECK-MAINLINE_DSP,CHECK %s
+// RUN:     FileCheck --check-prefixes=UNDEF-MAINLINE_DSP,UNDEF < %t %s
 
 // Simple check that baseline is v6M and mainline is v7M
 // UNDEF-BASELINE: error: instruction requires: thumb2
@@ -184,13 +184,13 @@ ttat r0, r1
 // 'Lazy Load/Store Multiple'
 
 // UNDEF-BASELINE: error: instruction requires: armv8m.main
-// CHECK-MAINLINE: vlldm r5          @ encoding: [0x35,0xec,0x00,0x0a]
-// CHECK-MAINLINE_DSP: vlldm r5      @ encoding: [0x35,0xec,0x00,0x0a]
+// CHECK-MAINLINE: vlldm r5, {d0 - d15} @ encoding: [0x35,0xec,0x00,0x0a]
+// CHECK-MAINLINE_DSP: vlldm r5, {d0 - d15} @ encoding: [0x35,0xec,0x00,0x0a]
 vlldm r5
 
 // UNDEF-BASELINE: error: instruction requires: armv8m.main
-// CHECK-MAINLINE: vlstm r10         @ encoding: [0x2a,0xec,0x00,0x0a]
-// CHECK-MAINLINE_DSP: vlstm r10     @ encoding: [0x2a,0xec,0x00,0x0a]
+// CHECK-MAINLINE: vlstm r10, {d0 - d15} @ encoding: [0x2a,0xec,0x00,0x0a]
+// CHECK-MAINLINE_DSP: vlstm r10, {d0 - d15} @ encoding: [0x2a,0xec,0x00,0x0a]
 vlstm r10
 
 // New SYSm's

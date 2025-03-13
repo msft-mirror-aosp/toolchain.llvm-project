@@ -1,5 +1,7 @@
-; RUN: opt -mtriple=amdgcn-- --amdgpu-inline -S -amdgpu-inline-max-bb=2 %s | FileCheck %s --check-prefix=NOINL
-; RUN: opt -mtriple=amdgcn-- --amdgpu-inline -S -amdgpu-inline-max-bb=3 %s | FileCheck %s --check-prefix=INL
+; RUN: opt -mtriple=amdgcn-- -passes='cgscc(inline)' -S -amdgpu-inline-max-bb=2 %s | FileCheck %s --check-prefix=NOINL
+; RUN: opt -mtriple=amdgcn-- -passes='cgscc(inline)' -S -amdgpu-inline-max-bb=3 %s | FileCheck %s --check-prefix=INL
+; RUN: opt -mtriple=amdgcn-- -passes=inline -S -amdgpu-inline-max-bb=2 %s | FileCheck %s --check-prefix=NOINL
+; RUN: opt -mtriple=amdgcn-- -passes=inline -S -amdgpu-inline-max-bb=3 %s | FileCheck %s --check-prefix=INL
 
 define i32 @callee(i32 %x) {
 entry:
@@ -28,7 +30,7 @@ ret_res:
 
 define amdgpu_kernel void @caller(i32 %x) {
   %res = call i32 @callee(i32 %x)
-  store volatile i32 %res, i32 addrspace(1)* undef
+  store volatile i32 %res, ptr addrspace(1) undef
   ret void
 }
 
@@ -61,7 +63,7 @@ ret_res:
 
 define amdgpu_kernel void @caller_hint(i32 %x) {
   %res = call i32 @callee_hint(i32 %x)
-  store volatile i32 %res, i32 addrspace(1)* undef
+  store volatile i32 %res, ptr addrspace(1) undef
   ret void
 }
 

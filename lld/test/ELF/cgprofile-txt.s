@@ -24,8 +24,19 @@
 # RUN: echo "TooManyPreds8 TooManyPreds 10" >> %t.call_graph
 # RUN: echo "TooManyPreds9 TooManyPreds 10" >> %t.call_graph
 # RUN: echo "TooManyPreds10 TooManyPreds 11" >> %t.call_graph
-# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph -o %t2
+# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph --call-graph-profile-sort=hfsort -o %t2
 # RUN: llvm-readobj --symbols %t2 | FileCheck %s
+
+# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph --call-graph-profile-sort=cdsort -o %t2
+# RUN: llvm-readobj --symbols %t2 | FileCheck %s --check-prefix=CDSORT
+## --call-graph-profile-sort=cdsort is the default.
+# RUN: ld.lld -e A %t --call-graph-ordering-file %t.call_graph -o %t2b
+# RUN: cmp %t2 %t2b
+
+# RUN: not ld.lld -e A %t --call-graph-ordering-file %t.call_graph --call-graph-profile-sort=sort \
+# RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+
+# UNKNOWN: error: unknown --call-graph-profile-sort= value: sort
 
     .section    .text.D,"ax",@progbits
 D:
@@ -140,24 +151,49 @@ TooManyPreds10:
 # CHECK-NEXT:     Value: 0x201124
 # CHECK:          Name: TooManyPreds10
 # CHECK-NEXT:     Value: 0x201138
-# CHECK:          Name: A
-# CHECK-NEXT:     Value: 0x201120
-# CHECK:          Name: B
-# CHECK-NEXT:     Value: 0x201121
 # CHECK:          Name: C
 # CHECK-NEXT:     Value: 0x201122
-# CHECK:          Name: GB
-# CHECK-NEXT:     Value: 0x20113F
+# CHECK:          Name: B
+# CHECK-NEXT:     Value: 0x201121
+# CHECK:          Name: A
+# CHECK-NEXT:     Value: 0x201120
+# CHECK:          Name: TS
+# CHECK-NEXT:     Value: 0x20113D
 # CHECK:          Name: PP
 # CHECK-NEXT:     Value: 0x20113C
 # CHECK:          Name: QC
 # CHECK-NEXT:     Value: 0x20113E
-# CHECK:          Name: TS
-# CHECK-NEXT:     Value: 0x20113D
+# CHECK:          Name: GB
+# CHECK-NEXT:     Value: 0x20113F
 # CHECK:          Name: _init
 # CHECK-NEXT:     Value: 0x201140
 # CHECK:          Name: _init2
 # CHECK-NEXT:     Value: 0x201141
+
+# CDSORT:          Name: D
+# CDSORT-NEXT:     Value: 0x201123
+# CDSORT:          Name: TooManyPreds
+# CDSORT-NEXT:     Value: 0x20112F
+# CDSORT:          Name: TooManyPreds10
+# CDSORT-NEXT:     Value: 0x20112E
+# CDSORT:          Name: C
+# CDSORT-NEXT:     Value: 0x201122
+# CDSORT:          Name: B
+# CDSORT-NEXT:     Value: 0x201121
+# CDSORT:          Name: A
+# CDSORT-NEXT:     Value: 0x201120
+# CDSORT:          Name: TS
+# CDSORT-NEXT:     Value: 0x20113D
+# CDSORT:          Name: PP
+# CDSORT-NEXT:     Value: 0x20113C
+# CDSORT:          Name: QC
+# CDSORT-NEXT:     Value: 0x20113E
+# CDSORT:          Name: GB
+# CDSORT-NEXT:     Value: 0x20113F
+# CDSORT:          Name: _init
+# CDSORT-NEXT:     Value: 0x201140
+# CDSORT:          Name: _init2
+# CDSORT-NEXT:     Value: 0x201141
 
 # NOSORT:          Name: D
 # NOSORT-NEXT:     Value: 0x201120
@@ -165,20 +201,20 @@ TooManyPreds10:
 # NOSORT-NEXT:     Value: 0x201124
 # NOSORT:          Name: TooManyPreds10
 # NOSORT-NEXT:     Value: 0x201138
-# NOSORT:          Name: A
-# NOSORT-NEXT:     Value: 0x201123
-# NOSORT:          Name: B
-# NOSORT-NEXT:     Value: 0x201122
 # NOSORT:          Name: C
 # NOSORT-NEXT:     Value: 0x201121
-# NOSORT:          Name: GB
-# NOSORT-NEXT:     Value: 0x20113C
+# NOSORT:          Name: B
+# NOSORT-NEXT:     Value: 0x201122
+# NOSORT:          Name: A
+# NOSORT-NEXT:     Value: 0x201123
+# NOSORT:          Name: TS
+# NOSORT-NEXT:     Value: 0x201139
 # NOSORT:          Name: PP
 # NOSORT-NEXT:     Value: 0x20113A
 # NOSORT:          Name: QC
 # NOSORT-NEXT:     Value: 0x20113B
-# NOSORT:          Name: TS
-# NOSORT-NEXT:     Value: 0x201139
+# NOSORT:          Name: GB
+# NOSORT-NEXT:     Value: 0x20113C
 # NOSORT:          Name: _init
 # NOSORT-NEXT:     Value: 0x20113D
 # NOSORT:          Name: _init2

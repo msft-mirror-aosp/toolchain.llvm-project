@@ -5,7 +5,7 @@ __attribute__((__swift_bridge__))
 @interface I
 @end
 
-// expected-error@+1 {{'__swift_bridge__' attribute requires a string}}
+// expected-error@+1 {{expected string literal as argument of '__swift_bridge__' attribute}}
 __attribute__((__swift_bridge__(1)))
 @interface J
 @end
@@ -31,3 +31,8 @@ __attribute__((__swift_bridge__("ProtocolP")))
 typedef NSArray *NSArrayAlias __attribute__((__swift_bridge__("ArrayAlias")));
 
 struct __attribute__((__swift_bridge__("StructT"))) T {};
+
+// Duplicate attributes with the same arguments are fine.
+struct __attribute__((swift_bridge("foo"), swift_bridge("foo"))) S;
+// Duplicate attributes with different arguments are not.
+struct __attribute__((swift_bridge("foo"), swift_bridge("bar"))) S; // expected-warning {{attribute 'swift_bridge' is already applied with different arguments}}

@@ -1,10 +1,10 @@
 // RUN: mlir-opt -test-print-nesting  -allow-unregistered-dialect %s | FileCheck %s
 
-// CHECK: visiting op: 'module' with 0 operands and 0 results
+// CHECK: visiting op: 'builtin.module' with 0 operands and 0 results
 // CHECK:  1 nested regions:
 // CHECK:   Region with 1 blocks:
-// CHECK:     Block with 0 arguments, 0 successors, and 3 operations
-module {
+// CHECK:     Block with 0 arguments, 0 successors, and 2 operations
+"builtin.module"() ( {
 
 
 // CHECK:       visiting op: 'dialect.op1' with 0 operands and 4 results
@@ -15,6 +15,8 @@ module {
 
 
 // CHECK:       visiting op: 'dialect.op2' with 0 operands and 0 results
+// CHECK:       1 attributes:
+// CHECK:        - 'other attribute' : '42 : i64'
 // CHECK:        2 nested regions:
   "dialect.op2"() ({
 
@@ -50,8 +52,5 @@ module {
 // CHECK:             visiting op: 'dialect.innerop7' with 0 operands and 0 results
 // CHECK:              0 nested regions:
     "dialect.innerop7"() : () -> ()
-  }) : () -> ()
-
-// CHECK:       visiting op: 'module_terminator' with 0 operands and 0 results
-
-} // module
+  }) {"other attribute" = 42 : i64} : () -> ()
+}) : () -> ()

@@ -1,5 +1,5 @@
-; RUN: llc -filetype=obj -o %t.o %s
-; RUN: llc -filetype=obj %S/Inputs/weak-alias.ll -o %t2.o
+; RUN: llc -mcpu=mvp -filetype=obj -o %t.o %s
+; RUN: llc -mcpu=mvp -filetype=obj %S/Inputs/weak-alias.ll -o %t2.o
 ; RUN: wasm-ld --export-dynamic %t.o %t2.o -o %t.wasm
 ; RUN: obj2yaml %t.wasm | FileCheck %s
 
@@ -37,11 +37,11 @@ entry:
 ; CHECK-NEXT:         ElemType:        FUNCREF
 ; CHECK-NEXT:         Limits:
 ; CHECK-NEXT:           Flags:           [ HAS_MAX ]
-; CHECK-NEXT:           Initial:         0x2
+; CHECK-NEXT:           Minimum:         0x2
 ; CHECK-NEXT:           Maximum:         0x2
 ; CHECK-NEXT:   - Type:            MEMORY
 ; CHECK-NEXT:     Memories:
-; CHECK-NEXT:       - Initial:         0x2
+; CHECK-NEXT:       - Minimum:         0x2
 ; CHECK-NEXT:   - Type:            GLOBAL
 ; CHECK-NEXT:     Globals:
 ; CHECK-NEXT:       - Index:           0
@@ -107,6 +107,7 @@ entry:
 ; CHECK-NEXT:             Count:           2
 ; CHECK-NEXT:         Body:            23808080800041106B220024808080800020004181808080003602081081808080002101200041106A24808080800020010B
 ; CHECK-NEXT:   - Type:            CUSTOM
+; CHECK-NEXT:     HeaderSecSizeEncodingLen: 2
 ; CHECK-NEXT:     Name:            name
 ; CHECK-NEXT:     FunctionNames:
 ; CHECK-NEXT:       - Index:           0
@@ -145,23 +146,23 @@ entry:
 ; RELOC-NEXT:   - Type:            IMPORT
 ; RELOC-NEXT:     Imports:
 ; RELOC-NEXT:       - Module:          env
+; RELOC-NEXT:         Field:           __indirect_function_table
+; RELOC-NEXT:         Kind:            TABLE
+; RELOC-NEXT:         Table:
+; RELOC-NEXT:           Index:           0
+; RELOC-NEXT:           ElemType:        FUNCREF
+; RELOC-NEXT:           Limits:
+; RELOC-NEXT:             Minimum:         0x2
+; RELOC-NEXT:       - Module:          env
 ; RELOC-NEXT:         Field:           __stack_pointer
 ; RELOC-NEXT:         Kind:            GLOBAL
 ; RELOC-NEXT:         GlobalType:      I32
 ; RELOC-NEXT:         GlobalMutable:   true
 ; RELOC-NEXT:   - Type:            FUNCTION
 ; RELOC-NEXT:     FunctionTypes:   [ 0, 1, 1, 1, 1, 1 ]
-; RELOC-NEXT:   - Type:            TABLE
-; RELOC-NEXT:     Tables:
-; RELOC-NEXT:       - Index:           0
-; RELOC-NEXT:         ElemType:        FUNCREF
-; RELOC-NEXT:         Limits:
-; RELOC-NEXT:           Flags:           [ HAS_MAX ]
-; RELOC-NEXT:           Initial:         0x2
-; RELOC-NEXT:           Maximum:         0x2
 ; RELOC-NEXT:   - Type:            MEMORY
 ; RELOC-NEXT:     Memories:
-; RELOC-NEXT:       - Initial:         0x0
+; RELOC-NEXT:       - Minimum:         0x0
 ; RELOC-NEXT:   - Type:            ELEM
 ; RELOC-NEXT:     Segments:
 ; RELOC-NEXT:       - Offset:
@@ -276,6 +277,11 @@ entry:
 ; RELOC-NEXT:         Name:            call_direct_ptr
 ; RELOC-NEXT:         Flags:           [  ]
 ; RELOC-NEXT:         Function:        5
+; RELOC-NEXT:       - Index:           8
+; RELOC-NEXT:         Kind:            TABLE
+; RELOC-NEXT:         Name:            __indirect_function_table
+; RELOC-NEXT:         Flags:           [ UNDEFINED, NO_STRIP ]
+; RELOC-NEXT:         Table:           0
 ; RELOC-NEXT:   - Type:            CUSTOM
 ; RELOC-NEXT:     Name:            name
 ; RELOC-NEXT:     FunctionNames:

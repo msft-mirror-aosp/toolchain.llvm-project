@@ -8,27 +8,32 @@
 
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/LangOptions.h"
-#include "clang/CodeGen/ObjectFilePCHContainerOperations.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendAction.h"
-#include "clang/Index/IndexingAction.h"
+#include "clang/Frontend/Utils.h"
 #include "clang/Index/IndexDataConsumer.h"
+#include "clang/Index/IndexingAction.h"
 #include "clang/Index/USRGeneration.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Serialization/ASTReader.h"
+#include "clang/Serialization/ObjectFilePCHContainerReader.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Signals.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/Program.h"
+#include "llvm/Support/Signals.h"
+#include "llvm/Support/StringSaver.h"
+#include "llvm/Support/VirtualFileSystem.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
 using namespace clang::index;
 using namespace llvm;
 
 extern "C" int indextest_core_main(int argc, const char **argv);
+extern "C" int indextest_perform_shell_execution(const char *command_line);
 
 namespace {
 
@@ -59,6 +64,9 @@ DumpModuleImports("dump-imported-module-files",
 
 static cl::opt<bool>
 IncludeLocals("include-locals", cl::desc("Print local symbols"));
+
+static cl::opt<bool> IgnoreMacros("ignore-macros",
+                                  cl::desc("Skip indexing macros"));
 
 static cl::opt<std::string>
 ModuleFilePath("module-file",
@@ -207,13 +215,18 @@ static void dumpModuleFileInputs(serialization::ModuleFile &Mod,
 
 static bool printSourceSymbols(const char *Executable,
                                ArrayRef<const char *> Args,
-                               bool dumpModuleImports, bool indexLocals) {
+                               bool dumpModuleImports, bool indexLocals,
+                               bool ignoreMacros) {
   SmallVector<const char *, 4> ArgsWithProgName;
   ArgsWithProgName.push_back(Executable);
   ArgsWithProgName.append(Args.begin(), Args.end());
-  IntrusiveRefCntPtr<DiagnosticsEngine>
-    Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions));
-  auto CInvok = createInvocationFromCommandLine(ArgsWithProgName, Diags);
+  IntrusiveRefCntPtr<DiagnosticsEngine> Diags(
+      CompilerInstance::createDiagnostics(*llvm::vfs::getRealFileSystem(),
+                                          new DiagnosticOptions));
+  CreateInvocationOptions CIOpts;
+  CIOpts.Diags = Diags;
+  CIOpts.ProbePrecompiled = true; // FIXME: historical default. Needed?
+  auto CInvok = createInvocation(ArgsWithProgName, std::move(CIOpts));
   if (!CInvok)
     return true;
 
@@ -221,6 +234,8 @@ static bool printSourceSymbols(const char *Executable,
   auto DataConsumer = std::make_shared<PrintIndexDataConsumer>(OS);
   IndexingOptions IndexOpts;
   IndexOpts.IndexFunctionLocals = indexLocals;
+  IndexOpts.IndexMacros = !ignoreMacros;
+  IndexOpts.IndexMacrosInPreprocessor = !ignoreMacros;
   std::unique_ptr<FrontendAction> IndexAction =
       createIndexingAction(DataConsumer, IndexOpts);
 
@@ -257,14 +272,17 @@ static bool printSourceSymbolsFromModule(StringRef modulePath,
     return true;
   }
 
+  auto HSOpts = std::make_shared<HeaderSearchOptions>();
+
   IntrusiveRefCntPtr<DiagnosticsEngine> Diags =
-      CompilerInstance::createDiagnostics(new DiagnosticOptions());
-  std::unique_ptr<ASTUnit> AU = ASTUnit::LoadFromASTFile(
-      std::string(modulePath), *pchRdr, ASTUnit::LoadASTOnly, Diags,
-      FileSystemOpts, /*UseDebugInfo=*/false,
-      /*OnlyLocalDecls=*/true, None, CaptureDiagsKind::None,
-      /*AllowASTWithCompilerErrors=*/true,
-      /*UserFilesAreVolatile=*/false);
+      CompilerInstance::createDiagnostics(*llvm::vfs::getRealFileSystem(),
+                                          new DiagnosticOptions());
+  std::unique_ptr<ASTUnit> AU =
+      ASTUnit::LoadFromASTFile(modulePath, *pchRdr, ASTUnit::LoadASTOnly, Diags,
+                               FileSystemOpts, HSOpts, /*LangOpts=*/nullptr,
+                               /*OnlyLocalDecls=*/true, CaptureDiagsKind::None,
+                               /*AllowASTWithCompilerErrors=*/true,
+                               /*UserFilesAreVolatile=*/false);
   if (!AU) {
     errs() << "failed to create TU for: " << modulePath << '\n';
     return true;
@@ -354,8 +372,26 @@ int indextest_core_main(int argc, const char **argv) {
     }
     return printSourceSymbols(Executable.c_str(), CompArgs,
                               options::DumpModuleImports,
-                              options::IncludeLocals);
+                              options::IncludeLocals, options::IgnoreMacros);
   }
 
   return 0;
+}
+
+//===----------------------------------------------------------------------===//
+// Utility functions
+//===----------------------------------------------------------------------===//
+
+int indextest_perform_shell_execution(const char *command_line) {
+  BumpPtrAllocator Alloc;
+  llvm::StringSaver Saver(Alloc);
+  SmallVector<const char *, 4> Args;
+  llvm::cl::TokenizeGNUCommandLine(command_line, Saver, Args);
+  auto Program = llvm::sys::findProgramByName(Args[0]);
+  if (std::error_code ec = Program.getError()) {
+    llvm::errs() << "command not found: " << Args[0] << "\n";
+    return ec.value();
+  }
+  SmallVector<StringRef, 8> execArgs(Args.begin(), Args.end());
+  return llvm::sys::ExecuteAndWait(*Program, execArgs);
 }

@@ -15,9 +15,7 @@
 using namespace lldb;
 using namespace lldb_private;
 
-OptionValueFormatEntity::OptionValueFormatEntity(const char *default_format)
-    : OptionValue(), m_current_format(), m_default_format(), m_current_entry(),
-      m_default_entry() {
+OptionValueFormatEntity::OptionValueFormatEntity(const char *default_format) {
   if (default_format && default_format[0]) {
     llvm::StringRef default_format_str(default_format);
     Status error = FormatEntity::Parse(default_format_str, m_default_entry);
@@ -62,6 +60,13 @@ void OptionValueFormatEntity::DumpValue(const ExecutionContext *exe_ctx,
   }
 }
 
+llvm::json::Value
+OptionValueFormatEntity::ToJSON(const ExecutionContext *exe_ctx) {
+  std::string escaped;
+  EscapeBackticks(m_current_format, escaped);
+  return escaped;
+}
+
 Status OptionValueFormatEntity::SetValueFromString(llvm::StringRef value_str,
                                                    VarSetOperationType op) {
   Status error;
@@ -84,7 +89,7 @@ Status OptionValueFormatEntity::SetValueFromString(llvm::StringRef value_str,
       if (first_char == '"' || first_char == '\'') {
         const size_t trimmed_len = trimmed_value_str.size();
         if (trimmed_len == 1 || value_str[trimmed_len - 1] != first_char) {
-          error.SetErrorString("mismatched quotes");
+          error = Status::FromErrorString("mismatched quotes");
           return error;
         }
         value_str = trimmed_value_str.substr(1, trimmed_len - 2);
@@ -109,10 +114,6 @@ Status OptionValueFormatEntity::SetValueFromString(llvm::StringRef value_str,
     break;
   }
   return error;
-}
-
-lldb::OptionValueSP OptionValueFormatEntity::DeepCopy() const {
-  return OptionValueSP(new OptionValueFormatEntity(*this));
 }
 
 void OptionValueFormatEntity::AutoComplete(CommandInterpreter &interpreter,

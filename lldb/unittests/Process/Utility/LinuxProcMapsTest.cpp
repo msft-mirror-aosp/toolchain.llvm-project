@@ -62,7 +62,7 @@ TEST_P(LinuxProcMapsTestFixture, ParseMapRegions) {
 
 // Note: ConstString("") != ConstString(nullptr)
 // When a region has no name, it will have the latter in the MemoryRegionInfo
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     ProcMapTests, LinuxProcMapsTestFixture,
     ::testing::Values(
         // Nothing in nothing out
@@ -87,49 +87,62 @@ INSTANTIATE_TEST_CASE_P(
             "0-0 rwzp 00000000 00:00 0\n"
             "2-3 r-xp 00000000 00:00 0 [def]\n",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0, 1), MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
-                                 MemoryRegionInfo::eYes, ConstString("[abc]"),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0, 1), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString("[abc]"), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow),
             },
             "unexpected /proc/{pid}/maps exec permission char"),
         // Single entry
         std::make_tuple(
             "55a4512f7000-55a451b68000 rw-p 00000000 00:00 0    [heap]",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0x55a4512f7000, 0x55a451b68000),
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
-                                 ConstString("[heap]"),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x55a4512f7000, 0x55a451b68000),
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eYes, ConstString("[heap]"),
+                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
             },
             ""),
         // Multiple entries
         std::make_tuple(
             "7fc090021000-7fc094000000 ---p 00000000 00:00 0\n"
+            "7fc094000000-7fc094a00000 ---s 00000000 00:00 0\n"
             "ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0 "
             "[vsyscall]",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0x7fc090021000, 0x7fc094000000),
-                                 MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
-                                 MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
-                                 ConstString(nullptr),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x7fc090021000, 0x7fc094000000),
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eYes, ConstString(nullptr),
+                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x7fc094000000, 0x7fc094a00000),
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, ConstString(nullptr),
+                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
                 MemoryRegionInfo(
                     make_range(0xffffffffff600000, 0xffffffffff601000),
                     MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
-                    ConstString("[vsyscall]"), MemoryRegionInfo::eDontKnow, 0,
-                    MemoryRegionInfo::eDontKnow),
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eYes, ConstString("[vsyscall]"),
+                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
             },
-            "")), );
+            "")));
 
 class LinuxProcSMapsTestFixture : public LinuxProcMapsTestFixture {};
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     ProcSMapTests, LinuxProcSMapsTestFixture,
     ::testing::Values(
         // Nothing in nothing out
@@ -144,12 +157,13 @@ INSTANTIATE_TEST_CASE_P(
             "1111-2222 rw-p 00000000 00:00 0 [foo]\n"
             "0/0 rw-p 00000000 00:00 0",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0x1111, 0x2222),
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
-                                 ConstString("[foo]"),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString("[foo]"), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow),
             },
             "malformed /proc/{pid}/smaps entry, missing dash between address "
             "range"),
@@ -164,12 +178,26 @@ INSTANTIATE_TEST_CASE_P(
         std::make_tuple(
             "1111-2222 rw-p 00000000 00:00 0    [foo]",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0x1111, 0x2222),
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
-                                 ConstString("[foo]"),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString("[foo]"), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow),
+            },
+            ""),
+        // Single shared region parses, has no flags
+        std::make_tuple(
+            "1111-2222 rw-s 00000000 00:00 0    [foo]",
+            MemoryRegionInfos{
+                MemoryRegionInfo(
+                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
+                    ConstString("[foo]"), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow),
             },
             ""),
         // Single region with flags, other lines ignored
@@ -182,8 +210,10 @@ INSTANTIATE_TEST_CASE_P(
                 MemoryRegionInfo(
                     make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
                     MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
-                    MemoryRegionInfo::eYes, ConstString("[foo]"),
-                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eYes),
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString("[foo]"), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eNo),
             },
             ""),
         // Whitespace ignored
@@ -191,11 +221,13 @@ INSTANTIATE_TEST_CASE_P(
             "0-0 rw-p 00000000 00:00 0\n"
             "VmFlags:      mt      ",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0, 0), MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
-                                 MemoryRegionInfo::eYes, ConstString(nullptr),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eYes),
+                MemoryRegionInfo(
+                    make_range(0, 0), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString(nullptr), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eNo),
             },
             ""),
         // VmFlags line means it has flag info, but nothing is set
@@ -203,11 +235,13 @@ INSTANTIATE_TEST_CASE_P(
             "0-0 rw-p 00000000 00:00 0\n"
             "VmFlags:         ",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0, 0), MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
-                                 MemoryRegionInfo::eYes, ConstString(nullptr),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eNo),
+                MemoryRegionInfo(
+                    make_range(0, 0), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString(nullptr), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eNo),
             },
             ""),
         // Handle some pages not having a flags line
@@ -218,17 +252,20 @@ INSTANTIATE_TEST_CASE_P(
             "3333-4444 r-xp 00000000 00:00 0    [bar]\n"
             "VmFlags: mt",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0x1111, 0x2222),
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
-                                 ConstString("[foo]"),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString("[foo]"), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow),
                 MemoryRegionInfo(
                     make_range(0x3333, 0x4444), MemoryRegionInfo::eYes,
                     MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
-                    MemoryRegionInfo::eYes, ConstString("[bar]"),
-                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eYes),
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString("[bar]"), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eNo),
             },
             ""),
         // Handle no pages having a flags line (older kernels)
@@ -240,20 +277,37 @@ INSTANTIATE_TEST_CASE_P(
             "KernelPageSize:        4 kB\n"
             "MMUPageSize:           4 kB\n",
             MemoryRegionInfos{
-                MemoryRegionInfo(make_range(0x1111, 0x2222),
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
-                                 MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
-                                 ConstString(nullptr),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
-                MemoryRegionInfo(make_range(0x3333, 0x4444),
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
-                                 ConstString(nullptr),
-                                 MemoryRegionInfo::eDontKnow, 0,
-                                 MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString(nullptr), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow),
+                MemoryRegionInfo(
+                    make_range(0x3333, 0x4444), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString(nullptr), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eDontKnow),
             },
-            "")), );
+            ""),
+        // We must look for exact flag strings, ignoring substrings of longer
+        // flag names.
+        std::make_tuple(
+            "0-0 rw-p 00000000 00:00 0\n"
+            "VmFlags: amt mtb amtb",
+            MemoryRegionInfos{
+                MemoryRegionInfo(
+                    make_range(0, 0), MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
+                    ConstString(nullptr), MemoryRegionInfo::eDontKnow, 0,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eNo),
+            },
+            "")));
 
 TEST_P(LinuxProcSMapsTestFixture, ParseSMapRegions) {
   auto params = GetParam();

@@ -26,7 +26,7 @@ public:
   QuerySession(llvm::ArrayRef<std::unique_ptr<ASTUnit>> ASTs)
       : ASTs(ASTs), PrintOutput(false), DiagOutput(true),
         DetailedASTOutput(false), BindRoot(true), PrintMatcher(false),
-        Terminate(false), TK(ast_type_traits::TK_AsIs) {}
+        EnableProfile(false), Terminate(false), TK(TK_AsIs) {}
 
   llvm::ArrayRef<std::unique_ptr<ASTUnit>> ASTs;
 
@@ -36,9 +36,10 @@ public:
 
   bool BindRoot;
   bool PrintMatcher;
+  bool EnableProfile;
   bool Terminate;
 
-  ast_type_traits::TraversalKind TK;
+  TraversalKind TK;
   llvm::StringMap<ast_matchers::dynamic::VariantValue> NamedValues;
 };
 

@@ -20,30 +20,24 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_DEX_DEX_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_DEX_DEX_H
 
-#include "Iterator.h"
-#include "PostingList.h"
-#include "Token.h"
-#include "Trigram.h"
+#include "index/dex/Iterator.h"
 #include "index/Index.h"
-#include "index/MemIndex.h"
 #include "index/Relation.h"
-#include "index/SymbolCollector.h"
+#include "index/dex/PostingList.h"
+#include "index/dex/Token.h"
+#include "llvm/ADT/StringSet.h"
 
 namespace clang {
 namespace clangd {
 namespace dex {
 
 /// In-memory Dex trigram-based index implementation.
-// FIXME(kbobyrev): Introduce serialization and deserialization of the symbol
-// index so that it can be loaded from the disk. Since static index is not
-// changed frequently, it's safe to assume that it has to be built only once
-// (when the clangd process starts). Therefore, it can be easier to store built
-// index on disk and then load it if available.
 class Dex : public SymbolIndex {
 public:
   // All data must outlive this index.
   template <typename SymbolRange, typename RefsRange, typename RelationsRange>
-  Dex(SymbolRange &&Symbols, RefsRange &&Refs, RelationsRange &&Relations)
+  Dex(SymbolRange &&Symbols, RefsRange &&Refs, RelationsRange &&Relations,
+      bool SupportContainedRefs)
       : Corpus(0) {
     for (auto &&Sym : Symbols)
       this->Symbols.push_back(&Sym);
@@ -53,22 +47,36 @@ public:
       this->Relations[std::make_pair(Rel.Subject,
                                      static_cast<uint8_t>(Rel.Predicate))]
           .push_back(Rel.Object);
-    buildIndex();
+    buildIndex(SupportContainedRefs);
   }
   // Symbols and Refs are owned by BackingData, Index takes ownership.
   template <typename SymbolRange, typename RefsRange, typename RelationsRange,
             typename Payload>
   Dex(SymbolRange &&Symbols, RefsRange &&Refs, RelationsRange &&Relations,
-      Payload &&BackingData, size_t BackingDataSize)
+      Payload &&BackingData, size_t BackingDataSize, bool SupportContainedRefs)
       : Dex(std::forward<SymbolRange>(Symbols), std::forward<RefsRange>(Refs),
-            std::forward<RelationsRange>(Relations)) {
+            std::forward<RelationsRange>(Relations), SupportContainedRefs) {
     KeepAlive = std::shared_ptr<void>(
         std::make_shared<Payload>(std::move(BackingData)), nullptr);
     this->BackingDataSize = BackingDataSize;
   }
 
+  template <typename SymbolRange, typename RefsRange, typename RelationsRange,
+            typename FileRange, typename Payload>
+  Dex(SymbolRange &&Symbols, RefsRange &&Refs, RelationsRange &&Relations,
+      FileRange &&Files, IndexContents IdxContents, Payload &&BackingData,
+      size_t BackingDataSize, bool SupportContainedRefs)
+      : Dex(std::forward<SymbolRange>(Symbols), std::forward<RefsRange>(Refs),
+            std::forward<RelationsRange>(Relations),
+            std::forward<Payload>(BackingData), BackingDataSize,
+            SupportContainedRefs) {
+    this->Files = std::forward<FileRange>(Files);
+    this->IdxContents = IdxContents;
+  }
+
   /// Builds an index from slabs. The index takes ownership of the slab.
-  static std::unique_ptr<SymbolIndex> build(SymbolSlab, RefSlab, RelationSlab);
+  static std::unique_ptr<SymbolIndex> build(SymbolSlab, RefSlab, RelationSlab,
+                                            bool SupportContainedRefs);
 
   bool
   fuzzyFind(const FuzzyFindRequest &Req,
@@ -80,14 +88,36 @@ public:
   bool refs(const RefsRequest &Req,
             llvm::function_ref<void(const Ref &)> Callback) const override;
 
+  bool containedRefs(const ContainedRefsRequest &Req,
+                     llvm::function_ref<void(const ContainedRefsResult &)>
+                         Callback) const override;
+
   void relations(const RelationsRequest &Req,
                  llvm::function_ref<void(const SymbolID &, const Symbol &)>
                      Callback) const override;
 
+  llvm::unique_function<IndexContents(llvm::StringRef) const>
+  indexedFiles() const override;
+
   size_t estimateMemoryUsage() const override;
 
 private:
-  void buildIndex();
+  class RevRef {
+    const Ref *Reference;
+    SymbolID Target;
+
+  public:
+    RevRef(const Ref &Reference, SymbolID Target)
+        : Reference(&Reference), Target(Target) {}
+    const Ref &ref() const { return *Reference; }
+    ContainedRefsResult containedRefsResult() const {
+      return {ref().Location, ref().Kind, Target};
+    }
+  };
+
+  void buildIndex(bool EnableOutgoingCalls);
+  llvm::iterator_range<std::vector<RevRef>::const_iterator>
+  lookupRevRefs(const SymbolID &Container) const;
   std::unique_ptr<Iterator> iterator(const Token &Tok) const;
   std::unique_ptr<Iterator>
   createFileProximityIterator(llvm::ArrayRef<std::string> ProximityPaths) const;
@@ -108,10 +138,17 @@ private:
   llvm::DenseMap<Token, PostingList> InvertedIndex;
   dex::Corpus Corpus;
   llvm::DenseMap<SymbolID, llvm::ArrayRef<Ref>> Refs;
+  std::vector<RevRef> RevRefs; // sorted by container ID
   static_assert(sizeof(RelationKind) == sizeof(uint8_t),
                 "RelationKind should be of same size as a uint8_t");
   llvm::DenseMap<std::pair<SymbolID, uint8_t>, std::vector<SymbolID>> Relations;
   std::shared_ptr<void> KeepAlive; // poor man's move-only std::any
+  // Set of files which were used during this index build.
+  llvm::StringSet<> Files;
+  // Contents of the index (symbols, references, etc.)
+  // This is only populated if `Files` is, which applies to some but not all
+  // consumers of this class.
+  IndexContents IdxContents = IndexContents::None;
   // Size of memory retained by KeepAlive.
   size_t BackingDataSize = 0;
 };
@@ -120,7 +157,7 @@ private:
 /// Should be used within the index build process.
 ///
 /// This function is exposed for testing only.
-std::vector<std::string> generateProximityURIs(llvm::StringRef URIPath);
+llvm::SmallVector<llvm::StringRef, 5> generateProximityURIs(llvm::StringRef);
 
 } // namespace dex
 } // namespace clangd

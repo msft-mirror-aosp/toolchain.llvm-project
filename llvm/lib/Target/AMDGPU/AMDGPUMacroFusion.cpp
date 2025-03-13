@@ -12,10 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPUMacroFusion.h"
-#include "AMDGPUSubtarget.h"
-#include "SIInstrInfo.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
-
+#include "SIInstrInfo.h"
 #include "llvm/CodeGen/MacroFusion.h"
 
 using namespace llvm;
@@ -61,7 +59,7 @@ static bool shouldScheduleAdjacent(const TargetInstrInfo &TII_,
 
 namespace llvm {
 
-std::unique_ptr<ScheduleDAGMutation> createAMDGPUMacroFusionDAGMutation () {
+std::unique_ptr<ScheduleDAGMutation> createAMDGPUMacroFusionDAGMutation() {
   return createMacroFusionDAGMutation(shouldScheduleAdjacent);
 }
 

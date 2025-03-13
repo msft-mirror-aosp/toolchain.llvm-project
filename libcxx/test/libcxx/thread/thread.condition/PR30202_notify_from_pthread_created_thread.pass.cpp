@@ -6,18 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// UNSUPPORTED: libcpp-has-no-threads
+// UNSUPPORTED: no-threads
 // REQUIRES: libcpp-has-thread-api-pthread
 
 // notify_all_at_thread_exit(...) requires move semantics to transfer the
 // unique_lock.
 // UNSUPPORTED: c++03
-
-// PR30202 was fixed starting in macosx10.13.
-// UNSUPPORTED: with_system_cxx_lib=macosx10.12
-// UNSUPPORTED: with_system_cxx_lib=macosx10.11
-// UNSUPPORTED: with_system_cxx_lib=macosx10.10
-// UNSUPPORTED: with_system_cxx_lib=macosx10.9
 
 // <condition_variable>
 

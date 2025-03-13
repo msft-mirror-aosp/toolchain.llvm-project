@@ -1,5 +1,5 @@
 // -*- C++ -*-
-//===--------------------------- complex.h --------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -17,20 +17,20 @@
 
 */
 
-#include <__config>
+#if defined(__cplusplus) && __cplusplus < 201103L && defined(_LIBCPP_USE_FROZEN_CXX03_HEADERS)
+#  include <__cxx03/complex.h>
+#else
+#  include <__config>
 
-#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
-#pragma GCC system_header
-#endif
+#  if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#    pragma GCC system_header
+#  endif
 
-#ifdef __cplusplus
+#  ifdef __cplusplus
+#    include <complex>
+#  elif __has_include_next(<complex.h>)
+#    include_next <complex.h>
+#  endif
+#endif // defined(__cplusplus) && __cplusplus < 201103L && defined(_LIBCPP_USE_FROZEN_CXX03_HEADERS)
 
-#include <ccomplex>
-
-#else  // __cplusplus
-
-#include_next <complex.h>
-
-#endif  // __cplusplus
-
-#endif  // _LIBCPP_COMPLEX_H
+#endif // _LIBCPP_COMPLEX_H

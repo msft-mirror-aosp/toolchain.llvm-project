@@ -13,7 +13,10 @@
 #include "lldb/lldb-types.h"
 
 #include "llvm/Support/Error.h"
+#include <optional>
 
+namespace lldb_private::plugin {
+namespace dwarf {
 class DIERef;
 class DWARFASTParser;
 class DWARFAttributes;
@@ -21,10 +24,12 @@ class DWARFUnit;
 class DWARFDebugInfoEntry;
 class DWARFDeclContext;
 class SymbolFileDWARF;
+class DWARFFormValue;
 
 class DWARFBaseDIE {
 public:
-  DWARFBaseDIE() : m_cu(nullptr), m_die(nullptr) {}
+  using DWARFFormValue = dwarf::DWARFFormValue;
+  DWARFBaseDIE() = default;
 
   DWARFBaseDIE(DWARFUnit *cu, DWARFDebugInfoEntry *die)
       : m_cu(cu), m_die(die) {}
@@ -55,7 +60,7 @@ public:
 
   DWARFDebugInfoEntry *GetDIE() const { return m_die; }
 
-  llvm::Optional<DIERef> GetDIERef() const;
+  std::optional<DIERef> GetDIERef() const;
 
   void Set(DWARFUnit *cu, DWARFDebugInfoEntry *die) {
     if (cu && die) {
@@ -77,12 +82,10 @@ public:
   // correct section data.
   //
   // Clients must validate that this object is valid before calling this.
-  const lldb_private::DWARFDataExtractor &GetData() const;
+  const DWARFDataExtractor &GetData() const;
 
   // Accessing information about a DIE
   dw_tag_t Tag() const;
-
-  const char *GetTagAsCString() const;
 
   dw_offset_t GetOffset() const;
 
@@ -107,19 +110,29 @@ public:
   uint64_t GetAttributeValueAsUnsigned(const dw_attr_t attr,
                                        uint64_t fail_value) const;
 
+  std::optional<uint64_t>
+  GetAttributeValueAsOptionalUnsigned(const dw_attr_t attr) const;
+
   uint64_t GetAttributeValueAsAddress(const dw_attr_t attr,
                                       uint64_t fail_value) const;
 
   enum class Recurse : bool { no, yes };
-  size_t GetAttributes(DWARFAttributes &attributes,
-                       Recurse recurse = Recurse::yes) const;
+  DWARFAttributes GetAttributes(Recurse recurse = Recurse::yes) const;
+
+  // The following methods use LLVM naming convension in order to be are used by
+  // LLVM libraries.
+  dw_tag_t getTag() const { return Tag(); }
+
+  const char *getShortName() const { return GetName(); }
 
 protected:
-  DWARFUnit *m_cu;
-  DWARFDebugInfoEntry *m_die;
+  DWARFUnit *m_cu = nullptr;
+  DWARFDebugInfoEntry *m_die = nullptr;
 };
 
 bool operator==(const DWARFBaseDIE &lhs, const DWARFBaseDIE &rhs);
 bool operator!=(const DWARFBaseDIE &lhs, const DWARFBaseDIE &rhs);
+} // namespace dwarf
+} // namespace lldb_private::plugin
 
 #endif // LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFBASEDIE_H

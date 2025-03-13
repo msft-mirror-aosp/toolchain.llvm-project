@@ -235,14 +235,14 @@ There are some composite rules for common situations built out of the above faci
 
 * ``widenScalarToNextPow2()`` is like ``widenScalarIf()`` but is satisfied iff the type
   size in bits is not a power of 2 and selects a target type that is the next
-  largest power of 2. 
+  largest power of 2.
 
 .. _clampscalar:
 
 * ``minScalar()`` is like ``widenScalarIf()`` but is satisfied iff the type
   size in bits is smaller than the given minimum and selects the minimum as the
   target type. Similarly, there is also a ``maxScalar()`` for the maximum and a
-  ``clampScalar()`` to do both at once. 
+  ``clampScalar()`` to do both at once.
 
 * ``minScalarSameAs()`` is like ``minScalar()`` but the minimum is taken from another
   type index.
@@ -338,8 +338,8 @@ G_BUILD_VECTOR_TRUNC, G_CONCAT_VECTORS, G_UNMERGE_VALUES, G_PTRTOINT, and
 G_INTTOPTR have already been noted above. In addition to those, the following
 operations have requirements:
 
-* At least one G_IMPLICIT_DEF must be legal. This is usually trivial as it
-  requires no code to be selected.
+* For every type that can be produced by any instruction, G_IMPLICIT_DEF must be
+  legal.
 * G_PHI must be legal for all types in the producer and consumer typesets. This
   is usually trivial as it requires no code to be selected.
 * At least one G_FRAME_INDEX must be legal

@@ -68,27 +68,13 @@ namespace llvm {
     /// Check whether this has a trivial destructor.
     bool hasTrivialDestructor() const { return Loc.hasTrivialDestructor(); }
 
-    /// Create a new DebugLoc.
-    ///
-    /// Create a new DebugLoc at the specified line/col and scope/inline.  This
-    /// forwards to \a DILocation::get().
-    ///
-    /// If \c !Scope, returns a default-constructed \a DebugLoc.
-    ///
-    /// FIXME: Remove this.  Users should use DILocation::get().
-    static DebugLoc get(unsigned Line, unsigned Col, const MDNode *Scope,
-                        const MDNode *InlinedAt = nullptr,
-                        bool ImplicitCode = false);
-
     enum { ReplaceLastInlinedAt = true };
     /// Rebuild the entire inlined-at chain for this instruction so that the top of
     /// the chain now is inlined-at the new call site.
     /// \param   InlinedAt    The new outermost inlined-at in the chain.
-    /// \param   ReplaceLast  Replace the last location in the inlined-at chain.
     static DebugLoc appendInlinedAt(const DebugLoc &DL, DILocation *InlinedAt,
                                     LLVMContext &Ctx,
-                                    DenseMap<const MDNode *, MDNode *> &Cache,
-                                    bool ReplaceLast = false);
+                                    DenseMap<const MDNode *, MDNode *> &Cache);
 
     unsigned getLine() const;
     unsigned getCol() const;
@@ -99,6 +85,13 @@ namespace llvm {
     ///
     /// Gets the inlined-at scope for a DebugLoc.
     MDNode *getInlinedAtScope() const;
+
+    /// Rebuild the entire inline-at chain by replacing the subprogram at the
+    /// end of the chain with NewSP.
+    static DebugLoc
+    replaceInlinedAtSubprogram(const DebugLoc &DL, DISubprogram &NewSP,
+                               LLVMContext &Ctx,
+                               DenseMap<const MDNode *, MDNode *> &Cache);
 
     /// Find the debug info location for the start of the function.
     ///
@@ -127,4 +120,4 @@ namespace llvm {
 
 } // end namespace llvm
 
-#endif /* LLVM_SUPPORT_DEBUGLOC_H */
+#endif // LLVM_IR_DEBUGLOC_H

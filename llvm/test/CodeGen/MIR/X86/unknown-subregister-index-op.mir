@@ -1,4 +1,4 @@
-# RUN: not llc -march=x86-64 -run-pass none -o /dev/null %s 2>&1 | FileCheck %s
+# RUN: not llc -mtriple=x86_64 -run-pass none -o /dev/null %s 2>&1 | FileCheck %s
 # This test ensures that an error is reported when an unknown subregister index
 # is encountered.
 
@@ -21,5 +21,5 @@ body: |
   bb.0.entry:
     ; CHECK: [[@LINE+1]]:35: unknown subregister index 'bit8'
     %0 = INSERT_SUBREG $edi, $al, %subreg.bit8
-    RETQ %0
+    RET64 %0
 ...

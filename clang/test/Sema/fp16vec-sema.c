@@ -1,9 +1,11 @@
 // RUN: %clang_cc1 -fsyntax-only -Wno-unused-value -verify %s
+// RUN: %clang_cc1 -fexperimental-new-constant-interpreter -fsyntax-only -Wno-unused-value -verify %s
 
 typedef __fp16 half4 __attribute__ ((vector_size (8)));
 typedef float float4 __attribute__ ((vector_size (16)));
 typedef short short4 __attribute__ ((vector_size (8)));
 typedef int int4 __attribute__ ((vector_size (16)));
+typedef __fp16 exthalf4 __attribute__((ext_vector_type(4)));
 
 half4 hv0, hv1;
 float4 fv0, fv1;
@@ -50,4 +52,9 @@ void testFP16Vec(int c) {
   sv0 = !hv0; // expected-error{{invalid argument type}}
   hv0++; // expected-error{{cannot increment value of type}}
   ++hv0; // expected-error{{cannot increment value of type}}
+}
+
+void testExtVec(exthalf4 a) {
+  // Check that the type of "(-a)" is exthalf4.
+  __fp16 t0 = (-a).z;
 }

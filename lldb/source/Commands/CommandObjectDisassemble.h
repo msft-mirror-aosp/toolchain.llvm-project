@@ -42,26 +42,41 @@ public:
       return flavor_string.c_str();
     }
 
+    const char *GetCPUString() {
+      if (cpu_string.empty() || cpu_string == "default")
+        return nullptr;
+      return cpu_string.c_str();
+    }
+
+    const char *GetFeaturesString() {
+      if (features_string.empty() || features_string == "default")
+        return nullptr;
+      return features_string.c_str();
+    }
+
     Status OptionParsingFinished(ExecutionContext *execution_context) override;
 
     bool show_mixed; // Show mixed source/assembly
     bool show_bytes;
-    uint32_t num_lines_context;
-    uint32_t num_instructions;
+    bool show_control_flow_kind;
+    uint32_t num_lines_context = 0;
+    uint32_t num_instructions = 0;
     bool raw;
     std::string func_name;
-    bool current_function;
-    lldb::addr_t start_addr;
-    lldb::addr_t end_addr;
-    bool at_pc;
-    bool frame_line;
+    bool current_function = false;
+    lldb::addr_t start_addr = 0;
+    lldb::addr_t end_addr = 0;
+    bool at_pc = false;
+    bool frame_line = false;
     std::string plugin_name;
     std::string flavor_string;
+    std::string cpu_string;
+    std::string features_string;
     ArchSpec arch;
-    bool some_location_specified; // If no location was specified, we'll select
-                                  // "at_pc".  This should be set
+    bool some_location_specified = false; // If no location was specified, we'll
+                                          // select "at_pc".  This should be set
     // in SetOptionValue if anything the selects a location is set.
-    lldb::addr_t symbol_containing_addr;
+    lldb::addr_t symbol_containing_addr = 0;
     bool force = false;
   };
 
@@ -72,7 +87,7 @@ public:
   Options *GetOptions() override { return &m_options; }
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override;
+  void DoExecute(Args &command, CommandReturnObject &result) override;
 
   llvm::Expected<std::vector<AddressRange>>
   GetRangesForSelectedMode(CommandReturnObject &result);

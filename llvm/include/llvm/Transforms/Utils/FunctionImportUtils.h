@@ -54,7 +54,7 @@ class FunctionImportGlobalProcessing {
 
   /// Set of llvm.*used values, in order to validate that we don't try
   /// to promote any non-renamable values.
-  SmallPtrSet<GlobalValue *, 8> Used;
+  SmallPtrSet<GlobalValue *, 4> Used;
 
   /// Keep track of any COMDATs that require renaming (because COMDAT
   /// leader was promoted and renamed). Maps from original COMDAT to one
@@ -111,25 +111,24 @@ public:
       HasExportedFunctions = ImportIndex.hasExportedFunctions(M);
 
 #ifndef NDEBUG
+    SmallVector<GlobalValue *, 4> Vec;
     // First collect those in the llvm.used set.
-    collectUsedGlobalVariables(M, Used, /*CompilerUsed*/ false);
+    collectUsedGlobalVariables(M, Vec, /*CompilerUsed=*/false);
     // Next collect those in the llvm.compiler.used set.
-    collectUsedGlobalVariables(M, Used, /*CompilerUsed*/ true);
+    collectUsedGlobalVariables(M, Vec, /*CompilerUsed=*/true);
+    Used = {Vec.begin(), Vec.end()};
 #endif
   }
 
-  bool run();
+  void run();
 };
 
 /// Perform in-place global value handling on the given Module for
 /// exported local functions renamed and promoted for ThinLTO.
-bool renameModuleForThinLTO(
+void renameModuleForThinLTO(
     Module &M, const ModuleSummaryIndex &Index,
     bool ClearDSOLocalOnDeclarations,
     SetVector<GlobalValue *> *GlobalsToImport = nullptr);
-
-/// Compute synthetic function entry counts.
-void computeSyntheticCounts(ModuleSummaryIndex &Index);
 
 } // End llvm namespace
 

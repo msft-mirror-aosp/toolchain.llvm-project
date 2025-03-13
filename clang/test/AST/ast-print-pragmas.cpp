@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -ast-print %s -o - | FileCheck %s
-// RUN: %clang_cc1 -DMS_EXT -fsyntax-only -fms-extensions %s -triple x86_64-pc-win32 -ast-print | FileCheck %s --check-prefix=MS-EXT
+// RUN: %clang_cc1 -DMS_EXT -fms-extensions %s -triple x86_64-pc-win32 -ast-print | FileCheck %s --check-prefix=MS-EXT
 
 // CHECK: #pragma clang loop vectorize_width(4)
 // CHECK-NEXT: #pragma clang loop interleave_count(8){{$}}
@@ -8,6 +8,36 @@ void test(int *List, int Length) {
   int i = 0;
 #pragma clang loop vectorize_width(4)
 #pragma clang loop interleave_count(8)
+// CHECK-NEXT: while (i < Length)
+  while (i < Length) {
+    List[i] = i * 2;
+    i++;
+  }
+  i = 0;
+
+// CHECK: #pragma clang loop vectorize_width(4, scalable)
+
+#pragma clang loop vectorize_width(4, scalable)
+// CHECK-NEXT: while (i < Length)
+  while (i < Length) {
+    List[i] = i * 2;
+    i++;
+  }
+  i = 0;
+
+// CHECK: #pragma clang loop vectorize_width(fixed)
+
+#pragma clang loop vectorize_width(fixed)
+// CHECK-NEXT: while (i < Length)
+  while (i < Length) {
+    List[i] = i * 2;
+    i++;
+  }
+  i = 0;
+
+// CHECK: #pragma clang loop vectorize_width(scalable)
+
+#pragma clang loop vectorize_width(scalable)
 // CHECK-NEXT: while (i < Length)
   while (i < Length) {
     List[i] = i * 2;
@@ -63,7 +93,7 @@ void test_templates(int *List, int Length) {
 #ifdef MS_EXT
 #pragma init_seg(compiler)
 // MS-EXT: #pragma init_seg (.CRT$XCC){{$}}
-// MS-EXT-NEXT: int x = 3 __declspec(thread);
-int __declspec(thread) x = 3;
+// MS-EXT-NEXT: __declspec(thread) int x = 3;
+__declspec(thread) int x = 3;
 #endif //MS_EXT
 

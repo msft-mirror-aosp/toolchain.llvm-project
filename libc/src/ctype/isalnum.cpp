@@ -7,14 +7,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/ctype/isalnum.h"
-#include "src/ctype/ctype_utils.h"
+#include "src/__support/ctype_utils.h"
 
 #include "src/__support/common.h"
+#include "src/__support/macros/config.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
-// TODO: Currently restricted to default locale.
-// These should be extended using locale information.
-int LLVM_LIBC_ENTRYPOINT(isalnum)(int c) { return internal::isalnum(c); }
+LLVM_LIBC_FUNCTION(int, isalnum, (int c)) {
+  return static_cast<int>(internal::isalnum(static_cast<unsigned>(c)));
+}
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

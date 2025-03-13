@@ -16,8 +16,15 @@ void test_half(__fp16 *H, __fp16 *H2) {
   // CHECK: call i1 @llvm.experimental.constrained.fcmp.f32(float %{{.*}}, float %{{.*}}, metadata !"ogt", metadata !"fpexcept.strict")
   // CHECK-NEXT: zext i1
   (void)__builtin_isinf(*H);
-  // NOFP16: call i1 @llvm.experimental.constrained.fcmp.f32(float %{{.*}}, float 0x7FF0000000000000, metadata !"oeq", metadata !"fpexcept.strict")
-  // FP16: call i1 @llvm.experimental.constrained.fcmp.f16(half %{{.*}}, half 0xH7C00, metadata !"oeq", metadata !"fpexcept.strict")
+  // NOFP16:       [[LDADDR:%.*]] = load ptr, ptr %{{.*}}, align 8
+  // NOFP16-NEXT:  [[IHALF:%.*]]  = load i16, ptr [[LDADDR]], align 2
+  // NOFP16-NEXT:  [[CONV:%.*]]   = call float @llvm.convert.from.fp16.f32(i16 [[IHALF]])
+  // NOFP16-NEXT:  [[RES1:%.*]]   = call i1 @llvm.is.fpclass.f32(float [[CONV]], i32 516)
+  // NOFP16-NEXT:                   zext i1 [[RES1]] to i32
+  // FP16:         [[LDADDR:%.*]] = load ptr, ptr %{{.*}}, align 8
+  // FP16-NEXT:    [[HALF:%.*]]   = load half, ptr [[LDADDR]], align 2
+  // FP16-NEXT:    [[RES1:%.*]]   = call i1 @llvm.is.fpclass.f16(half [[HALF]], i32 516)
+  // FP16-NEXT:                     zext i1 [[RES1]] to i32
 }
 
 // CHECK-LABEL: @test_mixed

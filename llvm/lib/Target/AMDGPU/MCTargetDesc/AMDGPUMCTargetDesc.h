@@ -15,11 +15,11 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_MCTARGETDESC_AMDGPUMCTARGETDESC_H
 #define LLVM_LIB_TARGET_AMDGPU_MCTARGETDESC_AMDGPUMCTARGETDESC_H
 
-#include "llvm/Support/DataTypes.h"
-
+#include <cstdint>
 #include <memory>
 
 namespace llvm {
+class Target;
 class MCAsmBackend;
 class MCCodeEmitter;
 class MCContext;
@@ -28,23 +28,13 @@ class MCObjectTargetWriter;
 class MCRegisterInfo;
 class MCSubtargetInfo;
 class MCTargetOptions;
-class StringRef;
-class Target;
-class Triple;
-class raw_pwrite_stream;
 
-enum AMDGPUDwarfFlavour { Wave64 = 0, Wave32 = 1 };
+enum AMDGPUDwarfFlavour : unsigned { Wave64 = 0, Wave32 = 1 };
 
 MCRegisterInfo *createGCNMCRegisterInfo(AMDGPUDwarfFlavour DwarfFlavour);
 
-MCCodeEmitter *createR600MCCodeEmitter(const MCInstrInfo &MCII,
-                                       const MCRegisterInfo &MRI,
-                                       MCContext &Ctx);
-MCInstrInfo *createR600MCInstrInfo();
-
-MCCodeEmitter *createSIMCCodeEmitter(const MCInstrInfo &MCII,
-                                     const MCRegisterInfo &MRI,
-                                     MCContext &Ctx);
+MCCodeEmitter *createAMDGPUMCCodeEmitter(const MCInstrInfo &MCII,
+                                         MCContext &Ctx);
 
 MCAsmBackend *createAMDGPUAsmBackend(const Target &T,
                                      const MCSubtargetInfo &STI,
@@ -53,39 +43,18 @@ MCAsmBackend *createAMDGPUAsmBackend(const Target &T,
 
 std::unique_ptr<MCObjectTargetWriter>
 createAMDGPUELFObjectWriter(bool Is64Bit, uint8_t OSABI,
-                            bool HasRelocationAddend, uint8_t ABIVersion);
-} // End llvm namespace
+                            bool HasRelocationAddend);
+} // namespace llvm
 
 #define GET_REGINFO_ENUM
 #include "AMDGPUGenRegisterInfo.inc"
-#undef GET_REGINFO_ENUM
-
-#define GET_REGINFO_ENUM
-#include "R600GenRegisterInfo.inc"
-#undef GET_REGINFO_ENUM
 
 #define GET_INSTRINFO_ENUM
 #define GET_INSTRINFO_OPERAND_ENUM
-#define GET_INSTRINFO_SCHED_ENUM
+#define GET_INSTRINFO_MC_HELPER_DECLS
 #include "AMDGPUGenInstrInfo.inc"
-#undef GET_INSTRINFO_SCHED_ENUM
-#undef GET_INSTRINFO_OPERAND_ENUM
-#undef GET_INSTRINFO_ENUM
-
-#define GET_INSTRINFO_ENUM
-#define GET_INSTRINFO_OPERAND_ENUM
-#define GET_INSTRINFO_SCHED_ENUM
-#include "R600GenInstrInfo.inc"
-#undef GET_INSTRINFO_SCHED_ENUM
-#undef GET_INSTRINFO_OPERAND_ENUM
-#undef GET_INSTRINFO_ENUM
 
 #define GET_SUBTARGETINFO_ENUM
 #include "AMDGPUGenSubtargetInfo.inc"
-#undef GET_SUBTARGETINFO_ENUM
-
-#define GET_SUBTARGETINFO_ENUM
-#include "R600GenSubtargetInfo.inc"
-#undef GET_SUBTARGETINFO_ENUM
 
 #endif

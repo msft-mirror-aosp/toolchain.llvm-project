@@ -8,13 +8,18 @@ set(LLVM_LINK_COMPONENTS
   ARMDesc
   ARMInfo
   CodeGen
+  CodeGenTypes
+  Core
   GlobalISel
   MC
+  MIRParser
   SelectionDAG
   Support
   Target
-)
+  TargetParser
+  )
 
 add_llvm_target_unittest(ARMTests
   MachineInstrTest.cpp
+  InstSizes.cpp
   )

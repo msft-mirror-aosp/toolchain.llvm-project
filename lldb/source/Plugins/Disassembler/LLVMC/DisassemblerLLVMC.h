@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 #include "lldb/Core/Address.h"
@@ -21,8 +22,8 @@ class InstructionLLVMC;
 
 class DisassemblerLLVMC : public lldb_private::Disassembler {
 public:
-  DisassemblerLLVMC(const lldb_private::ArchSpec &arch,
-                    const char *flavor /* = NULL */);
+  DisassemblerLLVMC(const lldb_private::ArchSpec &arch, const char *flavor,
+                    const char *cpu, const char *features);
 
   ~DisassemblerLLVMC() override;
 
@@ -31,10 +32,12 @@ public:
 
   static void Terminate();
 
-  static lldb_private::ConstString GetPluginNameStatic();
+  static llvm::StringRef GetPluginNameStatic() { return "llvm-mc"; }
 
-  static lldb_private::Disassembler *
-  CreateInstance(const lldb_private::ArchSpec &arch, const char *flavor);
+  static lldb::DisassemblerSP CreateInstance(const lldb_private::ArchSpec &arch,
+                                             const char *flavor,
+                                             const char *cpu,
+                                             const char *features);
 
   size_t DecodeInstructions(const lldb_private::Address &base_addr,
                             const lldb_private::DataExtractor &data,
@@ -42,9 +45,7 @@ public:
                             bool append, bool data_from_file) override;
 
   // PluginInterface protocol
-  lldb_private::ConstString GetPluginName() override;
-
-  uint32_t GetPluginVersion() override;
+  llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
 protected:
   friend class InstructionLLVMC;
@@ -73,6 +74,12 @@ protected:
   InstructionLLVMC *m_inst;
   std::mutex m_mutex;
   bool m_data_from_file;
+  // Save the AArch64 ADRP instruction word and address it was at,
+  // in case the next instruction is an ADD to the same register;
+  // this is a pc-relative address calculation and we need both
+  // parts to calculate the symbolication.
+  lldb::addr_t m_adrp_address;
+  std::optional<uint32_t> m_adrp_insn;
 
   // Since we need to make two actual MC Disassemblers for ARM (ARM & THUMB),
   // and there's a bit of goo to set up and own in the MC disassembler world,

@@ -122,6 +122,21 @@ Marshaller::fromProtobuf(const RefsRequest *Message) {
     Req.Filter = clangd::RefKind::All;
   if (Message->limit())
     Req.Limit = Message->limit();
+  Req.WantContainer = Message->want_container();
+  return Req;
+}
+
+llvm::Expected<clangd::ContainedRefsRequest>
+Marshaller::fromProtobuf(const ContainedRefsRequest *Message) {
+  clangd::ContainedRefsRequest Req;
+  if (!Message->has_id())
+    return error("ContainedRefsRequest requires an id.");
+  auto ID = SymbolID::fromStr(Message->id());
+  if (!ID)
+    return ID.takeError();
+  Req.ID = *ID;
+  if (Message->has_limit())
+    Req.Limit = Message->limit();
   return Req;
 }
 
@@ -191,6 +206,27 @@ llvm::Expected<clangd::Ref> Marshaller::fromProtobuf(const Ref &Message) {
   return Result;
 }
 
+llvm::Expected<clangd::ContainedRefsResult>
+Marshaller::fromProtobuf(const ContainedRef &Message) {
+  clangd::ContainedRefsResult Result;
+  if (!Message.has_location())
+    return error("ContainedRef must have a location.");
+  if (!Message.has_kind())
+    return error("ContainedRef must have a kind.");
+  if (!Message.has_symbol())
+    return error("ContainedRef must have a symbol.");
+  auto Location = fromProtobuf(Message.location());
+  if (!Location)
+    return Location.takeError();
+  Result.Location = *Location;
+  Result.Kind = static_cast<RefKind>(Message.kind());
+  auto Symbol = SymbolID::fromStr(Message.symbol());
+  if (!Symbol)
+    return Symbol.takeError();
+  Result.Symbol = *Symbol;
+  return Result;
+}
+
 llvm::Expected<std::pair<clangd::SymbolID, clangd::Symbol>>
 Marshaller::fromProtobuf(const Relation &Message) {
   auto SubjectID = SymbolID::fromStr(Message.subject_id());
@@ -239,6 +275,16 @@ RefsRequest Marshaller::toProtobuf(const clangd::RefsRequest &From) {
   RPCRequest.set_filter(static_cast<uint32_t>(From.Filter));
   if (From.Limit)
     RPCRequest.set_limit(*From.Limit);
+  RPCRequest.set_want_container(From.WantContainer);
+  return RPCRequest;
+}
+
+ContainedRefsRequest
+Marshaller::toProtobuf(const clangd::ContainedRefsRequest &From) {
+  ContainedRefsRequest RPCRequest;
+  RPCRequest.set_id(From.ID.str());
+  if (From.Limit)
+    RPCRequest.set_limit(*From.Limit);
   return RPCRequest;
 }
 
@@ -269,7 +315,6 @@ llvm::Expected<Symbol> Marshaller::toProtobuf(const clangd::Symbol &From) {
     return Declaration.takeError();
   *Result.mutable_canonical_declaration() = *Declaration;
   Result.set_references(From.References);
-  Result.set_origin(static_cast<uint32_t>(From.Origin));
   Result.set_signature(From.Signature.str());
   Result.set_template_specialization_args(
       From.TemplateSpecializationArgs.str());
@@ -295,6 +340,18 @@ llvm::Expected<Ref> Marshaller::toProtobuf(const clangd::Ref &From) {
   if (!Location)
     return Location.takeError();
   *Result.mutable_location() = *Location;
+  return Result;
+}
+
+llvm::Expected<ContainedRef>
+Marshaller::toProtobuf(const clangd::ContainedRefsResult &From) {
+  ContainedRef Result;
+  auto Location = toProtobuf(From.Location);
+  if (!Location)
+    return Location.takeError();
+  *Result.mutable_location() = *Location;
+  Result.set_kind(static_cast<uint32_t>(From.Kind));
+  *Result.mutable_symbol() = From.Symbol.str();
   return Result;
 }
 
@@ -405,6 +462,7 @@ llvm::Expected<HeaderWithReferences> Marshaller::toProtobuf(
     const clangd::Symbol::IncludeHeaderWithReferences &IncludeHeader) {
   HeaderWithReferences Result;
   Result.set_references(IncludeHeader.References);
+  Result.set_supported_directives(IncludeHeader.SupportedDirectives);
   const std::string Header = IncludeHeader.IncludeHeader.str();
   if (isLiteralInclude(Header)) {
     Result.set_header(Header);
@@ -426,8 +484,12 @@ Marshaller::fromProtobuf(const HeaderWithReferences &Message) {
       return URIString.takeError();
     Header = *URIString;
   }
-  return clangd::Symbol::IncludeHeaderWithReferences{Strings.save(Header),
-                                                     Message.references()};
+  auto Directives = clangd::Symbol::IncludeDirective::Include;
+  if (Message.has_supported_directives())
+    Directives = static_cast<clangd::Symbol::IncludeDirective>(
+        Message.supported_directives());
+  return clangd::Symbol::IncludeHeaderWithReferences{
+      Strings.save(Header), Message.references(), Directives};
 }
 
 } // namespace remote

@@ -50,6 +50,10 @@ typedef struct ompt_callbacks_active_s {
        : 0x0) |                                                                \
       ((!(info->td_flags.tiedness)) ? ompt_task_untied : 0x0) |                \
       (info->td_flags.final ? ompt_task_final : 0x0) |                         \
+      (info->td_flags.target                                                   \
+           ? ompt_task_target                                                  \
+           : (info->td_flags.tasktype ? ompt_task_explicit                     \
+                                      : ompt_task_implicit)) |                 \
       (info->td_flags.merged_if0 ? ompt_task_mergeable : 0x0)
 
 typedef struct {
@@ -57,6 +61,7 @@ typedef struct {
   ompt_data_t task_data;
   struct kmp_taskdata *scheduling_parent;
   int thread_num;
+  ompt_dispatch_chunk_t dispatch_chunk;
 } ompt_task_info_t;
 
 typedef struct {
@@ -75,6 +80,7 @@ typedef struct {
   ompt_data_t thread_data;
   ompt_data_t task_data; /* stored here from implicit barrier-begin until
                             implicit-task-end */
+  ompt_data_t target_task_data; /* required by target support */
   void *return_address; /* stored here on entry of runtime */
   ompt_state_t state;
   ompt_wait_id_t wait_id;
@@ -119,7 +125,7 @@ extern ompt_callbacks_active_t ompt_enabled;
 #endif
 
 #ifdef __cplusplus
-};
+}
 #endif
 
 #endif

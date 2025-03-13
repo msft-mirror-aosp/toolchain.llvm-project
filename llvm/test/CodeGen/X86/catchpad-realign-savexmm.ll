@@ -8,11 +8,11 @@ declare i32 @__CxxFrameHandler3(...)
 
 @fp_global = global double 0.0
 
-define void @f() personality i32 (...)* @__CxxFrameHandler3 {
-  %v = load double, double* @fp_global
+define void @f() personality ptr @__CxxFrameHandler3 {
+  %v = load double, ptr @fp_global
   call void @g()
   %v1 = fadd double %v, 1.0
-  store double %v1, double* @fp_global
+  store double %v1, ptr @fp_global
   invoke void @g()
       to label %return unwind label %catch.dispatch
 
@@ -23,7 +23,7 @@ catch.dispatch:
   %cs1 = catchswitch within none [label %catch] unwind to caller
 
 catch:
-  %p = catchpad within %cs1 [i8* null, i32 64, i8* null]
+  %p = catchpad within %cs1 [ptr null, i32 64, ptr null]
   catchret from %p to label %return
 }
 
@@ -47,8 +47,10 @@ catch:
 ; CHECK: .Ltmp{{.*}}
 ; CHECK: .LBB{{.*}} # Block address taken
 ; CHECK: movaps  -16(%rbp), %xmm6
+; CHECK: .seh_startepilogue
 ; CHECK: addq    $64, %rsp
 ; CHECK: popq    %rbp
+; CHECK: .seh_endepilogue
 ; CHECK: retq
 ; CHECK: .seh_handlerdata
 ; CHECK: # %catch
@@ -63,6 +65,8 @@ catch:
 ; CHECK: .seh_endprologue
 ; CHECK: movapd  32(%rsp), %xmm6
 ; CHECK: leaq    .LBB0_1(%rip), %rax
+; CHECK: .seh_startepilogue
 ; CHECK: addq    $48, %rsp
 ; CHECK: popq    %rbp
+; CHECK: .seh_endepilogue
 ; CHECK: retq # CATCHRET

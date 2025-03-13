@@ -12,8 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_MCA_RESOURCE_MANAGER_H
-#define LLVM_MCA_RESOURCE_MANAGER_H
+#ifndef LLVM_MCA_HARDWAREUNITS_RESOURCEMANAGER_H
+#define LLVM_MCA_HARDWAREUNITS_RESOURCEMANAGER_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -49,7 +49,7 @@ class ResourceStrategy {
   ResourceStrategy &operator=(const ResourceStrategy &) = delete;
 
 public:
-  ResourceStrategy() {}
+  ResourceStrategy() = default;
   virtual ~ResourceStrategy();
 
   /// Selects a processor resource unit from a ReadyMask.
@@ -118,8 +118,8 @@ class DefaultResourceStrategy final : public ResourceStrategy {
 
 public:
   DefaultResourceStrategy(uint64_t UnitMask)
-      : ResourceStrategy(), ResourceUnitMask(UnitMask),
-        NextInSequenceMask(UnitMask), RemovedFromNextInSequence(0) {}
+      : ResourceUnitMask(UnitMask), NextInSequenceMask(UnitMask),
+        RemovedFromNextInSequence(0) {}
   virtual ~DefaultResourceStrategy() = default;
 
   uint64_t select(uint64_t ReadyMask) override;
@@ -232,6 +232,8 @@ public:
   /// `NumUnits` available units.
   bool isReady(unsigned NumUnits = 1) const;
 
+  uint64_t getNumReadyUnits() const { return llvm::popcount(ReadyMask); }
+
   bool isAResourceGroup() const { return IsAGroup; }
 
   bool containsResource(uint64_t ID) const { return ResourceMask & ID; }
@@ -247,7 +249,7 @@ public:
   }
 
   unsigned getNumUnits() const {
-    return isAResourceGroup() ? 1U : countPopulation(ResourceSizeMask);
+    return isAResourceGroup() ? 1U : llvm::popcount(ResourceSizeMask);
   }
 
   /// Checks if there is an available slot in the resource buffer.
@@ -428,9 +430,32 @@ public:
   uint64_t getProcResUnitMask() const { return ProcResUnitMask; }
   uint64_t getAvailableProcResUnits() const { return AvailableProcResUnits; }
 
-  void issueInstruction(
-      const InstrDesc &Desc,
-      SmallVectorImpl<std::pair<ResourceRef, ResourceCycles>> &Pipes);
+  using ResourceWithCycles = std::pair<ResourceRef, ReleaseAtCycles>;
+
+  void issueInstruction(const InstrDesc &Desc,
+                        SmallVectorImpl<ResourceWithCycles> &Pipes) {
+    if (Desc.HasPartiallyOverlappingGroups)
+      return issueInstructionImpl(Desc, Pipes);
+
+    return fastIssueInstruction(Desc, Pipes);
+  }
+
+  // Selects pipeline resources consumed by an instruction.
+  // This method works under the assumption that used group resources don't
+  // partially overlap. The logic is guaranteed to find a valid resource unit
+  // schedule, no matter in which order individual uses are processed. For that
+  // reason, the vector of resource uses is simply (and quickly) processed in
+  // sequence. The resulting schedule is eventually stored into vector `Pipes`.
+  void fastIssueInstruction(const InstrDesc &Desc,
+                            SmallVectorImpl<ResourceWithCycles> &Pipes);
+
+  // Selects pipeline resources consumed by an instruction.
+  // This method works under the assumption that used resource groups may
+  // partially overlap. This complicates the selection process, because the
+  // order in which uses are processed matters. The logic internally prioritizes
+  // groups which are more constrained than others.
+  void issueInstructionImpl(const InstrDesc &Desc,
+                            SmallVectorImpl<ResourceWithCycles> &Pipes);
 
   void cycleEvent(SmallVectorImpl<ResourceRef> &ResourcesFreed);
 
@@ -444,4 +469,4 @@ public:
 } // namespace mca
 } // namespace llvm
 
-#endif // LLVM_MCA_RESOURCE_MANAGER_H
+#endif // LLVM_MCA_HARDWAREUNITS_RESOURCEMANAGER_H

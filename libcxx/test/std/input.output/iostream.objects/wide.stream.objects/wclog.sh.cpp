@@ -8,11 +8,14 @@
 
 // <iostream>
 
-// istream wclog;
+// wostream wclog;
 
-// FILE_DEPENDENCIES: ../check-stderr.sh
+// XFAIL: no-wide-characters
+
 // RUN: %{build}
-// RUN: %{exec} bash check-stderr.sh "%t.exe" "1234"
+// RUN: %{exec} %t.exe 2> %t.actual
+// RUN: echo -n 1234 > %t.expected
+// RUN: diff %t.expected %t.actual
 
 #include <iostream>
 

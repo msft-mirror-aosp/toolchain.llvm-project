@@ -11,7 +11,7 @@ struct T {
   int n;
 };
 
-// CHECK-LABEL: define void @_Z1fv(
+// CHECK-LABEL: define{{.*}} void @_Z1fv(
 void f() {
   // CHECK: call void @_ZN1SC1Ev(
   // CHECK: invoke void @__cxa_throw
@@ -28,7 +28,7 @@ void f() {
   // CHECK: }
 }
 
-// CHECK-LABEL: define void @_Z1gv(
+// CHECK-LABEL: define{{.*}} void @_Z1gv(
 void g() {
   // CHECK: call void @_ZN1SC1Ev(
   // CHECK: invoke void @__cxa_throw
@@ -48,7 +48,7 @@ void g() {
 void x() noexcept;
 void y() noexcept;
 
-// CHECK-LABEL: define void @_Z1hbb(
+// CHECK-LABEL: define{{.*}} void @_Z1hbb(
 void h(bool b1, bool b2) {
   // CHECK: {{.*}} = alloca i1,
   // CHECK: %[[S_ISACTIVE:.*]] = alloca i1,
@@ -56,7 +56,7 @@ void h(bool b1, bool b2) {
 
   // lambda init: s and t, branch on b1
   // CHECK: call void @_ZN1SC1Ev(
-  // CHECK: store i1 true, i1* %[[S_ISACTIVE]], align 1
+  // CHECK: store i1 true, ptr %[[S_ISACTIVE]], align 1
   // CHECK: call void @_ZN1TC1Ev(
   // CHECK: br i1
 
@@ -65,7 +65,7 @@ void h(bool b1, bool b2) {
 
   // completion of lambda init, branch on b2
   // CHECK: store i32 42,
-  // CHECK: store i1 false, i1* %[[S_ISACTIVE]], align 1
+  // CHECK: store i1 false, ptr %[[S_ISACTIVE]], align 1
   // CHECK: br i1
 
   // throw 2
@@ -73,24 +73,24 @@ void h(bool b1, bool b2) {
 
   // end of full-expression
   // CHECK: call void @_Z1xv(
-  // CHECK: call void @"_ZZ1hbbEN3$_2D1Ev"(
+  // CHECK: call void @"_ZZ1hbbEN3$_0D1Ev"(
   // CHECK: call void @_ZN1TD1Ev(
   // CHECK: call void @_Z1yv(
   // CHECK: ret void
 
   // cleanups for throw 1
   // CHECK: landingpad
-  // CHECK-NOT: @"_ZZ1hbbEN3$_2D1Ev"(
+  // CHECK-NOT: @"_ZZ1hbbEN3$_0D1Ev"(
   // CHECK: br
 
   // cleanups for throw 2
   // CHECK: landingpad
-  // CHECK: call void @"_ZZ1hbbEN3$_2D1Ev"(
+  // CHECK: call void @"_ZZ1hbbEN3$_0D1Ev"(
   // CHECK: br
 
   // common cleanup code
   // CHECK: call void @_ZN1TD1Ev(
-  // CHECK: load i1, i1* %[[S_ISACTIVE]],
+  // CHECK: load i1, ptr %[[S_ISACTIVE]],
   // CHECK: br i1
 
   // CHECK: call void @_ZN1SD1Ev(

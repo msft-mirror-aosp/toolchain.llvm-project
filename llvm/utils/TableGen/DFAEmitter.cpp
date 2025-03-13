@@ -19,12 +19,9 @@
 // to the NFA.
 //
 //===----------------------------------------------------------------------===//
-#define DEBUG_TYPE "dfa-emitter"
 
 #include "DFAEmitter.h"
-#include "CodeGenTarget.h"
-#include "SequenceToOffsetTable.h"
-#include "TableGenBackends.h"
+#include "Basic/SequenceToOffsetTable.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/UniqueVector.h"
@@ -34,10 +31,14 @@
 #include "llvm/TableGen/TableGenBackend.h"
 #include <cassert>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <set>
 #include <string>
+#include <variant>
 #include <vector>
+
+#define DEBUG_TYPE "dfa-emitter"
 
 using namespace llvm;
 
@@ -75,12 +76,11 @@ void DfaEmitter::visitDfaState(const DfaState &DS) {
       continue;
     // Sort and unique.
     sort(NewStates);
-    NewStates.erase(std::unique(NewStates.begin(), NewStates.end()),
-                    NewStates.end());
+    NewStates.erase(llvm::unique(NewStates), NewStates.end());
     sort(TI);
-    TI.erase(std::unique(TI.begin(), TI.end()), TI.end());
+    TI.erase(llvm::unique(TI), TI.end());
     unsigned ToId = DfaStates.insert(NewStates);
-    DfaTransitions.emplace(std::make_pair(FromId, A), std::make_pair(ToId, TI));
+    DfaTransitions.emplace(std::pair(FromId, A), std::pair(ToId, TI));
   }
 }
 
@@ -124,12 +124,9 @@ void DfaEmitter::emit(StringRef Name, raw_ostream &OS) {
   Table.layout();
   OS << "const std::array<NfaStatePair, " << Table.size() << "> " << Name
      << "TransitionInfo = {{\n";
-  Table.emit(
-      OS,
-      [](raw_ostream &OS, std::pair<uint64_t, uint64_t> P) {
-        OS << "{" << P.first << ", " << P.second << "}";
-      },
-      "{0ULL, 0ULL}");
+  Table.emit(OS, [](raw_ostream &OS, std::pair<uint64_t, uint64_t> P) {
+    OS << "{" << P.first << ", " << P.second << "}";
+  });
 
   OS << "}};\n\n";
 
@@ -146,8 +143,8 @@ void DfaEmitter::emit(StringRef Name, raw_ostream &OS) {
 
   OS << "// A table of DFA transitions, ordered by {FromDfaState, Action}.\n";
   OS << "// The initial state is 1, not zero.\n";
-  OS << "const std::array<" << Name << "Transition, "
-     << DfaTransitions.size() << "> " << Name << "Transitions = {{\n";
+  OS << "const std::array<" << Name << "Transition, " << DfaTransitions.size()
+     << "> " << Name << "Transitions = {{\n";
   for (auto &KV : DfaTransitions) {
     dfa_state_type From = KV.first.first;
     dfa_state_type To = KV.second.first;
@@ -169,30 +166,8 @@ void DfaEmitter::printActionValue(action_type A, raw_ostream &OS) { OS << A; }
 //===----------------------------------------------------------------------===//
 
 namespace {
-// FIXME: This entire discriminated union could be removed with c++17:
-//   using Action = std::variant<Record *, unsigned, std::string>;
-struct Action {
-  Record *R = nullptr;
-  unsigned I = 0;
-  std::string S;
 
-  Action() = default;
-  Action(Record *R, unsigned I, std::string S) : R(R), I(I), S(S) {}
-
-  void print(raw_ostream &OS) const {
-    if (R)
-      OS << R->getName();
-    else if (!S.empty())
-      OS << '"' << S << '"';
-    else
-      OS << I;
-  }
-  bool operator<(const Action &Other) const {
-    return std::make_tuple(R, I, S) <
-           std::make_tuple(Other.R, Other.I, Other.S);
-  }
-};
-
+using Action = std::variant<const Record *, unsigned, std::string>;
 using ActionTuple = std::vector<Action>;
 class Automaton;
 
@@ -204,7 +179,7 @@ class Transition {
   SmallVector<std::string, 4> Types;
 
 public:
-  Transition(Record *R, Automaton *Parent);
+  Transition(const Record *R, Automaton *Parent);
   const ActionTuple &getActions() { return Actions; }
   SmallVector<std::string, 4> getTypes() { return Types; }
 
@@ -213,8 +188,8 @@ public:
 };
 
 class Automaton {
-  RecordKeeper &Records;
-  Record *R;
+  const RecordKeeper &Records;
+  const Record *R;
   std::vector<Transition> Transitions;
   /// All possible action tuples, uniqued.
   UniqueVector<ActionTuple> Actions;
@@ -222,7 +197,7 @@ class Automaton {
   std::vector<StringRef> ActionSymbolFields;
 
 public:
-  Automaton(RecordKeeper &Records, Record *R);
+  Automaton(const RecordKeeper &Records, const Record *R);
   void emit(raw_ostream &OS);
 
   ArrayRef<StringRef> getActionSymbolFields() { return ActionSymbolFields; }
@@ -232,10 +207,10 @@ public:
 };
 
 class AutomatonEmitter {
-  RecordKeeper &Records;
+  const RecordKeeper &Records;
 
 public:
-  AutomatonEmitter(RecordKeeper &R) : Records(R) {}
+  AutomatonEmitter(const RecordKeeper &R) : Records(R) {}
   void run(raw_ostream &OS);
 };
 
@@ -254,7 +229,7 @@ public:
 } // namespace
 
 void AutomatonEmitter::run(raw_ostream &OS) {
-  for (Record *R : Records.getAllDerivedDefinitions("GenericAutomaton")) {
+  for (const Record *R : Records.getAllDerivedDefinitions("GenericAutomaton")) {
     Automaton A(Records, R);
     OS << "#ifdef GET_" << R->getName() << "_DECL\n";
     A.emit(OS);
@@ -262,7 +237,7 @@ void AutomatonEmitter::run(raw_ostream &OS) {
   }
 }
 
-Automaton::Automaton(RecordKeeper &Records, Record *R)
+Automaton::Automaton(const RecordKeeper &Records, const Record *R)
     : Records(Records), R(R) {
   LLVM_DEBUG(dbgs() << "Emitting automaton for " << R->getName() << "\n");
   ActionSymbolFields = R->getValueAsListOfStrings("SymbolFields");
@@ -270,7 +245,7 @@ Automaton::Automaton(RecordKeeper &Records, Record *R)
 
 void Automaton::emit(raw_ostream &OS) {
   StringRef TransitionClass = R->getValueAsString("TransitionClass");
-  for (Record *T : Records.getAllDerivedDefinitions(TransitionClass)) {
+  for (const Record *T : Records.getAllDerivedDefinitions(TransitionClass)) {
     assert(T->isSubClassOf("Transition"));
     Transitions.emplace_back(T, this);
     Actions.insert(Transitions.back().getActions());
@@ -305,6 +280,7 @@ void Automaton::emit(raw_ostream &OS) {
   }
   LLVM_DEBUG(dbgs() << "  NFA automaton has " << SeenStates.size()
                     << " states with " << NumTransitions << " transitions.\n");
+  (void)NumTransitions;
 
   const auto &ActionTypes = Transitions.back().getTypes();
   OS << "// The type of an action in the " << Name << " automaton.\n";
@@ -326,8 +302,8 @@ StringRef Automaton::getActionSymbolType(StringRef A) {
   return R->getValueAsString(Ty.str());
 }
 
-Transition::Transition(Record *R, Automaton *Parent) {
-  BitsInit *NewStateInit = R->getValueAsBitsInit("NewState");
+Transition::Transition(const Record *R, Automaton *Parent) {
+  const BitsInit *NewStateInit = R->getValueAsBitsInit("NewState");
   NewState = 0;
   assert(NewStateInit->getNumBits() <= sizeof(uint64_t) * 8 &&
          "State cannot be represented in 64 bits!");
@@ -339,15 +315,15 @@ Transition::Transition(Record *R, Automaton *Parent) {
   }
 
   for (StringRef A : Parent->getActionSymbolFields()) {
-    RecordVal *SymbolV = R->getValue(A);
-    if (auto *Ty = dyn_cast<RecordRecTy>(SymbolV->getType())) {
-      Actions.emplace_back(R->getValueAsDef(A), 0, "");
+    const RecordVal *SymbolV = R->getValue(A);
+    if (const auto *Ty = dyn_cast<RecordRecTy>(SymbolV->getType())) {
+      Actions.emplace_back(R->getValueAsDef(A));
       Types.emplace_back(Ty->getAsString());
     } else if (isa<IntRecTy>(SymbolV->getType())) {
-      Actions.emplace_back(nullptr, R->getValueAsInt(A), "");
+      Actions.emplace_back(static_cast<unsigned>(R->getValueAsInt(A)));
       Types.emplace_back("unsigned");
     } else if (isa<StringRecTy>(SymbolV->getType())) {
-      Actions.emplace_back(nullptr, 0, std::string(R->getValueAsString(A)));
+      Actions.emplace_back(std::string(R->getValueAsString(A)));
       Types.emplace_back("std::string");
     } else {
       report_fatal_error("Unhandled symbol type!");
@@ -366,31 +342,27 @@ bool Transition::canTransitionFrom(uint64_t State) {
   return false;
 }
 
-uint64_t Transition::transitionFrom(uint64_t State) {
-  return State | NewState;
-}
+uint64_t Transition::transitionFrom(uint64_t State) { return State | NewState; }
 
 void CustomDfaEmitter::printActionType(raw_ostream &OS) { OS << TypeName; }
 
 void CustomDfaEmitter::printActionValue(action_type A, raw_ostream &OS) {
   const ActionTuple &AT = Actions[A];
   if (AT.size() > 1)
-    OS << "std::make_tuple(";
-  bool First = true;
+    OS << "{";
+  ListSeparator LS;
   for (const auto &SingleAction : AT) {
-    if (!First)
-      OS << ", ";
-    First = false;
-    SingleAction.print(OS);
+    OS << LS;
+    if (const auto *R = std::get_if<const Record *>(&SingleAction))
+      OS << (*R)->getName();
+    else if (const auto *S = std::get_if<std::string>(&SingleAction))
+      OS << '"' << *S << '"';
+    else
+      OS << std::get<unsigned>(SingleAction);
   }
   if (AT.size() > 1)
-    OS << ")";
+    OS << "}";
 }
 
-namespace llvm {
-
-void EmitAutomata(RecordKeeper &RK, raw_ostream &OS) {
-  AutomatonEmitter(RK).run(OS);
-}
-
-} // namespace llvm
+static TableGen::Emitter::OptClass<AutomatonEmitter>
+    X("gen-automata", "Generate generic automata");

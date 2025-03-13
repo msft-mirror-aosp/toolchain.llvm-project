@@ -43,8 +43,8 @@ static cl::opt<std::string> OutputFilename("o", cl::Required,
                                            cl::value_desc("filename"),
                                            cl::cat(CatCategory));
 
-static cl::list<std::string> InputFilenames(cl::Positional, cl::ZeroOrMore,
-                                            cl::desc("<input  files>"),
+static cl::list<std::string> InputFilenames(cl::Positional,
+                                            cl::desc("<input files>"),
                                             cl::cat(CatCategory));
 
 int main(int argc, char **argv) {
@@ -62,8 +62,7 @@ int main(int argc, char **argv) {
           errorOrToExpected(MemoryBuffer::getFileOrSTDIN(InputFilename)));
       std::vector<BitcodeModule> Mods = ExitOnErr(getBitcodeModuleList(*MB));
       for (auto &BitcodeMod : Mods) {
-        Buffer.insert(Buffer.end(), BitcodeMod.getBuffer().begin(),
-                      BitcodeMod.getBuffer().end());
+        llvm::append_range(Buffer, BitcodeMod.getBuffer());
         Writer.copyStrtab(BitcodeMod.getStrtab());
       }
     }

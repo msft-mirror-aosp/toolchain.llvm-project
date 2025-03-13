@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_STATICANALYZER_CORE_BUGREPORTER_PATHDIAGNOSTIC_H
-#define LLVM_CLANG_STATICANALYZER_CORE_BUGREPORTER_PATHDIAGNOSTIC_H
+#ifndef LLVM_CLANG_ANALYSIS_PATHDIAGNOSTIC_H
+#define LLVM_CLANG_ANALYSIS_PATHDIAGNOSTIC_H
 
 #include "clang/AST/Stmt.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
@@ -19,7 +19,6 @@
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/FoldingSet.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -30,6 +29,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -41,10 +41,8 @@ class AnalysisDeclContext;
 class BinaryOperator;
 class CallEnter;
 class CallExitEnd;
-class CallExpr;
 class ConditionalOperator;
 class Decl;
-class Expr;
 class LocationContext;
 class MemberExpr;
 class ProgramPoint;
@@ -68,35 +66,27 @@ struct PathDiagnosticConsumerOptions {
   /// Whether to include additional information about macro expansions
   /// with the diagnostics, because otherwise they can be hard to obtain
   /// without re-compiling the program under analysis.
-  bool ShouldDisplayMacroExpansions;
+  bool ShouldDisplayMacroExpansions = false;
 
   /// Whether to include LLVM statistics of the process in the diagnostic.
   /// Useful for profiling the tool on large real-world codebases.
-  bool ShouldSerializeStats;
+  bool ShouldSerializeStats = false;
 
   /// If the consumer intends to produce multiple output files, should it
-  /// use randomly generated file names for these files (with the tiny risk of
-  /// having random collisions) or deterministic human-readable file names
-  /// (with a larger risk of deterministic collisions or invalid characters
-  /// in the file name). We should not really give this choice to the users
-  /// because deterministic mode is always superior when done right, but
-  /// for some consumers this mode is experimental and needs to be
-  /// off by default.
-  bool ShouldWriteStableReportFilename;
+  /// use a pseudo-random file name or a human-readable file name.
+  bool ShouldWriteVerboseReportFilename = false;
 
   /// Whether the consumer should treat consumed diagnostics as hard errors.
   /// Useful for breaking your build when issues are found.
-  bool ShouldDisplayWarningsAsErrors;
+  bool ShouldDisplayWarningsAsErrors = false;
 
   /// Whether the consumer should attempt to rewrite the source file
   /// with fix-it hints attached to the diagnostics it consumes.
-  bool ShouldApplyFixIts;
+  bool ShouldApplyFixIts = false;
 
   /// Whether the consumer should present the name of the entity that emitted
   /// the diagnostic (eg., a checker) so that the user knew how to disable it.
-  bool ShouldDisplayDiagnosticName;
-
-  PathDiagnosticConsumerOptions() = delete;
+  bool ShouldDisplayDiagnosticName = false;
 };
 
 class PathDiagnosticConsumer {
@@ -153,11 +143,14 @@ public:
     /// Only runs visitors, no output generated.
     None,
 
-    /// Used for HTML, SARIF, and text output.
+    /// Used for SARIF and text output.
     Minimal,
 
     /// Used for plist output, used for "arrows" generation.
     Extensive,
+
+    /// Used for HTML, shows both "arrows" and control notes.
+    Everything
   };
 
   virtual PathGenerationScheme getGenerationScheme() const { return Minimal; }
@@ -166,7 +159,11 @@ public:
     return getGenerationScheme() != None;
   }
 
-  bool shouldAddPathEdges() const { return getGenerationScheme() == Extensive; }
+  bool shouldAddPathEdges() const { return getGenerationScheme() >= Extensive; }
+  bool shouldAddControlNotes() const {
+    return getGenerationScheme() == Minimal ||
+           getGenerationScheme() == Everything;
+  }
 
   virtual bool supportsLogicalOpControlFlow() const { return false; }
 
@@ -535,7 +532,7 @@ public:
 };
 
 class PathDiagnosticEventPiece : public PathDiagnosticSpotPiece {
-  Optional<bool> IsPrunable;
+  std::optional<bool> IsPrunable;
 
 public:
   PathDiagnosticEventPiece(const PathDiagnosticLocation &pos,
@@ -547,15 +544,13 @@ public:
   /// flag may have been previously set, at which point it will not
   /// be reset unless one specifies to do so.
   void setPrunable(bool isPrunable, bool override = false) {
-    if (IsPrunable.hasValue() && !override)
-     return;
+    if (IsPrunable && !override)
+      return;
     IsPrunable = isPrunable;
   }
 
   /// Return true if the diagnostic piece is prunable.
-  bool isPrunable() const {
-    return IsPrunable.hasValue() ? IsPrunable.getValue() : false;
-  }
+  bool isPrunable() const { return IsPrunable.value_or(false); }
 
   void dump() const override;
 
@@ -785,6 +780,9 @@ class PathDiagnostic : public llvm::FoldingSetNode {
   PathDiagnosticLocation UniqueingLoc;
   const Decl *UniqueingDecl;
 
+  /// The top-level entry point from which this issue was discovered.
+  const Decl *AnalysisEntryPoint = nullptr;
+
   /// Lines executed in the path.
   std::unique_ptr<FilesToLineNumsMap> ExecutedLines;
 
@@ -793,7 +791,7 @@ public:
   PathDiagnostic(StringRef CheckerName, const Decl *DeclWithIssue,
                  StringRef bugtype, StringRef verboseDesc, StringRef shortDesc,
                  StringRef category, PathDiagnosticLocation LocationToUnique,
-                 const Decl *DeclToUnique,
+                 const Decl *DeclToUnique, const Decl *AnalysisEntryPoint,
                  std::unique_ptr<FilesToLineNumsMap> ExecutedLines);
   ~PathDiagnostic();
 
@@ -857,6 +855,9 @@ public:
     return *ExecutedLines;
   }
 
+  /// Get the top-level entry point from which this issue was discovered.
+  const Decl *getAnalysisEntryPoint() const { return AnalysisEntryPoint; }
+
   /// Return the semantic context where an issue occurred.  If the
   /// issue occurs along a path, this represents the "central" area
   /// where the bug manifests.
@@ -906,4 +907,4 @@ public:
 } // namespace ento
 } // namespace clang
 
-#endif // LLVM_CLANG_STATICANALYZER_CORE_BUGREPORTER_PATHDIAGNOSTIC_H
+#endif // LLVM_CLANG_ANALYSIS_PATHDIAGNOSTIC_H

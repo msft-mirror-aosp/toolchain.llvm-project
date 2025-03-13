@@ -20,9 +20,10 @@ class OpClass;
 class Operator;
 
 // Generate the assembly format for the given operator.
-void generateOpFormat(const Operator &constOp, OpClass &opClass);
+void generateOpFormat(const Operator &constOp, OpClass &opClass,
+                      bool hasProperties);
 
-} // end namespace tblgen
-} // end namespace mlir
+} // namespace tblgen
+} // namespace mlir
 
 #endif // MLIR_TOOLS_MLIRTBLGEN_OPFORMATGEN_H_

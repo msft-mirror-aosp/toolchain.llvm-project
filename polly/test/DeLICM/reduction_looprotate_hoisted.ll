@@ -1,4 +1,4 @@
-; RUN: opt %loadPolly -polly-stmt-granularity=bb -polly-invariant-load-hoisting -polly-flatten-schedule -polly-delicm-overapproximate-writes=true -polly-delicm-compute-known=true -polly-delicm -analyze < %s | FileCheck %s
+; RUN: opt %loadPolly -polly-stmt-granularity=bb -polly-invariant-load-hoisting -polly-flatten-schedule -polly-delicm-overapproximate-writes=true -polly-delicm-compute-known=true -polly-print-delicm -disable-output < %s | FileCheck %s
 ;
 ;    void func(int *A, int* StartPtr) {
 ;      for (int j = 0; j < 2; j += 1) { /* outer */
@@ -10,7 +10,7 @@
 ;      }
 ;    }
 ;
-define void @func(i32* noalias nonnull %A, i32* noalias nonnull %StartPtr) {
+define void @func(ptr noalias nonnull %A, ptr noalias nonnull %StartPtr) {
 entry:
   br label %outer.preheader
 
@@ -24,7 +24,7 @@ outer.for:
 
 
     reduction.preheader:
-      %Start = load i32, i32* %StartPtr
+      %Start = load i32, ptr %StartPtr
       br label %reduction.for
 
     reduction.for:
@@ -46,8 +46,8 @@ outer.for:
       br i1 %i.cmp, label %reduction.for, label %reduction.exit
 
     reduction.exit:
-      %A_idx = getelementptr inbounds i32, i32* %A, i32 %j
-      store i32 %mul, i32* %A_idx
+      %A_idx = getelementptr inbounds i32, ptr %A, i32 %j
+      store i32 %mul, ptr %A_idx
       br label %outer.inc
 
 
@@ -70,7 +70,7 @@ return:
 ; CHECK-NEXT:     Stmt_reduction_preheader
 ; CHECK-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
 ; CHECK-NEXT:                 [Start] -> { Stmt_reduction_preheader[i0] -> MemRef_phi__phi[] };
-; CHECK-NEXT:            new: [Start] -> { Stmt_reduction_preheader[i0] -> MemRef_A[i0] : Start >= 2147483648 or Start <= 2147483646 };
+; CHECK-NEXT:            new: [Start] -> { Stmt_reduction_preheader[i0] -> MemRef_A[i0] };
 ; CHECK-NEXT:     Stmt_reduction_for
 ; CHECK-NEXT:             ReadAccess :=    [Reduction Type: NONE] [Scalar: 1]
 ; CHECK-NEXT:                 [Start] -> { Stmt_reduction_for[i0, i1] -> MemRef_phi__phi[] };

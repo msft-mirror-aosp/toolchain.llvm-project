@@ -1,34 +1,48 @@
 set(LLVM_LINK_COMPONENTS
   FrontendOpenMP
   Support
+  TargetParser
   )
 
 
+add_subdirectory(ByteCode)
+
 add_clang_unittest(ASTTests
   ASTContextParentMapTest.cpp
+  ASTDumperTest.cpp
+  ASTExprTest.cpp
   ASTImporterFixtures.cpp
   ASTImporterTest.cpp
+  ASTImporterObjCTest.cpp
   ASTImporterGenericRedeclTest.cpp
   ASTImporterODRStrategiesTest.cpp
   ASTImporterVisibilityTest.cpp
   ASTTraverserTest.cpp
   ASTTypeTraitsTest.cpp
-  ASTTraverserTest.cpp
   ASTVectorTest.cpp
+  AttrTest.cpp
   CommentLexer.cpp
   CommentParser.cpp
   CommentTextTest.cpp
+  ConceptPrinterTest.cpp
   DataCollectionTest.cpp
+  DeclBaseTest.cpp
   DeclPrinterTest.cpp
   DeclTest.cpp
   EvaluateAsRValueTest.cpp
   ExternalASTSourceTest.cpp
   NamedDeclPrinterTest.cpp
+  ProfilingTest.cpp
+  RandstructTest.cpp
+  RawCommentForDeclTest.cpp
   RecursiveASTVisitorTest.cpp
   SizelessTypesTest.cpp
   SourceLocationTest.cpp
   StmtPrinterTest.cpp
   StructuralEquivalenceTest.cpp
+  TemplateNameTest.cpp
+  TypePrinterTest.cpp
+  UnresolvedSetTest.cpp
   )
 
 clang_target_link_libraries(ASTTests
@@ -37,12 +51,14 @@ clang_target_link_libraries(ASTTests
   clangASTMatchers
   clangBasic
   clangFrontend
+  clangLex
   clangSerialization
-  clangTesting
   clangTooling
   )
 
 target_link_libraries(ASTTests
   PRIVATE
+  clangTesting
+  LLVMTestingAnnotations
   LLVMTestingSupport
 )

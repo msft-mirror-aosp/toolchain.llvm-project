@@ -18,46 +18,52 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CodeGenDAGPatterns.h"
-#include "CodeGenInstruction.h"
-#include "CodeGenTarget.h"
-#include "TableGenBackends.h"
+#include "Common/CodeGenDAGPatterns.h"
+#include "Common/CodeGenInstruction.h"
+#include "Common/CodeGenTarget.h"
 #include "llvm/TableGen/Record.h"
+#include "llvm/TableGen/TableGenBackend.h"
 #include <string>
 #include <vector>
 
 using namespace llvm;
 
-namespace llvm {
-
-void writeTitle(StringRef Str, raw_ostream &OS, char Kind = '-') {
-  OS << std::string(Str.size(), Kind) << "\n" << Str << "\n"
+static void writeTitle(StringRef Str, raw_ostream &OS, char Kind = '-') {
+  OS << std::string(Str.size(), Kind) << "\n"
+     << Str << "\n"
      << std::string(Str.size(), Kind) << "\n";
 }
 
-void writeHeader(StringRef Str, raw_ostream &OS, char Kind = '-') {
+static void writeHeader(StringRef Str, raw_ostream &OS, char Kind = '-') {
   OS << Str << "\n" << std::string(Str.size(), Kind) << "\n";
 }
 
-std::string escapeForRST(StringRef Str) {
+static std::string escapeForRST(StringRef Str) {
   std::string Result;
   Result.reserve(Str.size() + 4);
   for (char C : Str) {
     switch (C) {
     // We want special characters to be shown as their C escape codes.
-    case '\n': Result += "\\n"; break;
-    case '\t': Result += "\\t"; break;
+    case '\n':
+      Result += "\\n";
+      break;
+    case '\t':
+      Result += "\\t";
+      break;
     // Underscore at the end of a line has a special meaning in rst.
-    case '_': Result += "\\_"; break;
-    default: Result += C;
+    case '_':
+      Result += "\\_";
+      break;
+    default:
+      Result += C;
     }
   }
   return Result;
 }
 
-void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
-  CodeGenDAGPatterns CDP(RK);
-  CodeGenTarget &Target = CDP.getTargetInfo();
+static void EmitInstrDocs(const RecordKeeper &RK, raw_ostream &OS) {
+  const CodeGenDAGPatterns CDP(RK);
+  const CodeGenTarget &Target = CDP.getTargetInfo();
   unsigned VariantCount = Target.getAsmParserVariantCount();
 
   // Page title.
@@ -67,7 +73,7 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
   OS << "\n";
 
   for (const CodeGenInstruction *II : Target.getInstructionsByEnumValue()) {
-    Record *Inst = II->TheDef;
+    const Record *Inst = II->TheDef;
 
     // Don't print the target-independent instructions.
     if (II->Namespace == "TargetOpcode")
@@ -80,7 +86,7 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     // Assembly string(s).
     if (!II->AsmString.empty()) {
       for (unsigned VarNum = 0; VarNum < VariantCount; ++VarNum) {
-        Record *AsmVariant = Target.getAsmParserVariant(VarNum);
+        const Record *AsmVariant = Target.getAsmParserVariant(VarNum);
         OS << "Assembly string";
         if (VariantCount != 1)
           OS << " (" << AsmVariant->getValueAsString("Name") << ")";
@@ -97,7 +103,10 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     std::vector<const char *> FlagStrings;
 #define xstr(s) str(s)
 #define str(s) #s
-#define FLAG(f) if (II->f) { FlagStrings.push_back(str(f)); }
+#define FLAG(f)                                                                \
+  if (II->f) {                                                                 \
+    FlagStrings.push_back(str(f));                                             \
+  }
     FLAG(isReturn)
     FLAG(isEHScopeReturn)
     FLAG(isBranch)
@@ -112,9 +121,9 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     FLAG(isTrap)
     FLAG(canFoldAsLoad)
     FLAG(mayLoad)
-    //FLAG(mayLoad_Unset) // Deliberately omitted.
+    // FLAG(mayLoad_Unset) // Deliberately omitted.
     FLAG(mayStore)
-    //FLAG(mayStore_Unset) // Deliberately omitted.
+    // FLAG(mayStore_Unset) // Deliberately omitted.
     FLAG(isPredicable)
     FLAG(isConvertibleToThreeAddress)
     FLAG(isCommutable)
@@ -126,7 +135,7 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     FLAG(hasCtrlDep)
     FLAG(isNotDuplicable)
     FLAG(hasSideEffects)
-    //FLAG(hasSideEffects_Unset) // Deliberately omitted.
+    // FLAG(hasSideEffects_Unset) // Deliberately omitted.
     FLAG(isAsCheapAsAMove)
     FLAG(hasExtraSrcRegAllocReq)
     FLAG(hasExtraDefRegAllocReq)
@@ -141,20 +150,16 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     FLAG(isAuthenticated)
     if (!FlagStrings.empty()) {
       OS << "Flags: ";
-      bool IsFirst = true;
-      for (auto FlagString : FlagStrings) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << FlagString << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (auto FlagString : FlagStrings)
+        OS << LS << "``" << FlagString << "``";
       OS << "\n\n";
     }
 
     // Operands.
     for (unsigned i = 0; i < II->Operands.size(); ++i) {
       bool IsDef = i < II->Operands.NumDefs;
-      auto Op = II->Operands[i];
+      const auto &Op = II->Operands[i];
 
       if (Op.MINumOperands > 1) {
         // This operand corresponds to multiple operands on the
@@ -162,7 +167,7 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
         // names of both the compound operand and the basic operands it
         // contains.
         for (unsigned SubOpIdx = 0; SubOpIdx < Op.MINumOperands; ++SubOpIdx) {
-          Record *SubRec =
+          const Record *SubRec =
               cast<DefInit>(Op.MIOperandInfo->getArg(SubOpIdx))->getDef();
           StringRef SubOpName = Op.MIOperandInfo->getArgNameStr(SubOpIdx);
           StringRef SubOpTypeName = SubRec->getName();
@@ -192,44 +197,33 @@ void EmitInstrDocs(RecordKeeper &RK, raw_ostream &OS) {
     // Implicit definitions.
     if (!II->ImplicitDefs.empty()) {
       OS << "Implicit defs: ";
-      bool IsFirst = true;
-      for (Record *Def : II->ImplicitDefs) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << Def->getName() << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (const Record *Def : II->ImplicitDefs)
+        OS << LS << "``" << Def->getName() << "``";
       OS << "\n\n";
     }
 
     // Implicit uses.
     if (!II->ImplicitUses.empty()) {
       OS << "Implicit uses: ";
-      bool IsFirst = true;
-      for (Record *Use : II->ImplicitUses) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << Use->getName() << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (const Record *Use : II->ImplicitUses)
+        OS << LS << "``" << Use->getName() << "``";
       OS << "\n\n";
     }
 
     // Predicates.
-    std::vector<Record *> Predicates =
+    std::vector<const Record *> Predicates =
         II->TheDef->getValueAsListOfDefs("Predicates");
     if (!Predicates.empty()) {
       OS << "Predicates: ";
-      bool IsFirst = true;
-      for (Record *P : Predicates) {
-        if (!IsFirst)
-          OS << ", ";
-        OS << "``" << P->getName() << "``";
-        IsFirst = false;
-      }
+      ListSeparator LS;
+      for (const Record *P : Predicates)
+        OS << LS << "``" << P->getName() << "``";
       OS << "\n\n";
     }
   }
 }
 
-} // end namespace llvm
+static TableGen::Emitter::Opt X("gen-instr-docs", EmitInstrDocs,
+                                "Generate instruction documentation");

@@ -1,7 +1,7 @@
 # REQUIRES: x86
 # RUN: llvm-mc -filetype=obj -triple=x86_64-pc-linux %p/Inputs/at3.s -o %t.o
 # RUN: ld.lld %t.o --script %s -o %t
-# RUN: llvm-readelf -sections -program-headers %t | FileCheck %s
+# RUN: llvm-readelf -S -l %t | FileCheck %s
 
 MEMORY {
   FOO   (ax) : ORIGIN = 0x1000, LENGTH = 0x100
@@ -13,7 +13,7 @@ MEMORY {
 SECTIONS {
  .foo1 : { *(.foo1) }            > FOO AT>FLASH
  .foo2 : { *(.foo2) BYTE(0x42) } > BAR AT>FLASH
- .foo3 : { *(.foo3) }            > ZED AT>FLASH
+ .foo3 : { *(.foo3) }            >"ZED" AT>"FLASH"
 }
 
 # CHECK: .foo1             PROGBITS        0000000000001000 001000

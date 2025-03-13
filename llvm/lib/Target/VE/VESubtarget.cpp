@@ -11,9 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "VESubtarget.h"
-#include "VE.h"
-#include "llvm/Support/MathExtras.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 
 using namespace llvm;
 
@@ -33,7 +31,7 @@ VESubtarget &VESubtarget::initializeSubtargetDependencies(StringRef CPU,
   // Determine default and user specified characteristics
   std::string CPUName = std::string(CPU);
   if (CPUName.empty())
-    CPUName = "ve";
+    CPUName = "generic";
 
   // Parse features string.
   ParseSubtargetFeatures(CPUName, /*TuneCPU=*/CPU, FS);

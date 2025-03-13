@@ -34,7 +34,7 @@ void f4(const char *msg, ...) {
  __builtin_va_end (ap);
 }
 
-void f5() {
+void f5(void) {
   __builtin_va_list ap;
   __builtin_va_start(ap,ap); // expected-error {{'va_start' used in function with fixed args}}
 }
@@ -75,6 +75,11 @@ void f9(__builtin_va_list args)
     (void)__builtin_va_arg(args, enum E); // Don't warn here in C
     (void)__builtin_va_arg(args, short); // expected-warning {{second argument to 'va_arg' is of promotable type 'short'}}
     (void)__builtin_va_arg(args, char); // expected-warning {{second argument to 'va_arg' is of promotable type 'char'}}
+    // Don't crash on some undefined behaviors.
+    int n;
+    (void)__builtin_va_arg(args, int[10]); // expected-warning{{second argument to 'va_arg' is of array type 'int[10]'}}
+    (void)__builtin_va_arg(args, int[++n]); // expected-warning{{second argument to 'va_arg' is of array type 'int[++n]'}}
+    (void)__builtin_va_arg(args, int[n][n]); // expected-warning{{second argument to 'va_arg' is of array type 'int[n][n]'}}
 }
 
 void f10(int a, ...) {
@@ -114,7 +119,7 @@ void f13(enum E1 e, ...) {
 }
 
 void f14(int e, ...) {
-  // expected-warning@+3 {{implicitly declaring library function 'va_start'}}
+  // expected-error@+3 {{call to undeclared library function 'va_start'}}
   // expected-note@+2 {{include the header <stdarg.h>}}
   // expected-error@+1 {{too few arguments to function call}}
   va_start();

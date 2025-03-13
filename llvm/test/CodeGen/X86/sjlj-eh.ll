@@ -5,19 +5,19 @@
 
 declare void @_Z20function_that_throwsv()
 declare i32 @__gxx_personality_sj0(...)
-declare i8* @__cxa_begin_catch(i8*)
+declare ptr @__cxa_begin_catch(ptr)
 declare void @__cxa_end_catch()
 
-define void @_Z8functionv() personality i8* bitcast (i32 (...)* @__gxx_personality_sj0 to i8*) {
+define void @_Z8functionv() personality ptr @__gxx_personality_sj0 {
 entry:
   invoke void @_Z20function_that_throwsv()
           to label %try.cont unwind label %lpad
 
 lpad:
-  %0 = landingpad { i8*, i32 }
-          catch i8* null
-  %1 = extractvalue { i8*, i32 } %0, 0
-  %2 = tail call i8* @__cxa_begin_catch(i8* %1)
+  %0 = landingpad { ptr, i32 }
+          catch ptr null
+  %1 = extractvalue { ptr, i32 } %0, 0
+  %2 = tail call ptr @__cxa_begin_catch(ptr %1)
   tail call void @__cxa_end_catch()
   br label %try.cont
 
@@ -31,7 +31,7 @@ try.cont:
 ; +08   uint32_t __buffer[4];                   -56(%ebp)
 ; +24   __personality_routine __personality;    -40(%ebp)
 ; +28   uintptr_t __lsda;                       -36(%ebp)
-; +32   void *__jbuf[];                         -32(%ebp)
+; +32   ptr__jbuf[];                         -32(%ebp)
 ;     };
 
 
@@ -48,14 +48,13 @@ try.cont:
 ; CHECK: movl %esp, -24(%ebp)
 ;     UFC.__jbuf[1] = $EIP
 ; CHECK: movl $[[RESUME:LBB[0-9]+_[0-9]+]], -28(%ebp)
-;     UFC.__callsite = 1
-; CHECK: movl $1, -60(%ebp)
 ;     _Unwind_SjLj_Register(&UFC);
 ; CHECK: leal -64(%ebp), %eax
 ; CHECK: pushl %eax
 ; CHECK: calll __Unwind_SjLj_Register
 ; CHECK: addl $4, %esp
 ;     function_that_throws();
+; CHECK: movl $1, -60(%ebp)
 ; CHECK: calll __Z20function_that_throwsv
 ;     _Unwind_SjLj_Unregister(&UFC);
 ; CHECK: leal -64(%ebp), %eax
@@ -79,7 +78,7 @@ try.cont:
 ; +12   uint32_t __buffer[4];                   -300(%rbp)
 ; +32   __personality_routine __personality;    -280(%rbp)
 ; +40   uintptr_t __lsda;                       -272(%rbp)
-; +48   void *__jbuf[];                         -264(%rbp)
+; +48   ptr__jbuf[];                         -264(%rbp)
 ;     };
 
 
@@ -99,12 +98,11 @@ try.cont:
 ;     UFC.__jbuf[1] = $RIP
 ; CHECK-X64: leaq .[[RESUME:LBB[0-9]+_[0-9]+]](%rip), %rax
 ; CHECK-X64: movq %rax, -256(%rbp)
-;     UFC.__callsite = 1
-; CHECK-X64: movl $1, -304(%rbp)
 ;     _Unwind_SjLj_Register(&UFC);
 ; CHECK-X64: leaq -312(%rbp), %rcx
 ; CHECK-X64: callq _Unwind_SjLj_Register
 ;     function_that_throws();
+; CHECK-X64: movl $1, -304(%rbp)
 ; CHECK-X64: callq _Z20function_that_throwsv
 ;     _Unwind_SjLj_Unregister(&UFC);
 ; CHECK-X64: leaq -312(%rbp), %rcx

@@ -8,8 +8,8 @@
 
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
@@ -37,7 +37,7 @@ protected:
     Error.print("", os);
 
     if (!M)
-      report_fatal_error(os.str());
+      report_fatal_error(Twine(errMsg));
   }
 
   ::testing::AssertionResult isLibFunc(const Function *FDecl,
@@ -59,7 +59,7 @@ protected:
 
 // Check that we don't accept egregiously incorrect prototypes.
 TEST_F(TargetLibraryInfoTest, InvalidProto) {
-  parseAssembly("%foo = type { %foo }\n");
+  parseAssembly("%foo = type opaque\n");
 
   auto *StructTy = StructType::getTypeByName(Context, "foo");
   auto *InvalidFTy = FunctionType::get(StructTy, /*isVarArg=*/false);
@@ -68,6 +68,39 @@ TEST_F(TargetLibraryInfoTest, InvalidProto) {
     LibFunc LF = (LibFunc)FI;
     auto *F = cast<Function>(
         M->getOrInsertFunction(TLI.getName(LF), InvalidFTy).getCallee());
+    EXPECT_FALSE(isLibFunc(F, LF));
+  }
+
+  // i64 @labs(i32)
+  {
+    auto *InvalidLabsFTy = FunctionType::get(Type::getInt64Ty(Context),
+                                             {Type::getInt32Ty(Context)},
+                                             /*isVarArg=*/false);
+    auto *F = cast<Function>(
+        M->getOrInsertFunction("labs", InvalidLabsFTy).getCallee());
+    EXPECT_FALSE(isLibFunc(F, LibFunc_labs));
+  }
+}
+
+TEST_F(TargetLibraryInfoTest, SizeReturningNewInvalidProto) {
+  parseAssembly(
+      "target datalayout = \"p:64:64:64\"\n"
+      ";; Invalid additional params \n"
+      "declare {i8*, i64} @__size_returning_new(i64, i64)\n"
+      ";; Invalid params types \n"
+      "declare {i8*, i64} @__size_returning_new_hot_cold(i64, i32)\n"
+      ";; Invalid return struct types \n"
+      "declare {i8*, i8} @__size_returning_new_aligned(i64, i64)\n"
+      ";; Invalid return type \n"
+      "declare i8* @__size_returning_new_aligned_hot_cold(i64, i64, i8)\n");
+
+  for (const LibFunc LF :
+       {LibFunc_size_returning_new, LibFunc_size_returning_new_aligned,
+        LibFunc_size_returning_new_hot_cold,
+        LibFunc_size_returning_new_aligned_hot_cold}) {
+    TLII.setAvailable(LF);
+    Function *F = M->getFunction(TLI.getName(LF));
+    ASSERT_NE(F, nullptr);
     EXPECT_FALSE(isLibFunc(F, LF));
   }
 }
@@ -179,6 +212,12 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare double @fmin(double, double)\n"
       "declare float @fminf(float, float)\n"
       "declare x86_fp80 @fminl(x86_fp80, x86_fp80)\n"
+      "declare double @fmaximum_num(double, double)\n"
+      "declare float @fmaximum_numf(float, float)\n"
+      "declare x86_fp80 @fmaximum_numl(x86_fp80, x86_fp80)\n"
+      "declare double @fminimum_num(double, double)\n"
+      "declare float @fminimum_numf(float, float)\n"
+      "declare x86_fp80 @fminimum_numl(x86_fp80, x86_fp80)\n"
       "declare double @fmod(double, double)\n"
       "declare float @fmodf(float, float)\n"
       "declare x86_fp80 @fmodl(x86_fp80, x86_fp80)\n"
@@ -210,6 +249,9 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare %struct* @getpwnam(i8*)\n"
       "declare i8* @gets(i8*)\n"
       "declare i32 @gettimeofday(%struct*, i8*)\n"
+      "declare double @hypot(double, double)\n"
+      "declare float @hypotf(float, float)\n"
+      "declare x86_fp80 @hypotl(x86_fp80, x86_fp80)\n"
       "declare i32 @_Z7isasciii(i32)\n"
       "declare i32 @_Z7isdigiti(i32)\n"
       "declare i64 @labs(i64)\n"
@@ -227,6 +269,9 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare double @log2(double)\n"
       "declare float @log2f(float)\n"
       "declare x86_fp80 @log2l(x86_fp80)\n"
+      "declare i32 @ilogb(double)\n"
+      "declare i32 @ilogbf(float)\n"
+      "declare i32 @ilogbl(x86_fp80)\n"
       "declare double @logb(double)\n"
       "declare float @logbf(float)\n"
       "declare x86_fp80 @logbl(x86_fp80)\n"
@@ -240,10 +285,15 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare i8* @memmove(i8*, i8*, i64)\n"
       "declare i8* @memset(i8*, i32, i64)\n"
       "declare void @memset_pattern16(i8*, i8*, i64)\n"
+      "declare void @memset_pattern4(i8*, i8*, i64)\n"
+      "declare void @memset_pattern8(i8*, i8*, i64)\n"
       "declare i32 @mkdir(i8*, i16)\n"
       "declare double @modf(double, double*)\n"
       "declare float @modff(float, float*)\n"
       "declare x86_fp80 @modfl(x86_fp80, x86_fp80*)\n"
+      "declare double @nan(ptr)\n"
+      "declare float @nanf(ptr)\n"
+      "declare x86_fp80 @nanl(ptr)\n"
       "declare double @nearbyint(double)\n"
       "declare float @nearbyintf(float)\n"
       "declare x86_fp80 @nearbyintl(x86_fp80)\n"
@@ -253,6 +303,12 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare double @pow(double, double)\n"
       "declare float @powf(float, float)\n"
       "declare x86_fp80 @powl(x86_fp80, x86_fp80)\n"
+      "declare double @erf(double)\n"
+      "declare float @erff(float)\n"
+      "declare x86_fp80 @erfl(x86_fp80)\n"
+      "declare double @tgamma(double)\n"
+      "declare float @tgammaf(float)\n"
+      "declare x86_fp80 @tgammal(x86_fp80)\n"
       "declare i32 @printf(i8*, ...)\n"
       "declare i32 @putc(i32, %struct*)\n"
       "declare i32 @putc_unlocked(i32, %struct*)\n"
@@ -262,11 +318,18 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare void @qsort(i8*, i64, i64, i32 (i8*, i8*)*)\n"
       "declare i64 @readlink(i8*, i8*, i64)\n"
       "declare i8* @realloc(i8*, i64)\n"
+      "declare i8* @reallocarray(i8*, i64, i64)\n"
       "declare i8* @reallocf(i8*, i64)\n"
       "declare double @remainder(double, double)\n"
       "declare float @remainderf(float, float)\n"
       "declare x86_fp80 @remainderl(x86_fp80, x86_fp80)\n"
       "declare i32 @remove(i8*)\n"
+      "declare double @remquo(double, double, ptr)\n"
+      "declare float @remquof(float, float, ptr)\n"
+      "declare x86_fp80 @remquol(x86_fp80, x86_fp80, ptr)\n"
+      "declare double @fdim(double, double)\n"
+      "declare float @fdimf(float, float)\n"
+      "declare x86_fp80 @fdiml(x86_fp80, x86_fp80)\n"
       "declare i32 @rename(i8*, i8*)\n"
       "declare void @rewind(%struct*)\n"
       "declare double @rint(double)\n"
@@ -279,6 +342,12 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare double @roundeven(double)\n"
       "declare float @roundevenf(float)\n"
       "declare x86_fp80 @roundevenl(x86_fp80)\n"
+      "declare double @scalbln(double, i64)\n"
+      "declare float @scalblnf(float, i64)\n"
+      "declare x86_fp80 @scalblnl(x86_fp80, i64)\n"
+      "declare double @scalbn(double, i32)\n"
+      "declare float @scalbnf(float, i32)\n"
+      "declare x86_fp80 @scalbnl(x86_fp80, i32)\n"
       "declare i32 @scanf(i8*, ...)\n"
       "declare void @setbuf(%struct*, i8*)\n"
       "declare i32 @setitimer(i32, %struct*, %struct*)\n"
@@ -289,6 +358,9 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare float @sinhf(float)\n"
       "declare x86_fp80 @sinhl(x86_fp80)\n"
       "declare x86_fp80 @sinl(x86_fp80)\n"
+      "declare void @sincos(double, ptr, ptr)\n"
+      "declare void @sincosf(float, ptr, ptr)\n"
+      "declare void @sincosl(x86_fp80, ptr, ptr)\n"
       "declare i32 @snprintf(i8*, i64, i8*, ...)\n"
       "declare i32 @sprintf(i8*, i8*, ...)\n"
       "declare double @sqrt(double)\n"
@@ -320,8 +392,8 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare i8* @strtok(i8*, i8*)\n"
       "declare i8* @strtok_r(i8*, i8*, i8**)\n"
       "declare i64 @strtol(i8*, i8**, i32)\n"
-      "declare i64 @strlcat(i8*, i8**, i64)\n"
-      "declare i64 @strlcpy(i8*, i8**, i64)\n"
+      "declare i64 @strlcat(i8*, i8*, i64)\n"
+      "declare i64 @strlcpy(i8*, i8*, i64)\n"
       "declare x86_fp80 @strtold(i8*, i8**)\n"
       "declare i64 @strtoll(i8*, i8**, i32)\n"
       "declare i64 @strtoul(i8*, i8**, i32)\n"
@@ -431,17 +503,32 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare i8* @_ZnajSt11align_val_t(i32, i32)\n"
       "declare i8* @_ZnajSt11align_val_tRKSt9nothrow_t(i32, i32, %struct*)\n"
       "declare i8* @_Znam(i64)\n"
+      "declare i8* @_Znam12__hot_cold_t(i64, i8)\n"
       "declare i8* @_ZnamRKSt9nothrow_t(i64, %struct*)\n"
+      "declare i8* @_ZnamRKSt9nothrow_t12__hot_cold_t(i64, %struct*, i8)\n"
       "declare i8* @_ZnamSt11align_val_t(i64, i64)\n"
+      "declare i8* @_ZnamSt11align_val_t12__hot_cold_t(i64, i64, i8)\n"
       "declare i8* @_ZnamSt11align_val_tRKSt9nothrow_t(i64, i64, %struct*)\n"
+      "declare i8* @_ZnamSt11align_val_tRKSt9nothrow_t12__hot_cold_t(i64, i64, "
+      "%struct*, i8)\n"
       "declare i8* @_Znwj(i32)\n"
       "declare i8* @_ZnwjRKSt9nothrow_t(i32, %struct*)\n"
       "declare i8* @_ZnwjSt11align_val_t(i32, i32)\n"
       "declare i8* @_ZnwjSt11align_val_tRKSt9nothrow_t(i32, i32, %struct*)\n"
       "declare i8* @_Znwm(i64)\n"
+      "declare i8* @_Znwm12__hot_cold_t(i64, i8)\n"
       "declare i8* @_ZnwmRKSt9nothrow_t(i64, %struct*)\n"
+      "declare i8* @_ZnwmRKSt9nothrow_t12__hot_cold_t(i64, %struct*, i8)\n"
       "declare i8* @_ZnwmSt11align_val_t(i64, i64)\n"
+      "declare i8* @_ZnwmSt11align_val_t12__hot_cold_t(i64, i64, i8)\n"
       "declare i8* @_ZnwmSt11align_val_tRKSt9nothrow_t(i64, i64, %struct*)\n"
+      "declare i8* @_ZnwmSt11align_val_tRKSt9nothrow_t12__hot_cold_t(i64, i64, "
+      "%struct*, i8)\n"
+      "declare {i8*, i64} @__size_returning_new(i64)\n"
+      "declare {i8*, i64} @__size_returning_new_hot_cold(i64, i8)\n"
+      "declare {i8*, i64} @__size_returning_new_aligned(i64, i64)\n"
+      "declare {i8*, i64} @__size_returning_new_aligned_hot_cold(i64, i64, "
+      "i8)\n"
 
       "declare void @\"??3@YAXPEAX@Z\"(i8*)\n"
       "declare void @\"??3@YAXPEAXAEBUnothrow_t@std@@@Z\"(i8*, %struct*)\n"
@@ -470,6 +557,14 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare void @__cxa_guard_abort(%struct*)\n"
       "declare i32 @__cxa_guard_acquire(%struct*)\n"
       "declare void @__cxa_guard_release(%struct*)\n"
+      "declare void @__cxa_throw(ptr, ptr, ptr)\n"
+
+      "declare i32 @atexit(void ()*)\n"
+
+      "declare void @abort()\n"
+      "declare void @exit(i32)\n"
+      "declare void @_Exit(i32)\n"
+      "declare void @_ZSt9terminatev()\n"
 
       "declare i32 @__nvvm_reflect(i8*)\n"
 
@@ -480,7 +575,7 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare i8* @__stpncpy_chk(i8*, i8*, i64, i64)\n"
       "declare i8* @__strcpy_chk(i8*, i8*, i64)\n"
       "declare i8* @__strncpy_chk(i8*, i8*, i64, i64)\n"
-      "declare i8* @__memccpy_chk(i8*, i8*, i32, i64)\n"
+      "declare i8* @__memccpy_chk(i8*, i8*, i32, i64, i64)\n"
       "declare i8* @__mempcpy_chk(i8*, i8*, i64, i64)\n"
       "declare i32 @__snprintf_chk(i8*, i64, i32, i64, i8*, ...)\n"
       "declare i32 @__sprintf_chk(i8*, i32, i64, i8*, ...)\n"
@@ -521,7 +616,8 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare i32 @iprintf(i8*, ...)\n"
       "declare i32 @siprintf(i8*, i8*, ...)\n"
 
-      // __small_printf variants have the same prototype as the non-'i' versions.
+      // __small_printf variants have the same prototype as the non-'i'
+      // versions.
       "declare i32 @__small_fprintf(%struct*, i8*, ...)\n"
       "declare i32 @__small_printf(i8*, ...)\n"
       "declare i32 @__small_sprintf(i8*, i8*, ...)\n"
@@ -580,7 +676,16 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
       "declare double @__sinh_finite(double)\n"
       "declare float @__sinhf_finite(float)\n"
       "declare x86_fp80 @__sinhl_finite(x86_fp80)\n"
-      );
+
+      // These functions are aix vec allocation/free routines
+      "declare i8* @vec_calloc(i64, i64)\n"
+      "declare i8* @vec_malloc(i64)\n"
+      "declare i8* @vec_realloc(i8*, i64)\n"
+      "declare void @vec_free(i8*)\n"
+
+      // These functions are OpenMP Offloading allocation / free routines
+      "declare i8* @__kmpc_alloc_shared(i64)\n"
+      "declare void @__kmpc_free_shared(i8*, i64)\n");
 
   for (unsigned FI = 0; FI != LibFunc::NumLibFuncs; ++FI) {
     LibFunc LF = (LibFunc)FI;
@@ -589,4 +694,39 @@ TEST_F(TargetLibraryInfoTest, ValidProto) {
     Function *F = M->getFunction(TLI.getName(LF));
     EXPECT_TRUE(isLibFunc(F, LF));
   }
+}
+
+namespace {
+
+/// Creates TLI for AArch64 and uses it to get the LibFunc names for the given
+/// Instruction opcode and Type.
+class TLITestAarch64 : public ::testing::Test {
+private:
+  const Triple TargetTriple;
+
+protected:
+  LLVMContext Ctx;
+  std::unique_ptr<TargetLibraryInfoImpl> TLII;
+  std::unique_ptr<TargetLibraryInfo> TLI;
+
+  /// Create TLI for AArch64
+  TLITestAarch64() : TargetTriple(Triple("aarch64-unknown-linux-gnu")) {
+    TLII = std::make_unique<TargetLibraryInfoImpl>(
+        TargetLibraryInfoImpl(TargetTriple));
+    TLI = std::make_unique<TargetLibraryInfo>(TargetLibraryInfo(*TLII));
+  }
+
+  /// Returns the TLI function name for the given \p Opcode and type \p Ty.
+  StringRef getScalarName(unsigned int Opcode, Type *Ty) {
+    LibFunc Func;
+    if (!TLI->getLibFunc(Opcode, Ty, Func))
+      return "";
+    return TLI->getName(Func);
+  }
+};
+} // end anonymous namespace
+
+TEST_F(TLITestAarch64, TestFrem) {
+  EXPECT_EQ(getScalarName(Instruction::FRem, Type::getDoubleTy(Ctx)), "fmod");
+  EXPECT_EQ(getScalarName(Instruction::FRem, Type::getFloatTy(Ctx)), "fmodf");
 }

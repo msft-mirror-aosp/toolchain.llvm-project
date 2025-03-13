@@ -15,16 +15,13 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPUINSTRINFO_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUINSTRINFO_H
 
-#include "AMDGPU.h"
 #include "Utils/AMDGPUBaseInfo.h"
-#include "llvm/CodeGen/TargetInstrInfo.h"
 
 namespace llvm {
 
 class GCNSubtarget;
-class MachineFunction;
+class MachineMemOperand;
 class MachineInstr;
-class MachineInstrBuilder;
 
 class AMDGPUInstrInfo {
 public:
@@ -34,6 +31,13 @@ public:
 };
 
 namespace AMDGPU {
+
+/// Return the intrinsic ID for opcodes with the G_AMDGPU_INTRIN_ prefix.
+///
+/// These opcodes have an Intrinsic::ID operand similar to a GIntrinsic. But
+/// they are not actual instances of GIntrinsics, so we cannot use
+/// GIntrinsic::getIntrinsicID() on them.
+Intrinsic::ID getIntrinsicID(const MachineInstr &I);
 
 struct RsrcIntrinsic {
   unsigned Intr;
@@ -53,6 +57,9 @@ struct ImageDimIntrinsicInfo {
   unsigned BaseOpcode;
   MIMGDim Dim;
 
+  uint8_t NumOffsetArgs;
+  uint8_t NumBiasArgs;
+  uint8_t NumZCompareArgs;
   uint8_t NumGradients;
   uint8_t NumDmask;
   uint8_t NumData;
@@ -61,6 +68,9 @@ struct ImageDimIntrinsicInfo {
 
   uint8_t DMaskIndex;
   uint8_t VAddrStart;
+  uint8_t OffsetIndex;
+  uint8_t BiasIndex;
+  uint8_t ZCompareIndex;
   uint8_t GradientStart;
   uint8_t CoordStart;
   uint8_t LodIndex;
@@ -72,13 +82,14 @@ struct ImageDimIntrinsicInfo {
   uint8_t TexFailCtrlIndex;
   uint8_t CachePolicyIndex;
 
+  uint8_t BiasTyArg;
   uint8_t GradientTyArg;
   uint8_t CoordTyArg;
 };
 const ImageDimIntrinsicInfo *getImageDimIntrinsicInfo(unsigned Intr);
 
-const ImageDimIntrinsicInfo *getImageDimInstrinsicByBaseOpcode(unsigned BaseOpcode,
-                                                               unsigned Dim);
+const ImageDimIntrinsicInfo *
+getImageDimIntrinsicByBaseOpcode(unsigned BaseOpcode, unsigned Dim);
 
 } // end AMDGPU namespace
 } // End llvm namespace

@@ -17,20 +17,25 @@
 #include "AArch64MachineFunctionInfo.h"
 #include "AArch64Subtarget.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
+#include "MCTargetDesc/AArch64InstPrinter.h"
 #include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 
+#define GET_CC_REGISTER_LISTS
+#include "AArch64GenCallingConv.inc"
 #define GET_REGINFO_TARGET_DESC
 #include "AArch64GenRegisterInfo.inc"
 
@@ -62,14 +67,6 @@ bool AArch64RegisterInfo::regNeedsCFI(unsigned Reg,
   return true;
 }
 
-bool AArch64RegisterInfo::hasSVEArgsOrReturn(const MachineFunction *MF) {
-  const Function &F = MF->getFunction();
-  return isa<ScalableVectorType>(F.getReturnType()) ||
-         any_of(F.args(), [](const Argument &Arg) {
-           return isa<ScalableVectorType>(Arg.getType());
-         });
-}
-
 const MCPhysReg *
 AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   assert(MF && "Invalid MachineFunction pointer.");
@@ -78,8 +75,13 @@ AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     // GHC set of callee saved regs is empty as all those regs are
     // used for passing STG regs around
     return CSR_AArch64_NoRegs_SaveList;
+  if (MF->getFunction().getCallingConv() == CallingConv::PreserveNone)
+    return CSR_AArch64_NoneRegs_SaveList;
   if (MF->getFunction().getCallingConv() == CallingConv::AnyReg)
     return CSR_AArch64_AllRegs_SaveList;
+
+  if (MF->getFunction().getCallingConv() == CallingConv::ARM64EC_Thunk_X64)
+    return CSR_Win_AArch64_Arm64EC_Thunk_SaveList;
 
   // Darwin has its own CSR_AArch64_AAPCS_SaveList, which means most CSR save
   // lists depending on that will need to have their Darwin variant as well.
@@ -88,24 +90,57 @@ AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
 
   if (MF->getFunction().getCallingConv() == CallingConv::CFGuard_Check)
     return CSR_Win_AArch64_CFGuard_Check_SaveList;
-  if (MF->getSubtarget<AArch64Subtarget>().isTargetWindows())
+  if (MF->getSubtarget<AArch64Subtarget>().isTargetWindows()) {
+    if (MF->getSubtarget<AArch64Subtarget>().getTargetLowering()
+            ->supportSwiftError() &&
+        MF->getFunction().getAttributes().hasAttrSomewhere(
+            Attribute::SwiftError))
+      return CSR_Win_AArch64_AAPCS_SwiftError_SaveList;
+    if (MF->getFunction().getCallingConv() == CallingConv::SwiftTail)
+      return CSR_Win_AArch64_AAPCS_SwiftTail_SaveList;
     return CSR_Win_AArch64_AAPCS_SaveList;
+  }
   if (MF->getFunction().getCallingConv() == CallingConv::AArch64_VectorCall)
     return CSR_AArch64_AAVPCS_SaveList;
   if (MF->getFunction().getCallingConv() == CallingConv::AArch64_SVE_VectorCall)
     return CSR_AArch64_SVE_AAPCS_SaveList;
+  if (MF->getFunction().getCallingConv() ==
+          CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0)
+    report_fatal_error(
+        "Calling convention "
+        "AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0 is only "
+        "supported to improve calls to SME ACLE save/restore/disable-za "
+        "functions, and is not intended to be used beyond that scope.");
+  if (MF->getFunction().getCallingConv() ==
+      CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1)
+    report_fatal_error(
+        "Calling convention "
+        "AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1 is "
+        "only supported to improve calls to SME ACLE __arm_get_current_vg "
+        "function, and is not intended to be used beyond that scope.");
+  if (MF->getFunction().getCallingConv() ==
+          CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2)
+    report_fatal_error(
+        "Calling convention "
+        "AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2 is "
+        "only supported to improve calls to SME ACLE __arm_sme_state "
+        "and is not intended to be used beyond that scope.");
   if (MF->getSubtarget<AArch64Subtarget>().getTargetLowering()
           ->supportSwiftError() &&
       MF->getFunction().getAttributes().hasAttrSomewhere(
           Attribute::SwiftError))
     return CSR_AArch64_AAPCS_SwiftError_SaveList;
+  if (MF->getFunction().getCallingConv() == CallingConv::SwiftTail)
+    return CSR_AArch64_AAPCS_SwiftTail_SaveList;
   if (MF->getFunction().getCallingConv() == CallingConv::PreserveMost)
     return CSR_AArch64_RT_MostRegs_SaveList;
+  if (MF->getFunction().getCallingConv() == CallingConv::PreserveAll)
+    return CSR_AArch64_RT_AllRegs_SaveList;
   if (MF->getFunction().getCallingConv() == CallingConv::Win64)
     // This is for OSes other than Windows; Windows is a separate case further
     // above.
     return CSR_AArch64_AAPCS_X18_SaveList;
-  if (hasSVEArgsOrReturn(MF))
+  if (MF->getInfo<AArch64FunctionInfo>()->isSVECC())
     return CSR_AArch64_SVE_AAPCS_SaveList;
   return CSR_AArch64_AAPCS_SaveList;
 }
@@ -124,6 +159,27 @@ AArch64RegisterInfo::getDarwinCalleeSavedRegs(const MachineFunction *MF) const {
   if (MF->getFunction().getCallingConv() == CallingConv::AArch64_SVE_VectorCall)
     report_fatal_error(
         "Calling convention SVE_VectorCall is unsupported on Darwin.");
+  if (MF->getFunction().getCallingConv() ==
+          CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0)
+    report_fatal_error(
+        "Calling convention "
+        "AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0 is "
+        "only supported to improve calls to SME ACLE save/restore/disable-za "
+        "functions, and is not intended to be used beyond that scope.");
+  if (MF->getFunction().getCallingConv() ==
+      CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1)
+    report_fatal_error(
+        "Calling convention "
+        "AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1 is "
+        "only supported to improve calls to SME ACLE __arm_get_current_vg "
+        "function, and is not intended to be used beyond that scope.");
+  if (MF->getFunction().getCallingConv() ==
+          CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2)
+    report_fatal_error(
+        "Calling convention "
+        "AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2 is "
+        "only supported to improve calls to SME ACLE __arm_sme_state "
+        "and is not intended to be used beyond that scope.");
   if (MF->getFunction().getCallingConv() == CallingConv::CXX_FAST_TLS)
     return MF->getInfo<AArch64FunctionInfo>()->isSplitCSR()
                ? CSR_Darwin_AArch64_CXX_TLS_PE_SaveList
@@ -133,8 +189,16 @@ AArch64RegisterInfo::getDarwinCalleeSavedRegs(const MachineFunction *MF) const {
       MF->getFunction().getAttributes().hasAttrSomewhere(
           Attribute::SwiftError))
     return CSR_Darwin_AArch64_AAPCS_SwiftError_SaveList;
+  if (MF->getFunction().getCallingConv() == CallingConv::SwiftTail)
+    return CSR_Darwin_AArch64_AAPCS_SwiftTail_SaveList;
   if (MF->getFunction().getCallingConv() == CallingConv::PreserveMost)
     return CSR_Darwin_AArch64_RT_MostRegs_SaveList;
+  if (MF->getFunction().getCallingConv() == CallingConv::PreserveAll)
+    return CSR_Darwin_AArch64_RT_AllRegs_SaveList;
+  if (MF->getFunction().getCallingConv() == CallingConv::Win64)
+    return CSR_Darwin_AArch64_AAPCS_Win64_SaveList;
+  if (MF->getInfo<AArch64FunctionInfo>()->isSVECC())
+    return CSR_Darwin_AArch64_SVE_AAPCS_SaveList;
   return CSR_Darwin_AArch64_AAPCS_SaveList;
 }
 
@@ -188,8 +252,13 @@ AArch64RegisterInfo::getDarwinCallPreservedMask(const MachineFunction &MF,
   if (CC == CallingConv::AArch64_VectorCall)
     return CSR_Darwin_AArch64_AAVPCS_RegMask;
   if (CC == CallingConv::AArch64_SVE_VectorCall)
-    report_fatal_error(
-        "Calling convention SVE_VectorCall is unsupported on Darwin.");
+    return CSR_Darwin_AArch64_SVE_AAPCS_RegMask;
+  if (CC == CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0)
+    return CSR_AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0_RegMask;
+  if (CC == CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1)
+    return CSR_AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1_RegMask;
+  if (CC == CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2)
+    return CSR_AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2_RegMask;
   if (CC == CallingConv::CFGuard_Check)
     report_fatal_error(
         "Calling convention CFGuard_Check is unsupported on Darwin.");
@@ -198,8 +267,12 @@ AArch64RegisterInfo::getDarwinCallPreservedMask(const MachineFunction &MF,
           ->supportSwiftError() &&
       MF.getFunction().getAttributes().hasAttrSomewhere(Attribute::SwiftError))
     return CSR_Darwin_AArch64_AAPCS_SwiftError_RegMask;
+  if (CC == CallingConv::SwiftTail)
+    return CSR_Darwin_AArch64_AAPCS_SwiftTail_RegMask;
   if (CC == CallingConv::PreserveMost)
     return CSR_Darwin_AArch64_RT_MostRegs_RegMask;
+  if (CC == CallingConv::PreserveAll)
+    return CSR_Darwin_AArch64_RT_AllRegs_RegMask;
   return CSR_Darwin_AArch64_AAPCS_RegMask;
 }
 
@@ -210,6 +283,9 @@ AArch64RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   if (CC == CallingConv::GHC)
     // This is academic because all GHC calls are (supposed to be) tail calls
     return SCS ? CSR_AArch64_NoRegs_SCS_RegMask : CSR_AArch64_NoRegs_RegMask;
+  if (CC == CallingConv::PreserveNone)
+    return SCS ? CSR_AArch64_NoneRegs_SCS_RegMask
+               : CSR_AArch64_NoneRegs_RegMask;
   if (CC == CallingConv::AnyReg)
     return SCS ? CSR_AArch64_AllRegs_SCS_RegMask : CSR_AArch64_AllRegs_RegMask;
 
@@ -225,6 +301,12 @@ AArch64RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   if (CC == CallingConv::AArch64_SVE_VectorCall)
     return SCS ? CSR_AArch64_SVE_AAPCS_SCS_RegMask
                : CSR_AArch64_SVE_AAPCS_RegMask;
+  if (CC == CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0)
+    return CSR_AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0_RegMask;
+  if (CC == CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1)
+    return CSR_AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1_RegMask;
+  if (CC == CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2)
+    return CSR_AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2_RegMask;
   if (CC == CallingConv::CFGuard_Check)
     return CSR_Win_AArch64_CFGuard_Check_RegMask;
   if (MF.getSubtarget<AArch64Subtarget>().getTargetLowering()
@@ -232,11 +314,19 @@ AArch64RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
       MF.getFunction().getAttributes().hasAttrSomewhere(Attribute::SwiftError))
     return SCS ? CSR_AArch64_AAPCS_SwiftError_SCS_RegMask
                : CSR_AArch64_AAPCS_SwiftError_RegMask;
+  if (CC == CallingConv::SwiftTail) {
+    if (SCS)
+      report_fatal_error("ShadowCallStack attribute not supported with swifttail");
+    return CSR_AArch64_AAPCS_SwiftTail_RegMask;
+  }
   if (CC == CallingConv::PreserveMost)
     return SCS ? CSR_AArch64_RT_MostRegs_SCS_RegMask
                : CSR_AArch64_RT_MostRegs_RegMask;
-  else
-    return SCS ? CSR_AArch64_AAPCS_SCS_RegMask : CSR_AArch64_AAPCS_RegMask;
+  if (CC == CallingConv::PreserveAll)
+    return SCS ? CSR_AArch64_RT_AllRegs_SCS_RegMask
+               : CSR_AArch64_RT_AllRegs_RegMask;
+
+  return SCS ? CSR_AArch64_AAPCS_SCS_RegMask : CSR_AArch64_AAPCS_RegMask;
 }
 
 const uint32_t *AArch64RegisterInfo::getCustomEHPadPreservedMask(
@@ -263,16 +353,24 @@ void AArch64RegisterInfo::UpdateCustomCallPreservedMask(MachineFunction &MF,
 
   for (size_t i = 0; i < AArch64::GPR64commonRegClass.getNumRegs(); ++i) {
     if (MF.getSubtarget<AArch64Subtarget>().isXRegCustomCalleeSaved(i)) {
-      for (MCSubRegIterator SubReg(AArch64::GPR64commonRegClass.getRegister(i),
-                                   this, true);
-           SubReg.isValid(); ++SubReg) {
+      for (MCPhysReg SubReg :
+           subregs_inclusive(AArch64::GPR64commonRegClass.getRegister(i))) {
         // See TargetRegisterInfo::getCallPreservedMask for how to interpret the
         // register mask.
-        UpdatedMask[*SubReg / 32] |= 1u << (*SubReg % 32);
+        UpdatedMask[SubReg / 32] |= 1u << (SubReg % 32);
       }
     }
   }
   *Mask = UpdatedMask;
+}
+
+const uint32_t *AArch64RegisterInfo::getSMStartStopCallPreservedMask() const {
+  return CSR_AArch64_SMStartStop_RegMask;
+}
+
+const uint32_t *
+AArch64RegisterInfo::SMEABISupportRoutinesCallPreservedMaskFromX0() const {
+  return CSR_AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0_RegMask;
 }
 
 const uint32_t *AArch64RegisterInfo::getNoPreservedMask() const {
@@ -299,8 +397,35 @@ const uint32_t *AArch64RegisterInfo::getWindowsStackProbePreservedMask() const {
   return CSR_AArch64_StackProbe_Windows_RegMask;
 }
 
+std::optional<std::string>
+AArch64RegisterInfo::explainReservedReg(const MachineFunction &MF,
+                                        MCRegister PhysReg) const {
+  if (hasBasePointer(MF) && MCRegisterInfo::regsOverlap(PhysReg, AArch64::X19))
+    return std::string("X19 is used as the frame base pointer register.");
+
+  if (MF.getSubtarget<AArch64Subtarget>().isWindowsArm64EC()) {
+    bool warn = false;
+    if (MCRegisterInfo::regsOverlap(PhysReg, AArch64::X13) ||
+        MCRegisterInfo::regsOverlap(PhysReg, AArch64::X14) ||
+        MCRegisterInfo::regsOverlap(PhysReg, AArch64::X23) ||
+        MCRegisterInfo::regsOverlap(PhysReg, AArch64::X24) ||
+        MCRegisterInfo::regsOverlap(PhysReg, AArch64::X28))
+      warn = true;
+
+    for (unsigned i = AArch64::B16; i <= AArch64::B31; ++i)
+      if (MCRegisterInfo::regsOverlap(PhysReg, i))
+        warn = true;
+
+    if (warn)
+      return std::string(AArch64InstPrinter::getRegisterName(PhysReg)) +
+             " is clobbered by asynchronous signals when using Arm64EC.";
+  }
+
+  return {};
+}
+
 BitVector
-AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
   const AArch64FrameLowering *TFI = getFrameLowering(MF);
 
   // FIXME: avoid re-calculating this every time.
@@ -310,6 +435,18 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
 
   if (TFI->hasFP(MF) || TT.isOSDarwin())
     markSuperRegs(Reserved, AArch64::W29);
+
+  if (MF.getSubtarget<AArch64Subtarget>().isWindowsArm64EC()) {
+    // x13, x14, x23, x24, x28, and v16-v31 are clobbered by asynchronous
+    // signals, so we can't ever use them.
+    markSuperRegs(Reserved, AArch64::W13);
+    markSuperRegs(Reserved, AArch64::W14);
+    markSuperRegs(Reserved, AArch64::W23);
+    markSuperRegs(Reserved, AArch64::W24);
+    markSuperRegs(Reserved, AArch64::W28);
+    for (unsigned i = AArch64::B16; i <= AArch64::B31; ++i)
+      markSuperRegs(Reserved, i);
+  }
 
   for (size_t i = 0; i < AArch64::GPR32commonRegClass.getNumRegs(); ++i) {
     if (MF.getSubtarget<AArch64Subtarget>().isXRegisterReserved(i))
@@ -323,7 +460,89 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   if (MF.getFunction().hasFnAttribute(Attribute::SpeculativeLoadHardening))
     markSuperRegs(Reserved, AArch64::W16);
 
+  // FFR is modelled as global state that cannot be allocated.
+  if (MF.getSubtarget<AArch64Subtarget>().hasSVE())
+    Reserved.set(AArch64::FFR);
+
+  // SME tiles are not allocatable.
+  if (MF.getSubtarget<AArch64Subtarget>().hasSME()) {
+    for (MCPhysReg SubReg : subregs_inclusive(AArch64::ZA))
+      Reserved.set(SubReg);
+  }
+
+  // VG cannot be allocated
+  Reserved.set(AArch64::VG);
+
+  if (MF.getSubtarget<AArch64Subtarget>().hasSME2()) {
+    for (MCSubRegIterator SubReg(AArch64::ZT0, this, /*self=*/true);
+         SubReg.isValid(); ++SubReg)
+      Reserved.set(*SubReg);
+  }
+
+  markSuperRegs(Reserved, AArch64::FPCR);
+  markSuperRegs(Reserved, AArch64::FPMR);
+  markSuperRegs(Reserved, AArch64::FPSR);
+
+  if (MF.getFunction().getCallingConv() == CallingConv::GRAAL) {
+    markSuperRegs(Reserved, AArch64::X27);
+    markSuperRegs(Reserved, AArch64::X28);
+    markSuperRegs(Reserved, AArch64::W27);
+    markSuperRegs(Reserved, AArch64::W28);
+  }
+
   assert(checkAllSuperRegsMarked(Reserved));
+
+  // Add _HI registers after checkAllSuperRegsMarked as this check otherwise
+  // becomes considerably more expensive.
+  Reserved.set(AArch64::WSP_HI);
+  Reserved.set(AArch64::WZR_HI);
+  static_assert(AArch64::W30_HI - AArch64::W0_HI == 30,
+                "Unexpected order of registers");
+  Reserved.set(AArch64::W0_HI, AArch64::W30_HI);
+  static_assert(AArch64::B31_HI - AArch64::B0_HI == 31,
+                "Unexpected order of registers");
+  Reserved.set(AArch64::B0_HI, AArch64::B31_HI);
+  static_assert(AArch64::H31_HI - AArch64::H0_HI == 31,
+                "Unexpected order of registers");
+  Reserved.set(AArch64::H0_HI, AArch64::H31_HI);
+  static_assert(AArch64::S31_HI - AArch64::S0_HI == 31,
+                "Unexpected order of registers");
+  Reserved.set(AArch64::S0_HI, AArch64::S31_HI);
+  static_assert(AArch64::D31_HI - AArch64::D0_HI == 31,
+                "Unexpected order of registers");
+  Reserved.set(AArch64::D0_HI, AArch64::D31_HI);
+  static_assert(AArch64::Q31_HI - AArch64::Q0_HI == 31,
+                "Unexpected order of registers");
+  Reserved.set(AArch64::Q0_HI, AArch64::Q31_HI);
+
+  return Reserved;
+}
+
+BitVector
+AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+  BitVector Reserved(getNumRegs());
+  for (size_t i = 0; i < AArch64::GPR32commonRegClass.getNumRegs(); ++i) {
+    if (MF.getSubtarget<AArch64Subtarget>().isXRegisterReservedForRA(i))
+      markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(i));
+  }
+
+  if (MF.getSubtarget<AArch64Subtarget>().isLRReservedForRA()) {
+    // In order to prevent the register allocator from using LR, we need to
+    // mark it as reserved. However we don't want to keep it reserved throughout
+    // the pipeline since it prevents other infrastructure from reasoning about
+    // it's liveness. We use the NoVRegs property instead of IsSSA because
+    // IsSSA is removed before VirtRegRewriter runs.
+    if (!MF.getProperties().hasProperty(
+            MachineFunctionProperties::Property::NoVRegs))
+      markSuperRegs(Reserved, AArch64::LR);
+  }
+
+  assert(checkAllSuperRegsMarked(Reserved));
+
+  // Handle strictlyReservedRegs separately to avoid re-evaluating the assert,
+  // which becomes considerably expensive when considering the _HI registers.
+  Reserved |= getStrictlyReservedRegs(MF);
+
   return Reserved;
 }
 
@@ -332,10 +551,15 @@ bool AArch64RegisterInfo::isReservedReg(const MachineFunction &MF,
   return getReservedRegs(MF)[Reg];
 }
 
+bool AArch64RegisterInfo::isStrictlyReservedReg(const MachineFunction &MF,
+                                                MCRegister Reg) const {
+  return getStrictlyReservedRegs(MF)[Reg];
+}
+
 bool AArch64RegisterInfo::isAnyArgRegReserved(const MachineFunction &MF) const {
-  return std::any_of(std::begin(*AArch64::GPR64argRegClass.MC),
-                     std::end(*AArch64::GPR64argRegClass.MC),
-                     [this, &MF](MCPhysReg r){return isReservedReg(MF, r);});
+  return llvm::any_of(*AArch64::GPR64argRegClass.MC, [this, &MF](MCPhysReg r) {
+    return isStrictlyReservedReg(MF, r);
+  });
 }
 
 void AArch64RegisterInfo::emitReservedArgRegCallError(
@@ -347,11 +571,18 @@ void AArch64RegisterInfo::emitReservedArgRegCallError(
 
 bool AArch64RegisterInfo::isAsmClobberable(const MachineFunction &MF,
                                           MCRegister PhysReg) const {
-  return !isReservedReg(MF, PhysReg);
-}
+  // SLH uses register X16 as the taint register but it will fallback to a different
+  // method if the user clobbers it. So X16 is not reserved for inline asm but is
+  // for normal codegen.
+  if (MF.getFunction().hasFnAttribute(Attribute::SpeculativeLoadHardening) &&
+        MCRegisterInfo::regsOverlap(PhysReg, AArch64::X16))
+    return true;
 
-bool AArch64RegisterInfo::isConstantPhysReg(MCRegister PhysReg) const {
-  return PhysReg == AArch64::WZR || PhysReg == AArch64::XZR;
+  // ZA/ZT0 registers are reserved but may be permitted in the clobber list.
+  if (PhysReg == AArch64::ZA || PhysReg == AArch64::ZT0)
+    return true;
+
+  return !isReservedReg(MF, PhysReg);
 }
 
 const TargetRegisterClass *
@@ -381,10 +612,11 @@ bool AArch64RegisterInfo::hasBasePointer(const MachineFunction &MF) const {
   // stack needs to be dynamically re-aligned, the base pointer is the only
   // reliable way to reference the locals.
   if (MFI.hasVarSizedObjects() || MF.hasEHFunclets()) {
-    if (needsStackRealignment(MF))
+    if (hasStackRealignment(MF))
       return true;
 
-    if (MF.getSubtarget<AArch64Subtarget>().hasSVE()) {
+    auto &ST = MF.getSubtarget<AArch64Subtarget>();
+    if (ST.hasSVE() || ST.isStreaming()) {
       const AArch64FunctionInfo *AFI = MF.getInfo<AArch64FunctionInfo>();
       // Frames that have variable sized objects and scalable SVE objects,
       // should always use a basepointer.
@@ -403,6 +635,86 @@ bool AArch64RegisterInfo::hasBasePointer(const MachineFunction &MF) const {
   }
 
   return false;
+}
+
+bool AArch64RegisterInfo::isArgumentRegister(const MachineFunction &MF,
+                                             MCRegister Reg) const {
+  CallingConv::ID CC = MF.getFunction().getCallingConv();
+  const AArch64Subtarget &STI = MF.getSubtarget<AArch64Subtarget>();
+  bool IsVarArg = STI.isCallingConvWin64(MF.getFunction().getCallingConv(),
+                                         MF.getFunction().isVarArg());
+
+  auto HasReg = [](ArrayRef<MCRegister> RegList, MCRegister Reg) {
+    return llvm::is_contained(RegList, Reg);
+  };
+
+  switch (CC) {
+  default:
+    report_fatal_error("Unsupported calling convention.");
+  case CallingConv::GHC:
+    return HasReg(CC_AArch64_GHC_ArgRegs, Reg);
+  case CallingConv::PreserveNone:
+    if (!MF.getFunction().isVarArg())
+      return HasReg(CC_AArch64_Preserve_None_ArgRegs, Reg);
+    [[fallthrough]];
+  case CallingConv::C:
+  case CallingConv::Fast:
+  case CallingConv::PreserveMost:
+  case CallingConv::PreserveAll:
+  case CallingConv::CXX_FAST_TLS:
+  case CallingConv::Swift:
+  case CallingConv::SwiftTail:
+  case CallingConv::Tail:
+    if (STI.isTargetWindows()) {
+      if (IsVarArg)
+        return HasReg(CC_AArch64_Win64_VarArg_ArgRegs, Reg);
+      switch (CC) {
+      default:
+        return HasReg(CC_AArch64_Win64PCS_ArgRegs, Reg);
+      case CallingConv::Swift:
+      case CallingConv::SwiftTail:
+        return HasReg(CC_AArch64_Win64PCS_Swift_ArgRegs, Reg) ||
+               HasReg(CC_AArch64_Win64PCS_ArgRegs, Reg);
+      }
+    }
+    if (!STI.isTargetDarwin()) {
+      switch (CC) {
+      default:
+        return HasReg(CC_AArch64_AAPCS_ArgRegs, Reg);
+      case CallingConv::Swift:
+      case CallingConv::SwiftTail:
+        return HasReg(CC_AArch64_AAPCS_ArgRegs, Reg) ||
+               HasReg(CC_AArch64_AAPCS_Swift_ArgRegs, Reg);
+      }
+    }
+    if (!IsVarArg) {
+      switch (CC) {
+      default:
+        return HasReg(CC_AArch64_DarwinPCS_ArgRegs, Reg);
+      case CallingConv::Swift:
+      case CallingConv::SwiftTail:
+        return HasReg(CC_AArch64_DarwinPCS_ArgRegs, Reg) ||
+               HasReg(CC_AArch64_DarwinPCS_Swift_ArgRegs, Reg);
+      }
+    }
+    if (STI.isTargetILP32())
+      return HasReg(CC_AArch64_DarwinPCS_ILP32_VarArg_ArgRegs, Reg);
+    return HasReg(CC_AArch64_DarwinPCS_VarArg_ArgRegs, Reg);
+  case CallingConv::Win64:
+    if (IsVarArg)
+      HasReg(CC_AArch64_Win64_VarArg_ArgRegs, Reg);
+    return HasReg(CC_AArch64_Win64PCS_ArgRegs, Reg);
+  case CallingConv::CFGuard_Check:
+    return HasReg(CC_AArch64_Win64_CFGuard_Check_ArgRegs, Reg);
+  case CallingConv::AArch64_VectorCall:
+  case CallingConv::AArch64_SVE_VectorCall:
+  case CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X0:
+  case CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X1:
+  case CallingConv::AArch64_SME_ABI_Support_Routines_PreserveMost_From_X2:
+    if (STI.isTargetWindows())
+      return HasReg(CC_AArch64_Win64PCS_ArgRegs, Reg);
+    return HasReg(CC_AArch64_AAPCS_ArgRegs, Reg);
+  }
 }
 
 Register
@@ -436,7 +748,7 @@ AArch64RegisterInfo::useFPForScavengingIndex(const MachineFunction &MF) const {
   assert((!MF.getSubtarget<AArch64Subtarget>().hasSVE() ||
           AFI->hasCalculatedStackSizeSVE()) &&
          "Expected SVE area to be calculated by this point");
-  return TFI.hasFP(MF) && !needsStackRealignment(MF) && !AFI->getStackSizeSVE();
+  return TFI.hasFP(MF) && !hasStackRealignment(MF) && !AFI->getStackSizeSVE();
 }
 
 bool AArch64RegisterInfo::requiresFrameIndexScavenging(
@@ -530,10 +842,10 @@ bool AArch64RegisterInfo::isFrameOffsetLegal(const MachineInstr *MI,
 
 /// Insert defining instruction(s) for BaseReg to be a pointer to FrameIdx
 /// at the beginning of the basic block.
-void AArch64RegisterInfo::materializeFrameBaseRegister(MachineBasicBlock *MBB,
-                                                       Register BaseReg,
-                                                       int FrameIdx,
-                                                       int64_t Offset) const {
+Register
+AArch64RegisterInfo::materializeFrameBaseRegister(MachineBasicBlock *MBB,
+                                                  int FrameIdx,
+                                                  int64_t Offset) const {
   MachineBasicBlock::iterator Ins = MBB->begin();
   DebugLoc DL; // Defaults to "unknown"
   if (Ins != MBB->end())
@@ -543,6 +855,7 @@ void AArch64RegisterInfo::materializeFrameBaseRegister(MachineBasicBlock *MBB,
       MF.getSubtarget<AArch64Subtarget>().getInstrInfo();
   const MCInstrDesc &MCID = TII->get(AArch64::ADDXri);
   MachineRegisterInfo &MRI = MBB->getParent()->getRegInfo();
+  Register BaseReg = MRI.createVirtualRegister(&AArch64::GPR64spRegClass);
   MRI.constrainRegClass(BaseReg, TII->getRegClass(MCID, 0, this, MF));
   unsigned Shifter = AArch64_AM::getShifterImm(AArch64_AM::LSL, 0);
 
@@ -550,6 +863,8 @@ void AArch64RegisterInfo::materializeFrameBaseRegister(MachineBasicBlock *MBB,
       .addFrameIndex(FrameIdx)
       .addImm(Offset)
       .addImm(Shifter);
+
+  return BaseReg;
 }
 
 void AArch64RegisterInfo::resolveFrameIndex(MachineInstr &MI, Register BaseReg,
@@ -558,11 +873,11 @@ void AArch64RegisterInfo::resolveFrameIndex(MachineInstr &MI, Register BaseReg,
   StackOffset Off = StackOffset::getFixed(Offset);
 
   unsigned i = 0;
-
   while (!MI.getOperand(i).isFI()) {
     ++i;
     assert(i < MI.getNumOperands() && "Instr doesn't have FrameIndex operand!");
   }
+
   const MachineFunction *MF = MI.getParent()->getParent();
   const AArch64InstrInfo *TII =
       MF->getSubtarget<AArch64Subtarget>().getInstrInfo();
@@ -573,26 +888,61 @@ void AArch64RegisterInfo::resolveFrameIndex(MachineInstr &MI, Register BaseReg,
 
 // Create a scratch register for the frame index elimination in an instruction.
 // This function has special handling of stack tagging loop pseudos, in which
-// case it can also change the instruction opcode (but not the operands).
+// case it can also change the instruction opcode.
 static Register
-createScratchRegisterForInstruction(MachineInstr &MI,
+createScratchRegisterForInstruction(MachineInstr &MI, unsigned FIOperandNum,
                                     const AArch64InstrInfo *TII) {
   // ST*Gloop have a reserved scratch register in operand 1. Use it, and also
   // replace the instruction with the writeback variant because it will now
   // satisfy the operand constraints for it.
-  if (MI.getOpcode() == AArch64::STGloop) {
-    MI.setDesc(TII->get(AArch64::STGloop_wback));
-    return MI.getOperand(1).getReg();
-  } else if (MI.getOpcode() == AArch64::STZGloop) {
-    MI.setDesc(TII->get(AArch64::STZGloop_wback));
-    return MI.getOperand(1).getReg();
+  Register ScratchReg;
+  if (MI.getOpcode() == AArch64::STGloop ||
+      MI.getOpcode() == AArch64::STZGloop) {
+    assert(FIOperandNum == 3 &&
+           "Wrong frame index operand for STGloop/STZGloop");
+    unsigned Op = MI.getOpcode() == AArch64::STGloop ? AArch64::STGloop_wback
+                                                     : AArch64::STZGloop_wback;
+    ScratchReg = MI.getOperand(1).getReg();
+    MI.getOperand(3).ChangeToRegister(ScratchReg, false, false, true);
+    MI.setDesc(TII->get(Op));
+    MI.tieOperands(1, 3);
   } else {
-    return MI.getMF()->getRegInfo().createVirtualRegister(
-        &AArch64::GPR64RegClass);
+    ScratchReg =
+        MI.getMF()->getRegInfo().createVirtualRegister(&AArch64::GPR64RegClass);
+    MI.getOperand(FIOperandNum)
+        .ChangeToRegister(ScratchReg, false, false, true);
+  }
+  return ScratchReg;
+}
+
+void AArch64RegisterInfo::getOffsetOpcodes(
+    const StackOffset &Offset, SmallVectorImpl<uint64_t> &Ops) const {
+  // The smallest scalable element supported by scaled SVE addressing
+  // modes are predicates, which are 2 scalable bytes in size. So the scalable
+  // byte offset must always be a multiple of 2.
+  assert(Offset.getScalable() % 2 == 0 && "Invalid frame offset");
+
+  // Add fixed-sized offset using existing DIExpression interface.
+  DIExpression::appendOffset(Ops, Offset.getFixed());
+
+  unsigned VG = getDwarfRegNum(AArch64::VG, true);
+  int64_t VGSized = Offset.getScalable() / 2;
+  if (VGSized > 0) {
+    Ops.push_back(dwarf::DW_OP_constu);
+    Ops.push_back(VGSized);
+    Ops.append({dwarf::DW_OP_bregx, VG, 0ULL});
+    Ops.push_back(dwarf::DW_OP_mul);
+    Ops.push_back(dwarf::DW_OP_plus);
+  } else if (VGSized < 0) {
+    Ops.push_back(dwarf::DW_OP_constu);
+    Ops.push_back(-VGSized);
+    Ops.append({dwarf::DW_OP_bregx, VG, 0ULL});
+    Ops.push_back(dwarf::DW_OP_mul);
+    Ops.push_back(dwarf::DW_OP_minus);
   }
 }
 
-void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
+bool AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                               int SPAdj, unsigned FIOperandNum,
                                               RegScavenger *RS) const {
   assert(SPAdj == 0 && "Unexpected");
@@ -604,14 +954,13 @@ void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   const AArch64InstrInfo *TII =
       MF.getSubtarget<AArch64Subtarget>().getInstrInfo();
   const AArch64FrameLowering *TFI = getFrameLowering(MF);
-
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
   bool Tagged =
       MI.getOperand(FIOperandNum).getTargetFlags() & AArch64II::MO_TAGGED;
   Register FrameReg;
 
   // Special handling of dbg_value, stackmap patchpoint statepoint instructions.
-  if (MI.isDebugValue() || MI.getOpcode() == TargetOpcode::STACKMAP ||
+  if (MI.getOpcode() == TargetOpcode::STACKMAP ||
       MI.getOpcode() == TargetOpcode::PATCHPOINT ||
       MI.getOpcode() == TargetOpcode::STATEPOINT) {
     StackOffset Offset =
@@ -621,7 +970,7 @@ void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     Offset += StackOffset::getFixed(MI.getOperand(FIOperandNum + 1).getImm());
     MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, false /*isDef*/);
     MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset.getFixed());
-    return;
+    return false;
   }
 
   if (MI.getOpcode() == TargetOpcode::LOCAL_ESCAPE) {
@@ -630,7 +979,7 @@ void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     assert(!Offset.getScalable() &&
            "Frame offsets with a scalable component are not supported");
     FI.ChangeToImmediate(Offset.getFixed());
-    return;
+    return false;
   }
 
   StackOffset Offset;
@@ -660,7 +1009,7 @@ void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
           .addImm(0);
       MI.getOperand(FIOperandNum)
           .ChangeToRegister(ScratchReg, false, false, true);
-      return;
+      return false;
     }
     FrameReg = AArch64::SP;
     Offset = StackOffset::getFixed(MFI.getObjectOffset(FrameIndex) +
@@ -672,7 +1021,7 @@ void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
 
   // Modify MI as necessary to handle as much of 'Offset' as possible
   if (rewriteAArch64FrameIndex(MI, FIOperandNum, FrameReg, Offset, TII))
-    return;
+    return true;
 
   assert((!RS || !RS->isScavengingFrameIndex(FrameIndex)) &&
          "Emergency spill slot is out of reach");
@@ -680,9 +1029,10 @@ void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // If we get here, the immediate doesn't fit into the instruction.  We folded
   // as much as possible above.  Handle the rest, providing a register that is
   // SP+LargeImm.
-  Register ScratchReg = createScratchRegisterForInstruction(MI, TII);
+  Register ScratchReg =
+      createScratchRegisterForInstruction(MI, FIOperandNum, TII);
   emitFrameOffset(MBB, II, MI.getDebugLoc(), ScratchReg, FrameReg, Offset, TII);
-  MI.getOperand(FIOperandNum).ChangeToRegister(ScratchReg, false, false, true);
+  return false;
 }
 
 unsigned AArch64RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
@@ -711,6 +1061,10 @@ unsigned AArch64RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
   case AArch64::FPR128RegClassID:
     return 32;
 
+  case AArch64::MatrixIndexGPR32_8_11RegClassID:
+  case AArch64::MatrixIndexGPR32_12_15RegClassID:
+    return 4;
+
   case AArch64::DDRegClassID:
   case AArch64::DDDRegClassID:
   case AArch64::DDDDRegClassID:
@@ -723,7 +1077,196 @@ unsigned AArch64RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
   case AArch64::FPR64_loRegClassID:
   case AArch64::FPR16_loRegClassID:
     return 16;
+  case AArch64::FPR128_0to7RegClassID:
+    return 8;
   }
+}
+
+// FORM_TRANSPOSED_REG_TUPLE nodes are created to improve register allocation
+// where a consecutive multi-vector tuple is constructed from the same indices
+// of multiple strided loads. This may still result in unnecessary copies
+// between the loads and the tuple. Here we try to return a hint to assign the
+// contiguous ZPRMulReg starting at the same register as the first operand of
+// the pseudo, which should be a subregister of the first strided load.
+//
+// For example, if the first strided load has been assigned $z16_z20_z24_z28
+// and the operands of the pseudo are each accessing subregister zsub2, we
+// should look through through Order to find a contiguous register which
+// begins with $z24 (i.e. $z24_z25_z26_z27).
+//
+bool AArch64RegisterInfo::getRegAllocationHints(
+    Register VirtReg, ArrayRef<MCPhysReg> Order,
+    SmallVectorImpl<MCPhysReg> &Hints, const MachineFunction &MF,
+    const VirtRegMap *VRM, const LiveRegMatrix *Matrix) const {
+
+  auto &ST = MF.getSubtarget<AArch64Subtarget>();
+  if (!ST.hasSME() || !ST.isStreaming())
+    return TargetRegisterInfo::getRegAllocationHints(VirtReg, Order, Hints, MF,
+                                                     VRM);
+
+  // The SVE calling convention preserves registers Z8-Z23. As a result, there
+  // are no ZPR2Strided or ZPR4Strided registers that do not overlap with the
+  // callee-saved registers and so by default these will be pushed to the back
+  // of the allocation order for the ZPRStridedOrContiguous classes.
+  // If any of the instructions which define VirtReg are used by the
+  // FORM_TRANSPOSED_REG_TUPLE pseudo, we want to favour reducing copy
+  // instructions over reducing the number of clobbered callee-save registers,
+  // so we add the strided registers as a hint.
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  unsigned RegID = MRI.getRegClass(VirtReg)->getID();
+  if (RegID == AArch64::ZPR2StridedOrContiguousRegClassID ||
+      RegID == AArch64::ZPR4StridedOrContiguousRegClassID) {
+
+    // Look through uses of the register for FORM_TRANSPOSED_REG_TUPLE.
+    for (const MachineInstr &Use : MRI.use_nodbg_instructions(VirtReg)) {
+      if (Use.getOpcode() != AArch64::FORM_TRANSPOSED_REG_TUPLE_X2_PSEUDO &&
+          Use.getOpcode() != AArch64::FORM_TRANSPOSED_REG_TUPLE_X4_PSEUDO)
+        continue;
+
+      unsigned UseOps = Use.getNumOperands() - 1;
+      const TargetRegisterClass *StridedRC;
+      switch (RegID) {
+      case AArch64::ZPR2StridedOrContiguousRegClassID:
+        StridedRC = &AArch64::ZPR2StridedRegClass;
+        break;
+      case AArch64::ZPR4StridedOrContiguousRegClassID:
+        StridedRC = &AArch64::ZPR4StridedRegClass;
+        break;
+      default:
+        llvm_unreachable("Unexpected RegID");
+      }
+
+      SmallVector<MCPhysReg, 4> StridedOrder;
+      for (MCPhysReg Reg : Order)
+        if (StridedRC->contains(Reg))
+          StridedOrder.push_back(Reg);
+
+      int OpIdx = Use.findRegisterUseOperandIdx(VirtReg, this);
+      assert(OpIdx != -1 && "Expected operand index from register use.");
+
+      unsigned TupleID = MRI.getRegClass(Use.getOperand(0).getReg())->getID();
+      bool IsMulZPR = TupleID == AArch64::ZPR2Mul2RegClassID ||
+                      TupleID == AArch64::ZPR4Mul4RegClassID;
+
+      const MachineOperand *AssignedRegOp = llvm::find_if(
+          make_range(Use.operands_begin() + 1, Use.operands_end()),
+          [&VRM](const MachineOperand &Op) {
+            return VRM->hasPhys(Op.getReg());
+          });
+
+      // Example:
+      //
+      // When trying to find a suitable register allocation for VirtReg %v2 in:
+      //
+      //  %v0:zpr2stridedorcontiguous = ld1 p0/z, [...]
+      //  %v1:zpr2stridedorcontiguous = ld1 p0/z, [...]
+      //  %v2:zpr2stridedorcontiguous = ld1 p0/z, [...]
+      //  %v3:zpr2stridedorcontiguous = ld1 p0/z, [...]
+      //  %v4:zpr4mul4 = FORM_TRANSPOSED_X4 %v0:0, %v1:0, %v2:0, %v3:0
+      //
+      // One such suitable allocation would be:
+      //
+      //  { z0, z8 }  = ld1 p0/z, [...]
+      //  { z1, z9 }  = ld1 p0/z, [...]
+      //  { z2, z10 } = ld1 p0/z, [...]
+      //  { z3, z11 } = ld1 p0/z, [...]
+      //  { z0, z1, z2, z3 } =
+      //     FORM_TRANSPOSED_X4 {z0, z8}:0, {z1, z9}:0, {z2, z10}:0, {z3, z11}:0
+      //
+      // Below we distinguish two cases when trying to find a register:
+      // * None of the registers used by FORM_TRANSPOSED_X4 have been assigned
+      //   yet. In this case the code muse ensure that there are at least UseOps
+      //   free consecutive registers. If IsMulZPR is true, then the first of
+      //   registers must also be a multiple of UseOps, e.g. { z0, z1, z2, z3 }
+      //   is valid but { z1, z2, z3, z5 } is not.
+      // * One or more of the registers used by FORM_TRANSPOSED_X4 is already
+      //   assigned a physical register, which means only checking that a
+      //   consectutive range of free tuple registers exists which includes
+      //   the assigned register.
+      //   e.g. in the example above, if { z0, z8 } is already allocated for
+      //   %v0, we just need to ensure that { z1, z9 }, { z2, z10 } and
+      //   { z3, z11 } are also free. If so, we add { z2, z10 }.
+
+      if (AssignedRegOp == Use.operands_end()) {
+        // There are no registers already assigned to any of the pseudo
+        // operands. Look for a valid starting register for the group.
+        for (unsigned I = 0; I < StridedOrder.size(); ++I) {
+          MCPhysReg Reg = StridedOrder[I];
+          SmallVector<MCPhysReg> Regs;
+
+          // If the FORM_TRANSPOSE nodes use the ZPRMul classes, the starting
+          // register of the first load should be a multiple of 2 or 4.
+          unsigned SubRegIdx = Use.getOperand(OpIdx).getSubReg();
+          if (IsMulZPR && (getSubReg(Reg, SubRegIdx) - AArch64::Z0) % UseOps !=
+                              ((unsigned)OpIdx - 1))
+            continue;
+
+          // In the example above, if VirtReg is the third operand of the
+          // tuple (%v2) and Reg == Z2_Z10, then we need to make sure that
+          // Z0_Z8, Z1_Z9 and Z3_Z11 are also available.
+          auto IsFreeConsecutiveReg = [&](unsigned UseOp) {
+            unsigned R = Reg - (OpIdx - 1) + UseOp;
+            return StridedRC->contains(R) &&
+                   (UseOp == 0 ||
+                    ((getSubReg(R, AArch64::zsub0) - AArch64::Z0) ==
+                     (getSubReg(R - 1, AArch64::zsub0) - AArch64::Z0) + 1)) &&
+                   !Matrix->isPhysRegUsed(R);
+          };
+          if (all_of(iota_range<unsigned>(0U, UseOps, /*Inclusive=*/false),
+                     IsFreeConsecutiveReg))
+            Hints.push_back(Reg);
+        }
+      } else {
+        // At least one operand already has a physical register assigned.
+        // Find the starting sub-register of this and use it to work out the
+        // correct strided register to suggest based on the current op index.
+        MCPhysReg TargetStartReg =
+            getSubReg(VRM->getPhys(AssignedRegOp->getReg()), AArch64::zsub0) +
+            (OpIdx - AssignedRegOp->getOperandNo());
+
+        for (unsigned I = 0; I < StridedOrder.size(); ++I)
+          if (getSubReg(StridedOrder[I], AArch64::zsub0) == TargetStartReg)
+            Hints.push_back(StridedOrder[I]);
+      }
+
+      if (!Hints.empty())
+        return TargetRegisterInfo::getRegAllocationHints(VirtReg, Order, Hints,
+                                                         MF, VRM);
+    }
+  }
+
+  for (MachineInstr &MI : MRI.def_instructions(VirtReg)) {
+    if (MI.getOpcode() != AArch64::FORM_TRANSPOSED_REG_TUPLE_X2_PSEUDO &&
+        MI.getOpcode() != AArch64::FORM_TRANSPOSED_REG_TUPLE_X4_PSEUDO)
+      return TargetRegisterInfo::getRegAllocationHints(VirtReg, Order, Hints,
+                                                       MF, VRM);
+
+    unsigned FirstOpSubReg = MI.getOperand(1).getSubReg();
+    switch (FirstOpSubReg) {
+    case AArch64::zsub0:
+    case AArch64::zsub1:
+    case AArch64::zsub2:
+    case AArch64::zsub3:
+      break;
+    default:
+      continue;
+    }
+
+    // Look up the physical register mapped to the first operand of the pseudo.
+    Register FirstOpVirtReg = MI.getOperand(1).getReg();
+    if (!VRM->hasPhys(FirstOpVirtReg))
+      continue;
+
+    MCRegister TupleStartReg =
+        getSubReg(VRM->getPhys(FirstOpVirtReg), FirstOpSubReg);
+    for (unsigned I = 0; I < Order.size(); ++I)
+      if (MCRegister R = getSubReg(Order[I], AArch64::zsub0))
+        if (R == TupleStartReg)
+          Hints.push_back(Order[I]);
+  }
+
+  return TargetRegisterInfo::getRegAllocationHints(VirtReg, Order, Hints, MF,
+                                                   VRM);
 }
 
 unsigned AArch64RegisterInfo::getLocalAddressRegister(
@@ -731,7 +1274,7 @@ unsigned AArch64RegisterInfo::getLocalAddressRegister(
   const auto &MFI = MF.getFrameInfo();
   if (!MF.hasEHFunclets() && !MFI.hasVarSizedObjects())
     return AArch64::SP;
-  else if (needsStackRealignment(MF))
+  else if (hasStackRealignment(MF))
     return getBaseRegister();
   return getFrameRegister(MF);
 }
@@ -741,6 +1284,8 @@ bool AArch64RegisterInfo::shouldCoalesce(
     MachineInstr *MI, const TargetRegisterClass *SrcRC, unsigned SubReg,
     const TargetRegisterClass *DstRC, unsigned DstSubReg,
     const TargetRegisterClass *NewRC, LiveIntervals &LIS) const {
+  MachineRegisterInfo &MRI = MI->getMF()->getRegInfo();
+
   if (MI->isCopy() &&
       ((DstRC->getID() == AArch64::GPR64RegClassID) ||
        (DstRC->getID() == AArch64::GPR64commonRegClassID)) &&
@@ -749,5 +1294,43 @@ bool AArch64RegisterInfo::shouldCoalesce(
     // which implements a 32 to 64 bit zero extension
     // which relies on the upper 32 bits being zeroed.
     return false;
+
+  auto IsCoalescerBarrier = [](const MachineInstr &MI) {
+    switch (MI.getOpcode()) {
+    case AArch64::COALESCER_BARRIER_FPR16:
+    case AArch64::COALESCER_BARRIER_FPR32:
+    case AArch64::COALESCER_BARRIER_FPR64:
+    case AArch64::COALESCER_BARRIER_FPR128:
+      return true;
+    default:
+      return false;
+    }
+  };
+
+  // For calls that temporarily have to toggle streaming mode as part of the
+  // call-sequence, we need to be more careful when coalescing copy instructions
+  // so that we don't end up coalescing the NEON/FP result or argument register
+  // with a whole Z-register, such that after coalescing the register allocator
+  // will try to spill/reload the entire Z register.
+  //
+  // We do this by checking if the node has any defs/uses that are
+  // COALESCER_BARRIER pseudos. These are 'nops' in practice, but they exist to
+  // instruct the coalescer to avoid coalescing the copy.
+  if (MI->isCopy() && SubReg != DstSubReg &&
+      (AArch64::ZPRRegClass.hasSubClassEq(DstRC) ||
+       AArch64::ZPRRegClass.hasSubClassEq(SrcRC))) {
+    unsigned SrcReg = MI->getOperand(1).getReg();
+    if (any_of(MRI.def_instructions(SrcReg), IsCoalescerBarrier))
+      return false;
+    unsigned DstReg = MI->getOperand(0).getReg();
+    if (any_of(MRI.use_nodbg_instructions(DstReg), IsCoalescerBarrier))
+      return false;
+  }
+
   return true;
+}
+
+bool AArch64RegisterInfo::shouldAnalyzePhysregInMachineLoopInfo(
+    MCRegister R) const {
+  return R == AArch64::VG;
 }

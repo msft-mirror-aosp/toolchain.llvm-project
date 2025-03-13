@@ -74,18 +74,14 @@ class Clause<string c> {
   // Define an alternative name return in get<LanguageName>ClauseName function.
   string alternativeName = "";
 
+  // Define aliases used in the parser.
+  list<string> aliases = [];
+
   // Optional class holding value of the clause in clang AST.
   string clangClass = "";
 
-  // Optional class holding the clause in flang AST. If left blank, the class
-  // is assumed to be the name of the clause with capitalized word and
-  // underscores removed.
-  // ex: async -> Async
-  //     num_threads -> NumThreads
-  string flangClass = "";
-
   // Optional class holding value of the clause in flang AST.
-  string flangClassValue = "";
+  string flangClass = "";
 
   // If set to true, value is optional. Not optional by default.
   bit isValueOptional = false;
@@ -95,6 +91,7 @@ class Clause<string c> {
 
   // List of allowed clause values
   list<ClauseVal> allowedClauseValues = [];
+
   // If set to true, value class is part of a list. Single class by default.
   bit isValueList = false;
 
@@ -108,6 +105,14 @@ class Clause<string c> {
   // Set clause used by default when unknown. Function returning the kind
   // of enumeration will use this clause as the default.
   bit isDefault = false;
+
+  // Prefix before the actual value. Used in the parser generation.
+  // `clause(prefix: value)`
+  string prefix = "";
+
+  // Set the prefix as optional.
+  // `clause([prefix]: value)`
+  bit isPrefixOptional = true;
 }
 
 // Hold information about clause validity by version.
@@ -121,6 +126,47 @@ class VersionedClause<Clause c, int min = 1, int max = 0x7FFFFFFF> {
   // Maximum version number where this clause is valid.
   int maxVersion = max;
 }
+
+// Kinds of directive associations.
+class Association<string n> {
+  string name = n;  // Name of the enum value in enum class Association.
+}
+// All of the AS_Xyz names are recognized by TableGen in order to calculate
+// the association in the AS_FromLeaves case.
+def AS_None : Association<"None"> {}              // No association
+def AS_Block : Association<"Block"> {}            // Block (incl. single
+                                                  // statement)
+def AS_Declaration : Association<"Declaration"> {}   // Declaration
+def AS_Delimited : Association<"Delimited"> {}    // Region delimited with
+                                                  // begin/end
+def AS_Loop : Association<"Loop"> {}              // Loop
+def AS_Separating : Association<"Separating"> {}  // Separates parts of a
+                                                  // construct
+
+def AS_FromLeaves : Association<"FromLeaves"> {}    // See below
+// AS_FromLeaves can be used for combined/composite directives, and the actual
+// association will be computed based on associations of the leaf constructs:
+//   (x + y) + z = x + (y + z)
+//   x + y = y + x
+//   x + x = x
+//   AS_None + x = x
+//   AS_Block + AS_Loop = AS_Loop
+// Other combinations are not allowed.
+// This association is not valid for leaf constructs.
+// The name "AS_FromLeaves" is recognized by TableGen, and there is no enum
+// generated for it.
+
+// Kinds of directive categories.
+class Category<string n> {
+  string name = n;  // Name of the enum value in enum class Category.
+}
+
+def CA_Declarative: Category<"Declarative"> {}
+def CA_Executable: Category<"Executable"> {}
+def CA_Informational: Category<"Informational"> {}
+def CA_Meta: Category<"Meta"> {}
+def CA_Subsidiary: Category<"Subsidiary"> {}
+def CA_Utility: Category<"Utility"> {}
 
 // Information about a specific directive.
 class Directive<string d> {
@@ -136,7 +182,7 @@ class Directive<string d> {
   // allowedClauses and requiredClauses lists.
 
   // List of allowed clauses for the directive.
-  list<VersionedClause> allowedClauses = [];
+  list<VersionedClause>  allowedClauses = [];
 
   // List of clauses that are allowed to appear only once.
   list<VersionedClause> allowedOnceClauses = [];
@@ -147,6 +193,16 @@ class Directive<string d> {
   // List of clauses that are required.
   list<VersionedClause> requiredClauses = [];
 
+  // List of leaf constituent directives in the order in which they appear
+  // in the combined/composite directive.
+  list<Directive> leafConstructs = [];
+
   // Set directive used by default when unknown.
   bit isDefault = false;
+
+  // What the directive is associated with.
+  Association association = AS_FromLeaves;
+
+  // The category of the directive.
+  Category category = ?;
 }

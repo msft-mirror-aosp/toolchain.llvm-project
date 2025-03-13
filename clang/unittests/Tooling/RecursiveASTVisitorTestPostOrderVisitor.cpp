@@ -11,14 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "TestVisitor.h"
+#include "CRTPTestVisitor.h"
 
 using namespace clang;
 
 namespace {
-
-class RecordingVisitor : public TestVisitor<RecordingVisitor> {
-
+class RecordingVisitor : public CRTPTestVisitor<RecordingVisitor> {
   bool VisitPostOrder;
 
 public:
@@ -41,7 +39,7 @@ public:
   }
 
   bool VisitIntegerLiteral(IntegerLiteral *Lit) {
-    VisitedNodes.push_back(Lit->getValue().toString(10, false));
+    VisitedNodes.push_back(toString(Lit->getValue(), 10, false));
     return true;
   }
 

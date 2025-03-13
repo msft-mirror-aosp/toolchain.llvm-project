@@ -9,10 +9,11 @@
 #ifndef LLD_ELF_THUNKS_H
 #define LLD_ELF_THUNKS_H
 
+#include "llvm/ADT/SmallVector.h"
 #include "Relocations.h"
 
-namespace lld {
-namespace elf {
+namespace lld::elf {
+struct Ctx;
 class Defined;
 class InputFile;
 class Symbol;
@@ -28,7 +29,7 @@ class ThunkSection;
 // Thunks are assigned to synthetic ThunkSections
 class Thunk {
 public:
-  Thunk(Symbol &destination, int64_t addend);
+  Thunk(Ctx &, Symbol &destination, int64_t addend);
   virtual ~Thunk();
 
   virtual uint32_t size() = 0;
@@ -54,10 +55,18 @@ public:
     return true;
   }
 
+  // Thunks that indirectly branch to targets may need a synthetic landing
+  // pad generated close to the target. For example AArch64 when BTI is
+  // enabled.
+  virtual bool needsSyntheticLandingPad() { return false; }
+
   Defined *getThunkTargetSym() const { return syms[0]; }
 
+  Ctx &ctx;
   Symbol &destination;
   int64_t addend;
+  // Alternative target when indirect branch to destination can't be used.
+  Symbol *landingPad = nullptr;
   llvm::SmallVector<Defined *, 3> syms;
   uint64_t offset = 0;
   // The alignment requirement for this Thunk, defaults to the size of the
@@ -67,13 +76,17 @@ public:
 
 // For a Relocation to symbol S create a Thunk to be added to a synthetic
 // ThunkSection.
-Thunk *addThunk(const InputSection &isec, Relocation &rel);
+std::unique_ptr<Thunk> addThunk(Ctx &, const InputSection &isec,
+                                Relocation &rel);
 
-void writePPC32PltCallStub(uint8_t *buf, uint64_t gotPltVA,
+// Create a landing pad Thunk for use when indirect branches from Thunks
+// are restricted.
+std::unique_ptr<Thunk> addLandingPadThunk(Ctx &, Symbol &s, int64_t a);
+
+void writePPC32PltCallStub(Ctx &, uint8_t *buf, uint64_t gotPltVA,
                            const InputFile *file, int64_t addend);
-void writePPC64LoadAndBranch(uint8_t *buf, int64_t offset);
+void writePPC64LoadAndBranch(Ctx &, uint8_t *buf, int64_t offset);
 
-} // namespace elf
-} // namespace lld
+} // namespace lld::elf
 
 #endif

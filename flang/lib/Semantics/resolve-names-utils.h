@@ -19,6 +19,7 @@
 #include "flang/Semantics/semantics.h"
 #include "flang/Semantics/symbol.h"
 #include "flang/Semantics/type.h"
+#include "llvm/Support/raw_ostream.h"
 #include <forward_list>
 
 namespace Fortran::parser {
@@ -43,9 +44,9 @@ class SemanticsContext;
 Symbol &Resolve(const parser::Name &, Symbol &);
 Symbol *Resolve(const parser::Name &, Symbol *);
 
-// Create a copy of msg with a new isFatal value.
-parser::MessageFixedText WithIsFatal(
-    const parser::MessageFixedText &msg, bool isFatal);
+// Create a copy of msg with a new severity.
+parser::MessageFixedText WithSeverity(
+    const parser::MessageFixedText &msg, parser::Severity);
 
 bool IsIntrinsicOperator(const SemanticsContext &, const SourceName &);
 bool IsLogicalConstant(const SemanticsContext &, const SourceName &);
@@ -70,32 +71,32 @@ std::optional<std::int64_t> EvaluateInt64(
 // Analyze a generic-spec and generate a symbol name and GenericKind for it.
 class GenericSpecInfo {
 public:
-  GenericSpecInfo(const parser::DefinedOpName &x) { Analyze(x); }
-  GenericSpecInfo(const parser::GenericSpec &x) { Analyze(x); }
+  explicit GenericSpecInfo(const parser::DefinedOpName &x) { Analyze(x); }
+  explicit GenericSpecInfo(const parser::GenericSpec &x) { Analyze(x); }
 
   GenericKind kind() const { return kind_; }
   const SourceName &symbolName() const { return symbolName_.value(); }
-  // Some intrinsic operators have more than one name (e.g. `operator(.eq.)` and
-  // `operator(==)`). GetAllNames() returns them all, including symbolName.
-  std::forward_list<std::string> GetAllNames(SemanticsContext &) const;
   // Set the GenericKind in this symbol and resolve the corresponding
   // name if there is one
   void Resolve(Symbol *) const;
-  Symbol *FindInScope(SemanticsContext &, const Scope &) const;
+  friend llvm::raw_ostream &operator<<(
+      llvm::raw_ostream &, const GenericSpecInfo &);
 
 private:
+  void Analyze(const parser::DefinedOpName &);
+  void Analyze(const parser::GenericSpec &);
+
   GenericKind kind_;
   const parser::Name *parseName_{nullptr};
   std::optional<SourceName> symbolName_;
-
-  void Analyze(const parser::DefinedOpName &);
-  void Analyze(const parser::GenericSpec &);
 };
 
 // Analyze a parser::ArraySpec or parser::CoarraySpec
 ArraySpec AnalyzeArraySpec(SemanticsContext &, const parser::ArraySpec &);
 ArraySpec AnalyzeArraySpec(
     SemanticsContext &, const parser::ComponentArraySpec &);
+ArraySpec AnalyzeDeferredShapeSpecList(
+    SemanticsContext &, const parser::DeferredShapeSpecList &);
 ArraySpec AnalyzeCoarraySpec(
     SemanticsContext &context, const parser::CoarraySpec &);
 
@@ -122,8 +123,9 @@ private:
   bool CheckSubstringBound(const parser::Expr &, bool);
   bool IsCharacterSequenceType(const DeclTypeSpec *);
   bool IsDefaultKindNumericType(const IntrinsicTypeSpec &);
-  bool IsNumericSequenceType(const DeclTypeSpec *);
-  bool IsSequenceType(
+  bool IsDefaultNumericSequenceType(const DeclTypeSpec *);
+  static bool IsAnyNumericSequenceType(const DeclTypeSpec *);
+  static bool IsSequenceType(
       const DeclTypeSpec *, std::function<bool(const IntrinsicTypeSpec &)>);
 
   SemanticsContext &context_;
@@ -137,6 +139,12 @@ private:
     std::optional<ConstantSubscript> substringStart;
   } currObject_; // equivalence object currently being constructed
 };
+
+// Duplicates a subprogram's dummy arguments and result, if any, and
+// maps all of the symbols in their expressions.
+struct SymbolAndTypeMappings;
+void MapSubprogramToNewSymbols(const Symbol &oldSymbol, Symbol &newSymbol,
+    Scope &newScope, SymbolAndTypeMappings * = nullptr);
 
 } // namespace Fortran::semantics
 #endif // FORTRAN_SEMANTICS_RESOLVE_NAMES_H_

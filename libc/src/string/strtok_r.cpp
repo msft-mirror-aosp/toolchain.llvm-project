@@ -9,14 +9,16 @@
 #include "src/string/strtok_r.h"
 
 #include "src/__support/common.h"
+#include "src/__support/macros/config.h"
 #include "src/string/string_utils.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
-char *LLVM_LIBC_ENTRYPOINT(strtok_r)(char *__restrict src,
-                                     const char *__restrict delimiter_string,
-                                     char **__restrict saveptr) {
+LLVM_LIBC_FUNCTION(char *, strtok_r,
+                   (char *__restrict src,
+                    const char *__restrict delimiter_string,
+                    char **__restrict saveptr)) {
   return internal::string_token(src, delimiter_string, saveptr);
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

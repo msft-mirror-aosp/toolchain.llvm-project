@@ -1,9 +1,7 @@
-; RUN: opt < %s -domtree -analyze -enable-new-pm=0 | FileCheck %s -check-prefix=CHECK -check-prefix=CHECK-OLDPM
-; RUN: opt < %s -disable-output -passes='print<domtree>' 2>&1 | FileCheck %s -check-prefix=CHECK -check-prefix=CHECK-NEWPM
+; RUN: opt < %s -disable-output -passes='print<domtree>' 2>&1 | FileCheck %s
 
-define void @test1() {
-; CHECK-OLDPM-LABEL: 'Dominator Tree Construction' for function 'test1':
-; CHECK-NEWPM-LABEL: DominatorTree for function: test1
+define void @test1(i1 %arg) {
+; CHECK-LABEL: DominatorTree for function: test1
 ; CHECK:      [1] %entry
 ; CHECK-NEXT:   [2] %a
 ; CHECK-NEXT:   [2] %c
@@ -12,7 +10,7 @@ define void @test1() {
 ; CHECK-NEXT:   [2] %b
 
 entry:
-  br i1 undef, label %a, label %b
+  br i1 %arg, label %a, label %b
 
 a:
   br label %c
@@ -21,7 +19,7 @@ b:
   br label %c
 
 c:
-  br i1 undef, label %d, label %e
+  br i1 %arg, label %d, label %e
 
 d:
   ret void
@@ -30,9 +28,8 @@ e:
   ret void
 }
 
-define void @test2() {
-; CHECK-OLDPM-LABEL: 'Dominator Tree Construction' for function 'test2':
-; CHECK-NEWPM-LABEL: DominatorTree for function: test2
+define void @test2(i1 %arg) {
+; CHECK-LABEL: DominatorTree for function: test2
 ; CHECK:      [1] %entry
 ; CHECK-NEXT:   [2] %a
 ; CHECK-NEXT:     [3] %b
@@ -47,13 +44,13 @@ a:
   br label %b
 
 b:
-  br i1 undef, label %a, label %c
+  br i1 %arg, label %a, label %c
 
 c:
-  br i1 undef, label %d, label %ret
+  br i1 %arg, label %d, label %ret
 
 d:
-  br i1 undef, label %a, label %ret
+  br i1 %arg, label %a, label %ret
 
 ret:
   ret void

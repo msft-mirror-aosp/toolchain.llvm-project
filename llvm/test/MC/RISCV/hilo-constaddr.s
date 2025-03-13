@@ -1,8 +1,8 @@
 # RUN: llvm-mc -filetype=obj -triple=riscv32 %s \
-# RUN:  | llvm-objdump -d - | FileCheck %s --check-prefix=CHECK-INSTR
+# RUN:   | llvm-objdump -d - | FileCheck %s --check-prefix=CHECK-INSTR
 
 # RUN: llvm-mc -filetype=obj -triple=riscv32 %s \
-# RUN:  | llvm-readobj -r - | FileCheck %s -check-prefix=CHECK-REL
+# RUN:   | llvm-readobj -r - | FileCheck %s -check-prefix=CHECK-REL
 
 # Check the assembler can handle hi and lo expressions with a constant
 # address. Test case derived from test/MC/Mips/hilo-addressing.s
@@ -11,7 +11,7 @@
 .equ addr, 0xdeadbeef
   lui t0, %hi(addr)
   lw ra, %lo(addr)(t0)
-# CHECK-INSTR: lui t0, 912092
-# CHECK-INSTR: lw ra, -273(t0)
+# CHECK-INSTR: lui t0, 0xdeadc
+# CHECK-INSTR: lw ra, -0x111(t0)
 
 # CHECK-REL-NOT: R_RISCV

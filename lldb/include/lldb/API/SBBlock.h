@@ -9,6 +9,8 @@
 #ifndef LLDB_API_SBBLOCK_H
 #define LLDB_API_SBBLOCK_H
 
+#include "lldb/API/SBAddressRange.h"
+#include "lldb/API/SBAddressRangeList.h"
 #include "lldb/API/SBDefines.h"
 #include "lldb/API/SBFrame.h"
 #include "lldb/API/SBTarget.h"
@@ -52,6 +54,8 @@ public:
 
   lldb::SBAddress GetRangeEndAddress(uint32_t idx);
 
+  lldb::SBAddressRangeList GetRanges();
+
   uint32_t GetRangeIndexForBlockAddress(lldb::SBAddress block_addr);
 
   lldb::SBValueList GetVariables(lldb::SBFrame &frame, bool arguments,
@@ -87,7 +91,7 @@ private:
   void AppendVariables(bool can_create, bool get_parent_variables,
                        lldb_private::VariableList *var_list);
 
-  lldb_private::Block *m_opaque_ptr;
+  lldb_private::Block *m_opaque_ptr = nullptr;
 };
 
 } // namespace lldb

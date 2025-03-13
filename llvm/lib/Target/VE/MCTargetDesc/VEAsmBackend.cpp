@@ -15,8 +15,8 @@
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/EndianStream.h"
-#include "llvm/Support/TargetRegistry.h"
 
 using namespace llvm;
 
@@ -42,6 +42,7 @@ static uint64_t adjustFixupValue(unsigned Kind, uint64_t Value) {
   case VE::fixup_ve_tpoff_hi32:
     return (Value >> 32) & 0xffffffff;
   case VE::fixup_ve_reflong:
+  case VE::fixup_ve_srel32:
   case VE::fixup_ve_lo32:
   case VE::fixup_ve_pc_lo32:
   case VE::fixup_ve_got_lo32:
@@ -68,6 +69,7 @@ static unsigned getFixupKindNumBytes(unsigned Kind) {
   case FK_Data_4:
   case FK_PCRel_4:
   case VE::fixup_ve_reflong:
+  case VE::fixup_ve_srel32:
   case VE::fixup_ve_hi32:
   case VE::fixup_ve_lo32:
   case VE::fixup_ve_pc_hi32:
@@ -95,7 +97,8 @@ protected:
   const Target &TheTarget;
 
 public:
-  VEAsmBackend(const Target &T) : MCAsmBackend(support::little), TheTarget(T) {}
+  VEAsmBackend(const Target &T)
+      : MCAsmBackend(llvm::endianness::little), TheTarget(T) {}
 
   unsigned getNumFixupKinds() const override { return VE::NumTargetFixupKinds; }
 
@@ -103,6 +106,7 @@ public:
     const static MCFixupKindInfo Infos[VE::NumTargetFixupKinds] = {
         // name, offset, bits, flags
         {"fixup_ve_reflong", 0, 32, 0},
+        {"fixup_ve_srel32", 0, 32, MCFixupKindInfo::FKF_IsPCRel},
         {"fixup_ve_hi32", 0, 32, 0},
         {"fixup_ve_lo32", 0, 32, 0},
         {"fixup_ve_pc_hi32", 0, 32, MCFixupKindInfo::FKF_IsPCRel},
@@ -128,7 +132,8 @@ public:
   }
 
   bool shouldForceRelocation(const MCAssembler &Asm, const MCFixup &Fixup,
-                             const MCValue &Target) override {
+                             const MCValue &Target, const uint64_t,
+                             const MCSubtargetInfo *STI) override {
     switch ((VE::Fixups)Fixup.getKind()) {
     default:
       return false;
@@ -148,29 +153,20 @@ public:
     return false;
   }
 
-  /// fixupNeedsRelaxation - Target specific predicate for whether a given
-  /// fixup requires the associated instruction to be relaxed.
-  bool fixupNeedsRelaxation(const MCFixup &Fixup, uint64_t Value,
-                            const MCRelaxableFragment *DF,
-                            const MCAsmLayout &Layout) const override {
-    // Not implemented yet.  For example, if we have a branch with
-    // lager than SIMM32 immediate value, we want to relaxation such
-    // branch instructions.
-    return false;
-  }
   void relaxInstruction(MCInst &Inst,
                         const MCSubtargetInfo &STI) const override {
     // Aurora VE doesn't support relaxInstruction yet.
     llvm_unreachable("relaxInstruction() should not be called");
   }
 
-  bool writeNopData(raw_ostream &OS, uint64_t Count) const override {
+  bool writeNopData(raw_ostream &OS, uint64_t Count,
+                    const MCSubtargetInfo *STI) const override {
     if ((Count % 8) != 0)
       return false;
 
     for (uint64_t i = 0; i < Count; i += 8)
       support::endian::write<uint64_t>(OS, 0x7900000000000000ULL,
-                                       support::little);
+                                       llvm::endianness::little);
 
     return true;
   }
@@ -203,7 +199,8 @@ public:
     // from the fixup value. The Value has been "split up" into the
     // appropriate bitfields above.
     for (unsigned i = 0; i != NumBytes; ++i) {
-      unsigned Idx = Endian == support::little ? i : (NumBytes - 1) - i;
+      unsigned Idx =
+          Endian == llvm::endianness::little ? i : (NumBytes - 1) - i;
       Data[Offset + Idx] |= static_cast<uint8_t>((Value >> (i * 8)) & 0xff);
     }
   }

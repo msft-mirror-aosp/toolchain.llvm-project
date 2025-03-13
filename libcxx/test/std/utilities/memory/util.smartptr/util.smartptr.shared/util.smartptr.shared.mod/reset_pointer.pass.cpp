@@ -14,7 +14,9 @@
 
 #include <memory>
 #include <cassert>
+#include <utility>
 
+#include "reset_helper.h"
 #include "test_macros.h"
 
 struct B
@@ -40,6 +42,19 @@ struct A
 
 int A::count = 0;
 
+struct Derived : A {};
+
+static_assert( HasReset<std::shared_ptr<int>,  int*>::value, "");
+static_assert( HasReset<std::shared_ptr<A>,  Derived*>::value, "");
+static_assert(!HasReset<std::shared_ptr<A>,  int*>::value, "");
+
+#if TEST_STD_VER >= 17
+static_assert( HasReset<std::shared_ptr<int[]>,  int*>::value, "");
+static_assert(!HasReset<std::shared_ptr<int[]>,  int(*)[]>::value, "");
+static_assert( HasReset<std::shared_ptr<int[5]>, int*>::value, "");
+static_assert(!HasReset<std::shared_ptr<int[5]>, int(*)[5]>::value, "");
+#endif
+
 int main(int, char**)
 {
     {
@@ -62,6 +77,18 @@ int main(int, char**)
         assert(p.get() == ptr);
     }
     assert(A::count == 0);
+
+#if TEST_STD_VER > 14
+    {
+        std::shared_ptr<const A[]> p;
+        A* ptr = new A[8];
+        p.reset(ptr);
+        assert(A::count == 8);
+        assert(p.use_count() == 1);
+        assert(p.get() == ptr);
+    }
+    assert(A::count == 0);
+#endif
 
   return 0;
 }

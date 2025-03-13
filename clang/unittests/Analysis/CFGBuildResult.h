@@ -56,15 +56,17 @@ public:
     TheBuildResult = BuildResult::SawFunctionBody;
     Options.AddImplicitDtors = true;
     if (std::unique_ptr<CFG> Cfg =
-            CFG::buildCFG(nullptr, Body, Result.Context, Options))
+            CFG::buildCFG(Func, Body, Result.Context, Options))
       TheBuildResult = {BuildResult::BuiltCFG, Func, std::move(Cfg),
                         std::move(AST)};
   }
 };
 
-inline BuildResult BuildCFG(const char *Code, CFG::BuildOptions Options = {}) {
-  std::vector<std::string> Args = {"-std=c++11",
-                                   "-fno-delayed-template-parsing"};
+template <typename FuncMatcherT = ast_matchers::internal::TrueMatcher>
+BuildResult BuildCFG(const char *Code, CFG::BuildOptions Options = {},
+                     FuncMatcherT FuncMatcher = ast_matchers::anything()) {
+  const std::vector<std::string> Args = {
+      "-std=c++11", "-fno-delayed-template-parsing", "-Wno-everything"};
   std::unique_ptr<ASTUnit> AST = tooling::buildASTFromCodeWithArgs(Code, Args);
   if (!AST)
     return BuildResult::ToolFailed;
@@ -72,7 +74,8 @@ inline BuildResult BuildCFG(const char *Code, CFG::BuildOptions Options = {}) {
   CFGCallback Callback(std::move(AST));
   Callback.Options = Options;
   ast_matchers::MatchFinder Finder;
-  Finder.addMatcher(ast_matchers::functionDecl().bind("func"), &Callback);
+  Finder.addMatcher(ast_matchers::functionDecl(FuncMatcher).bind("func"),
+                    &Callback);
 
   Finder.matchAST(Callback.AST->getASTContext());
   return std::move(Callback.TheBuildResult);

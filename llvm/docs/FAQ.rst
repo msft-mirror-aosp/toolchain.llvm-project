@@ -13,13 +13,20 @@ Can I modify LLVM source code and redistribute the modified source?
 -------------------------------------------------------------------
 Yes.  The modified source distribution must retain the copyright notice and
 follow the conditions listed in the `Apache License v2.0 with LLVM Exceptions
-<https://github.com/llvm/llvm-project/blob/master/llvm/LICENSE.TXT>`_.
+<https://github.com/llvm/llvm-project/blob/main/llvm/LICENSE.TXT>`_.
 
 
 Can I modify the LLVM source code and redistribute binaries or other tools based on it, without redistributing the source?
 --------------------------------------------------------------------------------------------------------------------------
 Yes. This is why we distribute LLVM under a less restrictive license than GPL,
 as explained in the first question above.
+
+
+Can I use AI coding tools, such as GitHub co-pilot, to write LLVM patches?
+--------------------------------------------------------------------------
+Yes, as long as the resulting work can be licensed under the project license, as
+covered in the :doc:`DeveloperPolicy`. Using an AI tool to reproduce copyrighted
+work does not rinse it of copyright and grant you the right to relicense it.
 
 
 Source Code

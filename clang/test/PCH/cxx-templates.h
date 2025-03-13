@@ -49,7 +49,7 @@ struct Dep {
     int y = T::template my_templf<int>(0);
     ovl(y);
   }
-  
+
   void ovl(int);
   void ovl(float);
 };
@@ -67,7 +67,7 @@ template <class T> class UseBase {
 
 template <class T> class UseA : public UseBase<T> {
   using UseBase<T>::foo;
-  using typename UseBase<T>::bar; 
+  using typename UseBase<T>::bar;
 };
 
 template <class T> class Sub : public UseBase<int> { };
@@ -95,7 +95,7 @@ template<> bool isInt<8>(int x) {
 template<typename _CharT>
 int __copy_streambufs_eof(_CharT);
 
-class basic_streambuf 
+class basic_streambuf
 {
   void m() { }
   friend int __copy_streambufs_eof<>(int);
@@ -174,7 +174,7 @@ struct S7<int[N]> : S6<const int[N]> { };
 namespace ZeroLengthExplicitTemplateArgs {
   template<typename T> void h();
 
-  struct Y { 
+  struct Y {
     template<typename T> void f();
   };
 
@@ -206,7 +206,6 @@ namespace NonTypeTemplateParmContext {
     inline bool equalIgnoringNullity(const Vector<char, inlineCapacity>& a, const String& b) { return false; }
 }
 
-// <rdar://problem/11112464>
 template< typename > class Foo;
 
 template< typename T >
@@ -418,11 +417,11 @@ namespace ClassScopeExplicitSpecializations {
   template<int> struct B {
     template<typename> static const int v = 1;
     template<typename T> static const int v<T*> = 2;
-    template<> static const int v<int> = 3;
+    template<> const int v<int> = 3;
 
     template<typename> static constexpr int w = 1;
     template<typename T> static constexpr int w<T*> = 2;
-    template<> static constexpr int w<int> = 3;
+    template<> constexpr int w<int> = 3;
   };
 
   template<> template<typename> constexpr int B<0>::v = 4;
@@ -455,4 +454,20 @@ namespace DependentTemplateName {
 
   template <class T>
   TakesClassTemplate<T::template Member> getWithIdentifier();
+}
+
+namespace ClassTemplateCycle {
+  // Create a cycle: the typedef T refers to A<0, 8>, whose template argument
+  // list refers back to T.
+  template<int, int> struct A;
+  using T = A<0, sizeof(void*)>;
+  template<int N> struct A<N, sizeof(T*)> {};
+  T t;
+
+  // Create a cycle: the variable M refers to A<1, 1>, whose template argument
+  // list list refers back to M.
+  template<int, int> struct A;
+  const decltype(sizeof(A<1, 1>*)) M = 1;
+  template<int N> struct A<N, M> {};
+  A<1, 1> u;
 }

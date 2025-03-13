@@ -33,9 +33,10 @@ program is ill-formed.
 Currently, the element type of a matrix is only permitted to be one of the
 following types:
 
-* an integer type (as in C2x 6.2.5p19), but excluding enumerated types and ``_Bool``
-* the standard floating types ``float`` or ``double``
-* a half-precision floating point type, if one is supported on the target
+* an integer type (as in C23 6.2.5p22), but excluding enumerated types, ``bool``,
+  and ``_BitInt`` types whose width is not a power of 2;
+* the standard floating types ``float`` or ``double``;
+* a half-precision floating point type, if one is supported on the target.
 
 Other types may be supported in the future.
 
@@ -68,7 +69,7 @@ rows and columns are the same and the value's elements can be converted to the
 element type of the result type. The result is a matrix where each element is
 the converted corresponding element.
 
-A value of any real type (as in C2x 6.2.5p17) can be converted to a matrix type
+A value of any real type (as in C23 6.2.5p14) can be converted to a matrix type
 if it can be converted to the element type of the matrix. The result is a
 matrix where all elements are the converted original value.
 
@@ -118,15 +119,22 @@ more explicit.
 Matrix Type Binary Operators
 ----------------------------
 
-Each matrix type supports the following binary operators: ``+``, ``-`` and ``*``. The ``*``
-operator provides matrix multiplication, while ``+`` and ``-`` are performed
-element-wise. There are also scalar versions of the operators, which take a
-matrix type and the matrix element type. The operation is applied to all
-elements of the matrix using the scalar value.
+Given two matrixes, the ``+`` and ``-`` operators perform element-wise addition
+and subtraction, while the ``*`` operator performs matrix multiplication.
+``+``, ``-``, ``*``, and ``/`` can also be used with a matrix and a scalar
+value, applying the operation to each element of the matrix.
 
-For ``BIN_OP`` in ``+``, ``-``, ``*`` given the expression ``M1 BIN_OP M2`` where
-at least one of ``M1`` or ``M2`` is of matrix type and, for `*`, the other is of
-a real type:
+Earlier versions of this extension did not support division by a scalar.
+You can test for the availability of this feature with
+``__has_extension(matrix_types_scalar_division)``.
+
+For the expression ``M1 BIN_OP M2`` where
+
+* ``BIN_OP`` is one of ``+`` or ``-``, one of ``M1`` and ``M2`` is of matrix
+  type, and the other is of matrix type or real type; or
+* ``BIN_OP`` is ``*``, one of ``M1`` and ``M2`` is of matrix type, and the
+   other is of a real type; or
+* ``BIN_OP`` is ``/``, ``M1`` is of matrix type, and ``M2`` is of a real type:
 
 * The usual arithmetic conversions are applied to ``M1`` and ``M2``. [ Note: if ``M1`` or
   ``M2`` are of a real type, they are broadcast to matrices here. — end note ]
@@ -201,7 +209,7 @@ Definitions:
 ``M2 __builtin_matrix_transpose(M1 matrix)``
 
 **Remarks**: The return type is a cv-unqualified matrix type that has the same
-element type as ``M1`` and has the the same number of rows as ``M1`` has columns and
+element type as ``M1`` and has the same number of rows as ``M1`` has columns and
 the same number of columns as ``M1`` has rows.
 
 **Returns**: A matrix ``Res`` equivalent to the code below, where ``col`` refers to the

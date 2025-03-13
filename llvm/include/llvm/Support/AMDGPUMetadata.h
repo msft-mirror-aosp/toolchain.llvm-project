@@ -15,6 +15,7 @@
 #ifndef LLVM_SUPPORT_AMDGPUMETADATA_H
 #define LLVM_SUPPORT_AMDGPUMETADATA_H
 
+#include "llvm/ADT/StringRef.h"
 #include <cstdint>
 #include <string>
 #include <system_error>
@@ -28,15 +29,31 @@ namespace AMDGPU {
 //===----------------------------------------------------------------------===//
 namespace HSAMD {
 
-/// HSA metadata major version.
-constexpr uint32_t VersionMajor = 1;
-/// HSA metadata minor version.
-constexpr uint32_t VersionMinor = 0;
+/// HSA metadata major version for code object V3.
+constexpr uint32_t VersionMajorV3 = 1;
+/// HSA metadata minor version for code object V3.
+constexpr uint32_t VersionMinorV3 = 0;
+
+/// HSA metadata major version for code object V4.
+constexpr uint32_t VersionMajorV4 = 1;
+/// HSA metadata minor version for code object V4.
+constexpr uint32_t VersionMinorV4 = 1;
+
+/// HSA metadata major version for code object V5.
+constexpr uint32_t VersionMajorV5 = 1;
+/// HSA metadata minor version for code object V5.
+constexpr uint32_t VersionMinorV5 = 2;
+
+/// HSA metadata major version for code object V6.
+constexpr uint32_t VersionMajorV6 = 1;
+/// HSA metadata minor version for code object V6.
+constexpr uint32_t VersionMinorV6 = 2;
+
+/// Old HSA metadata beginning assembler directive for V2. This is only used for
+/// diagnostics now.
 
 /// HSA metadata beginning assembler directive.
 constexpr char AssemblerDirectiveBegin[] = ".amd_amdgpu_hsa_metadata";
-/// HSA metadata ending assembler directive.
-constexpr char AssemblerDirectiveEnd[] = ".end_amd_amdgpu_hsa_metadata";
 
 /// Access qualifiers.
 enum class AccessQualifier : uint8_t {
@@ -430,7 +447,7 @@ struct Metadata final {
 };
 
 /// Converts \p String to \p HSAMetadata.
-std::error_code fromString(std::string String, Metadata &HSAMetadata);
+std::error_code fromString(StringRef String, Metadata &HSAMetadata);
 
 /// Converts \p HSAMetadata to \p String.
 std::error_code toString(Metadata HSAMetadata, std::string &String);

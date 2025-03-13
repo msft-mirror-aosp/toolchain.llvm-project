@@ -5,13 +5,13 @@ conversions between, and within dialects. This framework allows for transforming
 illegal operations to those supported by a provided conversion target, via a set
 of pattern-based operation rewriting patterns.
 
-[TOC]
-
 The dialect conversion framework consists of the following components:
 
 *   A [Conversion Target](#conversion-target)
 *   A set of [Rewrite Patterns](#rewrite-pattern-specification)
 *   A [Type Converter](#type-conversion) (Optional)
+
+[TOC]
 
 ## Modes of Conversion
 
@@ -45,6 +45,9 @@ conversion modes that may be selected from:
         operations.
     -   An analysis conversion can be applied via `applyAnalysisConversion`.
 
+In all cases, the framework walks the operations in preorder, examining an op
+before the ops in any regions it has.
+
 ## Conversion Target
 
 The conversion target is a formal definition of what is considered to be legal
@@ -63,10 +66,7 @@ legality actions below:
 
     -   This action signals that only some instances of a given operation are
         legal. This allows for defining fine-tune constraints, e.g. saying that
-        `addi` is only legal when operating on 32-bit integers.
-    -   If a specific handler is not provided when setting the action, the
-        target must override the `isDynamicallyLegal` hook provided by
-        `ConversionTarget`.
+        `arith.addi` is only legal when operating on 32-bit integers.
 
 *   Illegal
 
@@ -74,6 +74,10 @@ legality actions below:
         Operations marked as "illegal" must always be converted for the
         conversion to be successful. This action also allows for selectively
         marking specific operations as illegal in an otherwise legal dialect.
+
+Operations and dialects that are neither explicitly marked legal nor illegal are
+separate from the above ("unknown" operations) and are treated differently, for
+example, for the purposes of partial conversion as mentioned above.
 
 An example conversion target is shown below:
 
@@ -86,26 +90,23 @@ struct MyTarget : public ConversionTarget {
     /// Mark all operations within the LLVM dialect are legal.
     addLegalDialect<LLVMDialect>();
 
-    /// Mark `std.constant` op is always legal on this target.
-    addLegalOp<ConstantOp>();
+    /// Mark `arith.constant` op is always legal on this target.
+    addLegalOp<arith::ConstantOp>();
 
     //--------------------------------------------------------------------------
     // Marking an operation as dynamically legal.
 
     /// Mark all operations within Affine dialect have dynamic legality
     /// constraints.
-    addDynamicallyLegalDialect<AffineDialect>();
+    addDynamicallyLegalDialect<affine::AffineDialect>(
+        [](Operation *op) { ... });
 
-    /// Mark `std.return` as dynamically legal.
-    addDynamicallyLegalOp<ReturnOp>();
-
-    /// Mark `std.return` as dynamically legal, but provide a specific legality
+    /// Mark `func.return` as dynamically legal, but provide a specific legality
     /// callback.
-    addDynamicallyLegalOp<ReturnOp>([](ReturnOp op) { ... });
+    addDynamicallyLegalOp<func::ReturnOp>([](func::ReturnOp op) { ... });
 
     /// Treat unknown operations, i.e. those without a legalization action
     /// directly set, as dynamically legal.
-    markUnknownOpDynamicallyLegal();
     markUnknownOpDynamicallyLegal([](Operation *op) { ... });
 
     //--------------------------------------------------------------------------
@@ -114,8 +115,8 @@ struct MyTarget : public ConversionTarget {
     /// All operations within the GPU dialect are illegal.
     addIllegalDialect<GPUDialect>();
 
-    /// Mark `std.br` and `std.cond_br` as illegal.
-    addIllegalOp<BranchOp, CondBranchOp>();
+    /// Mark `cf.br` and `cf.cond_br` as illegal.
+    addIllegalOp<cf::BranchOp, cf::CondBranchOp>();
   }
 
   /// Implement the default legalization handler to handle operations marked as
@@ -229,51 +230,43 @@ The `TypeConverter` contains several hooks for detailing how to convert types,
 and how to materialize conversions between types in various situations. The two
 main aspects of the `TypeConverter` are conversion and materialization.
 
-A `conversion` describes how a given illegal source `Type` should be converted
-to N target types. If the source type is already "legal", it should convert to
-itself. Type conversions are specified via the `addConversion` method described
+A `conversion` describes how a given source `Type` should be converted to N
+target types. If the source type is converted to itself, we say it is a "legal"
+type. Type conversions are specified via the `addConversion` method described
 below.
 
-A `materialization` describes how a set of values should be converted to a
-single value of a desired type. An important distinction with a `conversion` is
-that a `materialization` can produce IR, whereas a `conversion` cannot. These
-materializations are used by the conversion framework to ensure type safety
-during the conversion process. There are several types of materializations
-depending on the situation.
-
-*   Argument Materialization
-
-    -   An argument materialization is used when converting the type of a block
-        argument during a [signature conversion](#region-signature-conversion).
+A `materialization` describes how a list of values should be converted to a
+list of values with specific types. An important distinction from a
+`conversion` is that a `materialization` can produce IR, whereas a `conversion`
+cannot. These materializations are used by the conversion framework to ensure
+type safety during the conversion process. There are several types of
+materializations depending on the situation.
 
 *   Source Materialization
 
-    -   A source materialization converts from a value with a "legal" target
-        type, back to a specific source type. This is used when an operation is
-        "legal" during the conversion process, but contains a use of an illegal
-        type. This may happen during a conversion where some operations are
-        converted to those with different resultant types, but still retain
-        users of the original type system.
+    -   A source materialization is used when a value was replaced with a value
+        of a different type, but there are still users that expects the original
+        ("source") type at the end of the conversion process. A source
+        materialization converts the replacement value back to the source type.
     -   This materialization is used in the following situations:
         *   When a block argument has been converted to a different type, but
             the original argument still has users that will remain live after
             the conversion process has finished.
+        *   When a block argument has been dropped, but the argument still has
+            users that will remain live after the conversion process has
+            finished.
         *   When the result type of an operation has been converted to a
             different type, but the original result still has users that will
             remain live after the conversion process is finished.
 
 *   Target Materialization
 
-    -   A target materialization converts from a value with an "illegal" source
-        type, to a value of a "legal" type. This is used when a pattern expects
-        the remapped operands to be of a certain set of types, but the original
-        input operands have not been converted. This may happen during a
-        conversion where some operations are converted to those with different
-        resultant types, but still retain uses of the original type system.
-    -   This materialization is used in the following situations:
-        *   When the remapped operands of a
-            [conversion pattern](#conversion-patterns) are not legal for the
-            type conversion provided by the pattern.
+    -   A target materialization converts a value to the type that is expected
+        by a conversion pattern according to its type converter.
+    -   A target materialization is used when a pattern expects the remapped
+        operands to be of a certain set of types, but the original input
+        operands have either not been replaced or been replaced with values of
+        a different type.
 
 If a converted value is used by an operation that isn't converted, it needs a
 conversion back to the `source` type, hence source materialization; if an
@@ -286,10 +279,8 @@ will not implicitly change during the conversion process. When the type of a
 value definition, either block argument or operation result, is being changed,
 the users of that definition must also be updated during the conversion process.
 If they aren't, a type conversion must be materialized to ensure that a value of
-the expected type is still present within the IR. If a target materialization is
-required, but cannot be performed, the pattern application fails. If a source
-materialization is required, but cannot be performed, the entire conversion
-process fails.
+the expected type is still present within the IR. If a materialization is
+required, but cannot be performed, the entire conversion process fails.
 
 Several of the available hooks are detailed below:
 
@@ -301,16 +292,24 @@ class TypeConverter {
   /// to any of the following forms(where `T` is a class derived from `Type`:
   ///   * Optional<Type>(T)
   ///     - This form represents a 1-1 type conversion. It should return nullptr
-  ///       or `llvm::None` to signify failure. If `llvm::None` is returned, the
+  ///       or `std::nullopt` to signify failure. If `std::nullopt` is returned, the
   ///       converter is allowed to try another conversion function to perform
   ///       the conversion.
   ///   * Optional<LogicalResult>(T, SmallVectorImpl<Type> &)
   ///     - This form represents a 1-N type conversion. It should return
-  ///       `failure` or `llvm::None` to signify a failed conversion. If the new
+  ///       `failure` or `std::nullopt` to signify a failed conversion. If the new
   ///       set of types is empty, the type is removed and any usages of the
   ///       existing value are expected to be removed during conversion. If
-  ///       `llvm::None` is returned, the converter is allowed to try another
+  ///       `std::nullopt` is returned, the converter is allowed to try another
   ///       conversion function to perform the conversion.
+  ///   * Optional<LogicalResult>(T, SmallVectorImpl<Type> &, ArrayRef<Type>)
+  ///     - This form represents a 1-N type conversion supporting recursive
+  ///       types. The first two arguments and the return value are the same as
+  ///       for the regular 1-N form. The third argument is contains is the
+  ///       "call stack" of the recursive conversion: it contains the list of
+  ///       types currently being converted, with the current type being the
+  ///       last one. If it is present more than once in the list, the
+  ///       conversion concerns a recursive type.
   /// Note: When attempting to convert a type, e.g. via 'convertType', the
   ///       mostly recently added conversions will be invoked first.
   template <typename FnT,
@@ -319,36 +318,46 @@ class TypeConverter {
     registerConversion(wrapCallback<T>(std::forward<FnT>(callback)));
   }
 
-  /// Register a materialization function, which must be convertible to the
-  /// following form:
-  ///   `Optional<Value> (OpBuilder &, T, ValueRange, Location)`,
-  ///   where `T` is any subclass of `Type`.
-  /// This function is responsible for creating an operation, using the
-  /// OpBuilder and Location provided, that "converts" a range of values into a
-  /// single value of the given type `T`. It must return a Value of the
-  /// converted type on success, an `llvm::None` if it failed but other
-  /// materialization can be attempted, and `nullptr` on unrecoverable failure.
-  /// It will only be called for (sub)types of `T`.
-  ///
+  /// All of the following materializations require function objects that are
+  /// convertible to the following form:
+  ///   `std::optional<Value>(OpBuilder &, T, ValueRange, Location)`,
+  /// where `T` is any subclass of `Type`. This function is responsible for
+  /// creating an operation, using the OpBuilder and Location provided, that
+  /// "casts" a range of values into a single value of the given type `T`. It
+  /// must return a Value of the converted type on success, an `std::nullopt` if
+  /// it failed but other materialization can be attempted, and `nullptr` on
+  /// unrecoverable failure. It will only be called for (sub)types of `T`.
+  /// Materialization functions must be provided when a type conversion may
+  /// persist after the conversion has finished.
+
   /// This method registers a materialization that will be called when
-  /// converting an illegal block argument type, to a legal type.
-  template <typename FnT,
-            typename T = typename llvm::function_traits<FnT>::template arg_t<1>>
-  void addArgumentMaterialization(FnT &&callback) {
-    argumentMaterializations.emplace_back(
-        wrapMaterialization<T>(std::forward<FnT>(callback)));
-  }
-  /// This method registers a materialization that will be called when
-  /// converting a legal type to an illegal source type. This is used when
-  /// conversions to an illegal type must persist beyond the main conversion.
+  /// converting a replacement value back to its original source type.
+  /// This is used when some uses of the original value persist beyond the main
+  /// conversion.
   template <typename FnT,
             typename T = typename llvm::function_traits<FnT>::template arg_t<1>>
   void addSourceMaterialization(FnT &&callback) {
     sourceMaterializations.emplace_back(
         wrapMaterialization<T>(std::forward<FnT>(callback)));
   }
+
   /// This method registers a materialization that will be called when
-  /// converting type from an illegal, or source, type to a legal type.
+  /// converting a value to a target type according to a pattern's type
+  /// converter.
+  ///
+  /// Note: Target materializations can optionally inspect the "original"
+  /// type. This type may be different from the type of the input value.
+  /// For example, let's assume that a conversion pattern "P1" replaced an SSA
+  /// value "v1" (type "t1") with "v2" (type "t2"). Then a different conversion
+  /// pattern "P2" matches an op that has "v1" as an operand. Let's furthermore
+  /// assume that "P2" determines that the converted target type of "t1" is
+  /// "t3", which may be different from "t2". In this example, the target
+  /// materialization will be invoked with: outputType = "t3", inputs = "v2",
+  /// originalType = "t1". Note that the original type "t1" cannot be recovered
+  /// from just "t3" and "v2"; that's why the originalType parameter exists.
+  ///
+  /// Note: During a 1:N conversion, the result types can be a TypeRange. In
+  /// that case the materialization produces a SmallVector<Value>.
   template <typename FnT,
             typename T = typename llvm::function_traits<FnT>::template arg_t<1>>
   void addTargetMaterialization(FnT &&callback) {
@@ -358,24 +367,32 @@ class TypeConverter {
 };
 ```
 
+Materializations through the type converter are optional. If the
+`ConversionConfig::buildMaterializations` flag is set to "false", the dialect
+conversion driver builds an `unrealized_conversion_cast` op instead of calling
+the respective type converter callback whenever a materialization is required.
+
 ### Region Signature Conversion
 
 From the perspective of type conversion, the types of block arguments are a bit
 special. Throughout the conversion process, blocks may move between regions of
 different operations. Given this, the conversion of the types for blocks must be
-done explicitly via a conversion pattern. To convert the types of block
-arguments within a Region, a custom hook on the `ConversionPatternRewriter` must
-be invoked; `convertRegionTypes`. This hook uses a provided type converter to
-apply type conversions to all blocks within a given region, and all blocks that
-move into that region. As noted above, the conversions performed by this method
-use the argument materialization hook on the `TypeConverter`. This hook also
-takes an optional `TypeConverter::SignatureConversion` parameter that applies a
-custom conversion to the entry block of the region. The types of the entry block
-arguments are often tied semantically to details on the operation, e.g. FuncOp,
-AffineForOp, etc. To convert the signature of just the region entry block, and
-not any other blocks within the region, the `applySignatureConversion` hook may
-be used instead. A signature conversion, `TypeConverter::SignatureConversion`,
-can be built programmatically:
+done explicitly via a conversion pattern. 
+
+To convert the types of block arguments within a Region, a custom hook on the
+`ConversionPatternRewriter` must be invoked; `convertRegionTypes`. This hook
+uses a provided type converter to apply type conversions to all blocks of a
+given region. This hook also takes an optional
+`TypeConverter::SignatureConversion` parameter that applies a custom conversion
+to the entry block of the region. The types of the entry block arguments are
+often tied semantically to the operation, e.g., `func::FuncOp`, `AffineForOp`,
+etc.
+
+To convert the signature of just one given block, the
+`applySignatureConversion` hook can be used.
+
+A signature conversion, `TypeConverter::SignatureConversion`, can be built
+programmatically:
 
 ```c++
 class SignatureConversion {
@@ -416,19 +433,19 @@ Example output is shown below:
 
 ```
 //===-------------------------------------------===//
-Legalizing operation : 'std.return'(0x608000002e20) {
-  "std.return"() : () -> ()
+Legalizing operation : 'func.return'(0x608000002e20) {
+  "func.return"() : () -> ()
 
   * Fold {
   } -> FAILURE : unable to fold
 
-  * Pattern : 'std.return -> ()' {
-    ** Insert  : 'spv.Return'(0x6070000453e0)
-    ** Replace : 'std.return'(0x608000002e20)
+  * Pattern : 'func.return -> ()' {
+    ** Insert  : 'spirv.Return'(0x6070000453e0)
+    ** Replace : 'func.return'(0x608000002e20)
 
     //===-------------------------------------------===//
-    Legalizing operation : 'spv.Return'(0x6070000453e0) {
-      "spv.Return"() : () -> ()
+    Legalizing operation : 'spirv.Return'(0x6070000453e0) {
+      "spirv.Return"() : () -> ()
 
     } -> SUCCESS : operation marked legal by the target
     //===-------------------------------------------===//
@@ -437,8 +454,8 @@ Legalizing operation : 'std.return'(0x608000002e20) {
 //===-------------------------------------------===//
 ```
 
-This output is describing the legalization of an `std.return` operation. We
+This output is describing the legalization of an `func.return` operation. We
 first try to legalize by folding the operation, but that is unsuccessful for
-`std.return`. From there, a pattern is applied that replaces the `std.return`
-with a `spv.Return`. The newly generated `spv.Return` is then processed for
+`func.return`. From there, a pattern is applied that replaces the `func.return`
+with a `spirv.Return`. The newly generated `spirv.Return` is then processed for
 legalization, but is found to already legal as per the target.

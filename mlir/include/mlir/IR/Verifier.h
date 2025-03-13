@@ -9,14 +9,19 @@
 #ifndef MLIR_IR_VERIFIER_H
 #define MLIR_IR_VERIFIER_H
 
+#include "mlir/Support/LLVM.h"
+
 namespace mlir {
-struct LogicalResult;
 class Operation;
 
 /// Perform (potentially expensive) checks of invariants, used to detect
 /// compiler bugs, on this operation and any nested operations. On error, this
-/// reports the error through the MLIRContext and returns failure.
-LogicalResult verify(Operation *op);
-} //  end namespace mlir
+/// reports the error through the MLIRContext and returns failure. If
+/// `verifyRecursively` is false, this assumes that nested operations have
+/// already been properly verified, and does not recursively invoke the verifier
+/// on nested operations.
+LogicalResult verify(Operation *op, bool verifyRecursively = true);
+
+} // namespace mlir
 
 #endif

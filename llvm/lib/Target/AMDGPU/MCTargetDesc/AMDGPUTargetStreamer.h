@@ -9,58 +9,70 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_MCTARGETDESC_AMDGPUTARGETSTREAMER_H
 #define LLVM_LIB_TARGET_AMDGPU_MCTARGETDESC_AMDGPUTARGETSTREAMER_H
 
-#include "AMDKernelCodeT.h"
+#include "Utils/AMDGPUBaseInfo.h"
 #include "Utils/AMDGPUPALMetadata.h"
-#include "llvm/BinaryFormat/MsgPackDocument.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/AMDGPUMetadata.h"
-#include "llvm/Support/AMDHSAKernelDescriptor.h"
 
 namespace llvm {
-#include "AMDGPUPTNote.h"
 
-class DataLayout;
-class Function;
 class MCELFStreamer;
 class MCSymbol;
-class MDNode;
-class Module;
-class Type;
+class formatted_raw_ostream;
+
+namespace AMDGPU {
+
+struct AMDGPUMCKernelCodeT;
+struct MCKernelDescriptor;
+namespace HSAMD {
+struct Metadata;
+}
+} // namespace AMDGPU
 
 class AMDGPUTargetStreamer : public MCTargetStreamer {
   AMDGPUPALMetadata PALMetadata;
 
 protected:
+  // TODO: Move HSAMetadataStream to AMDGPUTargetStreamer.
+  std::optional<AMDGPU::IsaInfo::AMDGPUTargetID> TargetID;
+  unsigned CodeObjectVersion;
+
   MCContext &getContext() const { return Streamer.getContext(); }
 
 public:
-  AMDGPUTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
+  AMDGPUTargetStreamer(MCStreamer &S)
+      : MCTargetStreamer(S),
+        // Assume the default COV for now, EmitDirectiveAMDHSACodeObjectVersion
+        // will update this if it is encountered.
+        CodeObjectVersion(AMDGPU::getDefaultAMDHSACodeObjectVersion()) {}
 
   AMDGPUPALMetadata *getPALMetadata() { return &PALMetadata; }
 
-  virtual void EmitDirectiveAMDGCNTarget(StringRef Target) = 0;
+  virtual void EmitDirectiveAMDGCNTarget(){};
 
-  virtual void EmitDirectiveHSACodeObjectVersion(uint32_t Major,
-                                                 uint32_t Minor) = 0;
+  virtual void EmitDirectiveAMDHSACodeObjectVersion(unsigned COV) {
+    CodeObjectVersion = COV;
+  }
 
-  virtual void EmitDirectiveHSACodeObjectISA(uint32_t Major, uint32_t Minor,
-                                             uint32_t Stepping,
-                                             StringRef VendorName,
-                                             StringRef ArchName) = 0;
+  virtual void EmitAMDKernelCodeT(AMDGPU::AMDGPUMCKernelCodeT &Header) {};
 
-  virtual void EmitAMDKernelCodeT(const amd_kernel_code_t &Header) = 0;
+  virtual void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type){};
 
-  virtual void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) = 0;
+  virtual void emitAMDGPULDS(MCSymbol *Symbol, unsigned Size, Align Alignment) {
+  }
 
-  virtual void emitAMDGPULDS(MCSymbol *Symbol, unsigned Size,
-                             Align Alignment) = 0;
+  virtual void EmitMCResourceInfo(
+      const MCSymbol *NumVGPR, const MCSymbol *NumAGPR,
+      const MCSymbol *NumExplicitSGPR, const MCSymbol *PrivateSegmentSize,
+      const MCSymbol *UsesVCC, const MCSymbol *UsesFlatScratch,
+      const MCSymbol *HasDynamicallySizedStack, const MCSymbol *HasRecursion,
+      const MCSymbol *HasIndirectCall) {};
+
+  virtual void EmitMCResourceMaximums(const MCSymbol *MaxVGPR,
+                                      const MCSymbol *MaxAGPR,
+                                      const MCSymbol *MaxSGPR) {};
 
   /// \returns True on success, false on failure.
-  virtual bool EmitISAVersion(StringRef IsaVersionString) = 0;
-
-  /// \returns True on success, false on failure.
-  virtual bool EmitHSAMetadataV2(StringRef HSAMetadataString);
+  virtual bool EmitISAVersion() { return true; }
 
   /// \returns True on success, false on failure.
   virtual bool EmitHSAMetadataV3(StringRef HSAMetadataString);
@@ -72,22 +84,44 @@ public:
   /// the \p HSAMetadata structure is updated with the correct types.
   ///
   /// \returns True on success, false on failure.
-  virtual bool EmitHSAMetadata(msgpack::Document &HSAMetadata, bool Strict) = 0;
+  virtual bool EmitHSAMetadata(msgpack::Document &HSAMetadata, bool Strict) {
+    return true;
+  }
 
   /// \returns True on success, false on failure.
-  virtual bool EmitHSAMetadata(const AMDGPU::HSAMD::Metadata &HSAMetadata) = 0;
+  virtual bool EmitHSAMetadata(const AMDGPU::HSAMD::Metadata &HSAMetadata) {
+    return true;
+  }
 
   /// \returns True on success, false on failure.
-  virtual bool EmitCodeEnd() = 0;
+  virtual bool EmitCodeEnd(const MCSubtargetInfo &STI) { return true; }
 
-  virtual void EmitAmdhsaKernelDescriptor(
-      const MCSubtargetInfo &STI, StringRef KernelName,
-      const amdhsa::kernel_descriptor_t &KernelDescriptor, uint64_t NextVGPR,
-      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr,
-      bool ReserveXNACK) = 0;
+  virtual void
+  EmitAmdhsaKernelDescriptor(const MCSubtargetInfo &STI, StringRef KernelName,
+                             const AMDGPU::MCKernelDescriptor &KernelDescriptor,
+                             const MCExpr *NextVGPR, const MCExpr *NextSGPR,
+                             const MCExpr *ReserveVCC,
+                             const MCExpr *ReserveFlatScr) {}
 
   static StringRef getArchNameFromElfMach(unsigned ElfMach);
   static unsigned getElfMach(StringRef GPU);
+
+  const std::optional<AMDGPU::IsaInfo::AMDGPUTargetID> &getTargetID() const {
+    return TargetID;
+  }
+  std::optional<AMDGPU::IsaInfo::AMDGPUTargetID> &getTargetID() {
+    return TargetID;
+  }
+  void initializeTargetID(const MCSubtargetInfo &STI) {
+    assert(TargetID == std::nullopt && "TargetID can only be initialized once");
+    TargetID.emplace(STI);
+  }
+  void initializeTargetID(const MCSubtargetInfo &STI, StringRef FeatureString) {
+    initializeTargetID(STI);
+
+    assert(getTargetID() != std::nullopt && "TargetID is None");
+    getTargetID()->setTargetIDFromFeaturesString(FeatureString);
+  }
 };
 
 class AMDGPUTargetAsmStreamer final : public AMDGPUTargetStreamer {
@@ -97,46 +131,65 @@ public:
 
   void finish() override;
 
-  void EmitDirectiveAMDGCNTarget(StringRef Target) override;
+  void EmitDirectiveAMDGCNTarget() override;
 
-  void EmitDirectiveHSACodeObjectVersion(uint32_t Major,
-                                         uint32_t Minor) override;
+  void EmitDirectiveAMDHSACodeObjectVersion(unsigned COV) override;
 
-  void EmitDirectiveHSACodeObjectISA(uint32_t Major, uint32_t Minor,
-                                     uint32_t Stepping, StringRef VendorName,
-                                     StringRef ArchName) override;
-
-  void EmitAMDKernelCodeT(const amd_kernel_code_t &Header) override;
+  void EmitAMDKernelCodeT(AMDGPU::AMDGPUMCKernelCodeT &Header) override;
 
   void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) override;
 
   void emitAMDGPULDS(MCSymbol *Sym, unsigned Size, Align Alignment) override;
 
+  void EmitMCResourceInfo(const MCSymbol *NumVGPR, const MCSymbol *NumAGPR,
+                          const MCSymbol *NumExplicitSGPR,
+                          const MCSymbol *PrivateSegmentSize,
+                          const MCSymbol *UsesVCC,
+                          const MCSymbol *UsesFlatScratch,
+                          const MCSymbol *HasDynamicallySizedStack,
+                          const MCSymbol *HasRecursion,
+                          const MCSymbol *HasIndirectCall) override;
+
+  void EmitMCResourceMaximums(const MCSymbol *MaxVGPR, const MCSymbol *MaxAGPR,
+                              const MCSymbol *MaxSGPR) override;
+
   /// \returns True on success, false on failure.
-  bool EmitISAVersion(StringRef IsaVersionString) override;
+  bool EmitISAVersion() override;
 
   /// \returns True on success, false on failure.
   bool EmitHSAMetadata(msgpack::Document &HSAMetadata, bool Strict) override;
 
   /// \returns True on success, false on failure.
-  bool EmitHSAMetadata(const AMDGPU::HSAMD::Metadata &HSAMetadata) override;
+  bool EmitCodeEnd(const MCSubtargetInfo &STI) override;
 
-  /// \returns True on success, false on failure.
-  bool EmitCodeEnd() override;
-
-  void EmitAmdhsaKernelDescriptor(
-      const MCSubtargetInfo &STI, StringRef KernelName,
-      const amdhsa::kernel_descriptor_t &KernelDescriptor, uint64_t NextVGPR,
-      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr,
-      bool ReserveXNACK) override;
+  void
+  EmitAmdhsaKernelDescriptor(const MCSubtargetInfo &STI, StringRef KernelName,
+                             const AMDGPU::MCKernelDescriptor &KernelDescriptor,
+                             const MCExpr *NextVGPR, const MCExpr *NextSGPR,
+                             const MCExpr *ReserveVCC,
+                             const MCExpr *ReserveFlatScr) override;
 };
 
 class AMDGPUTargetELFStreamer final : public AMDGPUTargetStreamer {
+  const MCSubtargetInfo &STI;
   MCStreamer &Streamer;
-  Triple::OSType Os;
 
   void EmitNote(StringRef Name, const MCExpr *DescSize, unsigned NoteType,
                 function_ref<void(MCELFStreamer &)> EmitDesc);
+
+  unsigned getEFlags();
+
+  unsigned getEFlagsR600();
+  unsigned getEFlagsAMDGCN();
+
+  unsigned getEFlagsUnknownOS();
+  unsigned getEFlagsAMDHSA();
+  unsigned getEFlagsAMDPAL();
+  unsigned getEFlagsMesa3D();
+
+  unsigned getEFlagsV3();
+  unsigned getEFlagsV4();
+  unsigned getEFlagsV6();
 
 public:
   AMDGPUTargetELFStreamer(MCStreamer &S, const MCSubtargetInfo &STI);
@@ -145,39 +198,29 @@ public:
 
   void finish() override;
 
-  void EmitDirectiveAMDGCNTarget(StringRef Target) override;
+  void EmitDirectiveAMDGCNTarget() override;
 
-  void EmitDirectiveHSACodeObjectVersion(uint32_t Major,
-                                         uint32_t Minor) override;
-
-  void EmitDirectiveHSACodeObjectISA(uint32_t Major, uint32_t Minor,
-                                     uint32_t Stepping, StringRef VendorName,
-                                     StringRef ArchName) override;
-
-  void EmitAMDKernelCodeT(const amd_kernel_code_t &Header) override;
+  void EmitAMDKernelCodeT(AMDGPU::AMDGPUMCKernelCodeT &Header) override;
 
   void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) override;
 
   void emitAMDGPULDS(MCSymbol *Sym, unsigned Size, Align Alignment) override;
 
   /// \returns True on success, false on failure.
-  bool EmitISAVersion(StringRef IsaVersionString) override;
+  bool EmitISAVersion() override;
 
   /// \returns True on success, false on failure.
   bool EmitHSAMetadata(msgpack::Document &HSAMetadata, bool Strict) override;
 
   /// \returns True on success, false on failure.
-  bool EmitHSAMetadata(const AMDGPU::HSAMD::Metadata &HSAMetadata) override;
+  bool EmitCodeEnd(const MCSubtargetInfo &STI) override;
 
-  /// \returns True on success, false on failure.
-  bool EmitCodeEnd() override;
-
-  void EmitAmdhsaKernelDescriptor(
-      const MCSubtargetInfo &STI, StringRef KernelName,
-      const amdhsa::kernel_descriptor_t &KernelDescriptor, uint64_t NextVGPR,
-      uint64_t NextSGPR, bool ReserveVCC, bool ReserveFlatScr,
-      bool ReserveXNACK) override;
+  void
+  EmitAmdhsaKernelDescriptor(const MCSubtargetInfo &STI, StringRef KernelName,
+                             const AMDGPU::MCKernelDescriptor &KernelDescriptor,
+                             const MCExpr *NextVGPR, const MCExpr *NextSGPR,
+                             const MCExpr *ReserveVCC,
+                             const MCExpr *ReserveFlatScr) override;
 };
-
 }
 #endif

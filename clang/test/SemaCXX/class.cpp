@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fsyntax-only -verify -Wc++11-compat %s 
+// RUN: %clang_cc1 -fsyntax-only -verify=expected,cxx11 -Wc++11-compat %s
 // RUN: %clang_cc1 -fsyntax-only -verify -Wc++11-compat %s -std=c++98
 class C {
 public:
@@ -47,7 +47,7 @@ public:
   // expected-warning@-2 {{default member initializer for non-static data member is a C++11 extension}}
 #endif
   static int si = 0; // expected-error {{non-const static data member must be initialized out of line}}
-  static const NestedC ci = 0; // expected-error {{static data member of type 'const C::NestedC' must be initialized out of line}}
+  static const NestedC ci = 0; // expected-error {{static data member of type 'const NestedC' must be initialized out of line}}
   static const int nci = vs; // expected-error {{in-class initializer for static data member is not a constant expression}}
   static const int vi = 0;
   static const volatile int cvi = 0; // ok, illegal in C++11
@@ -55,6 +55,13 @@ public:
   // expected-error@-2 {{static const volatile data member must be initialized out of line}}
 #endif
   static const E evi = 0;
+  static const int overflow = 1000000*1000000; // cxx11-error {{in-class initializer for static data member is not a constant expression}}
+                                               // expected-warning@-1 {{overflow in expression}}
+  static const int overflow_shift = 1<<32; // cxx11-error {{in-class initializer for static data member is not a constant expression}}
+  static const int overflow_shift2 = 1>>32; // cxx11-error {{in-class initializer for static data member is not a constant expression}}
+  static const int overflow_shift3 = 1<<-1; // cxx11-error {{in-class initializer for static data member is not a constant expression}}
+  static const int overflow_shift4 = 1<<-1; // cxx11-error {{in-class initializer for static data member is not a constant expression}}
+  static const int overflow_shift5 = -1<<1; // cxx11-error {{in-class initializer for static data member is not a constant expression}}
 
   void m() {
     sx = 0;

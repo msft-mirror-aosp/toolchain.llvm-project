@@ -1,7 +1,7 @@
-# RUN: llvm-mc %s -arch=mips -mcpu=mips32r2 | \
+# RUN: llvm-mc %s -triple=mips -mcpu=mips32r2 | \
 # RUN:   FileCheck %s -check-prefix=CHECK-ASM
 #
-# RUN: llvm-mc %s -arch=mips -mcpu=mips32r2 -filetype=obj -o - | \
+# RUN: llvm-mc %s -triple=mips -mcpu=mips32r2 -filetype=obj -o - | \
 # RUN:   llvm-readobj --sections --section-data --section-relocations - | \
 # RUN:     FileCheck %s -check-prefix=CHECK-OBJ
 
@@ -24,9 +24,9 @@
 # CHECK-OBJ:  Section {
 # CHECK-OBJ:    Name: .rel.data
 # CHECK-OBJ:    Relocations [
-# CHECK-OBJ:      0xE R_MIPS_32 .data 0x0
-# CHECK-OBJ:      0x12 R_MIPS_64 .data 0x0
-# CHECK-OBJ:      0x1A R_MIPS_16 .data 0x0
+# CHECK-OBJ:      0xE R_MIPS_32 .data
+# CHECK-OBJ:      0x12 R_MIPS_64 .data
+# CHECK-OBJ:      0x1A R_MIPS_16 .data
 # CHECK-OBJ:    ]
 # CHECK-OBJ:  }
 

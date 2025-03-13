@@ -41,6 +41,8 @@ struct EquivalenceObject {
       std::optional<ConstantSubscript> substringStart, parser::CharBlock source)
       : symbol{symbol}, subscripts{subscripts},
         substringStart{substringStart}, source{source} {}
+  explicit EquivalenceObject(Symbol &symbol)
+      : symbol{symbol}, source{symbol.name()} {}
 
   bool operator==(const EquivalenceObject &) const;
   bool operator<(const EquivalenceObject &) const;
@@ -57,14 +59,16 @@ class Scope {
   using mapType = std::map<SourceName, MutableSymbolRef>;
 
 public:
-  ENUM_CLASS(Kind, Global, Module, MainProgram, Subprogram, BlockData,
-      DerivedType, Block, Forall, ImpliedDos)
+  ENUM_CLASS(Kind, Global, IntrinsicModules, Module, MainProgram, Subprogram,
+      BlockData, DerivedType, BlockConstruct, Forall, OtherConstruct,
+      OpenACCConstruct, ImpliedDos, OtherClause)
   using ImportKind = common::ImportKind;
 
   // Create the Global scope -- the root of the scope tree
-  Scope() : Scope{*this, Kind::Global, nullptr} {}
-  Scope(Scope &parent, Kind kind, Symbol *symbol)
-      : parent_{parent}, kind_{kind}, symbol_{symbol} {
+  explicit Scope(SemanticsContext &context)
+      : Scope{*this, Kind::Global, nullptr, context} {}
+  Scope(Scope &parent, Kind kind, Symbol *symbol, SemanticsContext &context)
+      : parent_{&parent}, kind_{kind}, symbol_{symbol}, context_{context} {
     if (symbol) {
       symbol->set_scope(this);
     }
@@ -75,15 +79,19 @@ public:
   bool operator!=(const Scope &that) const { return this != &that; }
 
   Scope &parent() {
-    CHECK(&parent_ != this);
-    return parent_;
+    CHECK(parent_ != this);
+    return *parent_;
   }
   const Scope &parent() const {
-    CHECK(&parent_ != this);
-    return parent_;
+    CHECK(parent_ != this);
+    return *parent_;
   }
   Kind kind() const { return kind_; }
   bool IsGlobal() const { return kind_ == Kind::Global; }
+  bool IsIntrinsicModules() const { return kind_ == Kind::IntrinsicModules; }
+  bool IsTopLevel() const {
+    return kind_ == Kind::Global || kind_ == Kind::IntrinsicModules;
+  }
   bool IsModule() const {
     return kind_ == Kind::Module &&
         !symbol_->get<ModuleDetails>().isSubmodule();
@@ -97,16 +105,26 @@ public:
   bool IsParameterizedDerivedTypeInstantiation() const {
     return kind_ == Kind::DerivedType && !symbol_;
   }
+  /// Does this derived type have at least one kind parameter ?
+  bool IsDerivedTypeWithKindParameter() const;
+  /// Does this derived type have at least one length parameter ?
+  bool IsDerivedTypeWithLengthParameter() const;
   Symbol *symbol() { return symbol_; }
   const Symbol *symbol() const { return symbol_; }
+  SemanticsContext &context() const { return context_; }
 
   inline const Symbol *GetSymbol() const;
   const Scope *GetDerivedTypeParent() const;
   const Scope &GetDerivedTypeBase() const;
   inline std::optional<SourceName> GetName() const;
+  // Returns true if this scope contains, or is, another scope.
   bool Contains(const Scope &) const;
   /// Make a scope nested in this one
   Scope &MakeScope(Kind kind, Symbol *symbol = nullptr);
+
+  SemanticsContext &GetMutableSemanticsContext() const {
+    return const_cast<SemanticsContext &>(context());
+  }
 
   using size_type = mapType::size_type;
   using iterator = mapType::iterator;
@@ -120,6 +138,8 @@ public:
   const_iterator cend() const { return symbols_.cend(); }
 
   // Return symbols in declaration order (the iterators above are in name order)
+  // When a generic procedure interface shadows a derived type or specific
+  // procedure, only the generic's symbol appears in the output.
   SymbolVector GetSymbols() const;
   MutableSymbolVector GetSymbols();
 
@@ -169,7 +189,7 @@ public:
   mapType &commonBlocks() { return commonBlocks_; }
   const mapType &commonBlocks() const { return commonBlocks_; }
   Symbol &MakeCommonBlock(const SourceName &);
-  Symbol *FindCommonBlock(const SourceName &);
+  Symbol *FindCommonBlock(const SourceName &) const;
 
   /// Make a Symbol but don't add it to the scope.
   template <typename D>
@@ -194,6 +214,7 @@ public:
   DeclTypeSpec &MakeDerivedType(DeclTypeSpec::Category, DerivedTypeSpec &&);
   const DeclTypeSpec &MakeTypeStarType();
   const DeclTypeSpec &MakeClassStarType();
+  const DeclTypeSpec *GetType(const SomeExpr &);
 
   std::size_t size() const { return size_; }
   void set_size(std::size_t size) { size_ = size; }
@@ -206,6 +227,7 @@ public:
   ImportKind GetImportKind() const;
   // Names appearing in IMPORT statements in this scope
   std::set<SourceName> importNames() const { return importNames_; }
+  bool CanImport(const SourceName &) const;
 
   // Set the kind of imports from host into this scope.
   // Return an error message for incompatible kinds.
@@ -229,10 +251,7 @@ public:
 
   // The range of the source of this and nested scopes.
   const parser::CharBlock &sourceRange() const { return sourceRange_; }
-  void AddSourceRange(const parser::CharBlock &);
-  // Find the smallest scope under this one that contains source
-  const Scope *FindScope(parser::CharBlock) const;
-  Scope *FindScope(parser::CharBlock);
+  void AddSourceRange(parser::CharBlock);
 
   // Attempts to find a match for a derived type instance
   const DeclTypeSpec *FindInstantiatedDerivedType(const DerivedTypeSpec &,
@@ -243,7 +262,7 @@ public:
         symbol_->test(Symbol::Flag::ModFile);
   }
 
-  void InstantiateDerivedTypes(SemanticsContext &);
+  void InstantiateDerivedTypes();
 
   const Symbol *runtimeDerivedTypeDescription() const {
     return runtimeDerivedTypeDescription_;
@@ -253,11 +272,13 @@ public:
   }
 
 private:
-  Scope &parent_; // this is enclosing scope, not extended derived type base
+  Scope *parent_{
+      nullptr}; // this is enclosing scope, not extended derived type base
   const Kind kind_;
   std::size_t size_{0}; // size in bytes
   std::optional<std::size_t> alignment_; // required alignment in bytes
   parser::CharBlock sourceRange_;
+  const parser::CookedSource *cookedSource_{nullptr};
   Symbol *const symbol_; // if not null, symbol_->scope() == this
   std::list<Scope> children_;
   mapType symbols_;
@@ -272,14 +293,14 @@ private:
   parser::Message::Reference instantiationContext_;
   bool hasSAVE_{false}; // scope has a bare SAVE statement
   const Symbol *runtimeDerivedTypeDescription_{nullptr};
+  SemanticsContext &context_;
   // When additional data members are added to Scope, remember to
-  // copy them, if appropriate, in InstantiateDerivedType().
+  // copy them, if appropriate, in FindOrInstantiateDerivedType().
 
   // Storage for all Symbols. Every Symbol is in allSymbols and every Symbol*
   // or Symbol& points to one in there.
   static Symbols<1024> allSymbols;
 
-  bool CanImport(const SourceName &) const;
   const DeclTypeSpec &MakeLengthlessType(DeclTypeSpec &&);
 
   friend llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Scope &);

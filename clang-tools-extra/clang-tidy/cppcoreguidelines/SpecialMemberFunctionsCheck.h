@@ -13,15 +13,13 @@
 
 #include "llvm/ADT/DenseMapInfo.h"
 
-namespace clang {
-namespace tidy {
-namespace cppcoreguidelines {
+namespace clang::tidy::cppcoreguidelines {
 
 /// Checks for classes where some, but not all, of the special member functions
 /// are defined.
 ///
 /// For the user-facing documentation see:
-/// http://clang.llvm.org/extra/clang-tidy/checks/cppcoreguidelines-special-member-functions.html
+/// http://clang.llvm.org/extra/clang-tidy/checks/cppcoreguidelines/special-member-functions.html
 class SpecialMemberFunctionsCheck : public ClangTidyCheck {
 public:
   SpecialMemberFunctionsCheck(StringRef Name, ClangTidyContext *Context);
@@ -32,6 +30,7 @@ public:
   void registerMatchers(ast_matchers::MatchFinder *Finder) override;
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
   void onEndOfTranslationUnit() override;
+  std::optional<TraversalKind> getCheckTraversalKind() const override;
 
   enum class SpecialMemberFunctionKind : uint8_t {
     Destructor,
@@ -46,8 +45,9 @@ public:
   struct SpecialMemberFunctionData {
     SpecialMemberFunctionKind FunctionKind;
     bool IsDeleted;
+    bool IsImplicit = false;
 
-    bool operator==(const SpecialMemberFunctionData &Other) {
+    bool operator==(const SpecialMemberFunctionData &Other) const {
       return (Other.FunctionKind == FunctionKind) &&
              (Other.IsDeleted == IsDeleted);
     }
@@ -62,20 +62,19 @@ public:
 private:
   void checkForMissingMembers(
       const ClassDefId &ID,
-      llvm::ArrayRef<SpecialMemberFunctionData> DefinedSpecialMembers);
+      llvm::ArrayRef<SpecialMemberFunctionData> DefinedMembers);
 
   const bool AllowMissingMoveFunctions;
   const bool AllowSoleDefaultDtor;
   const bool AllowMissingMoveFunctionsWhenCopyIsDeleted;
+  const bool AllowImplicitlyDeletedCopyOrMove;
   ClassDefiningSpecialMembersMap ClassWithSpecialMembers;
 };
 
-} // namespace cppcoreguidelines
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::cppcoreguidelines
 
 namespace llvm {
-/// Specialisation of DenseMapInfo to allow ClassDefId objects in DenseMaps
+/// Specialization of DenseMapInfo to allow ClassDefId objects in DenseMaps
 /// FIXME: Move this to the corresponding cpp file as is done for
 /// clang-tidy/readability/IdentifierNamingCheck.cpp.
 template <>
@@ -85,13 +84,13 @@ struct DenseMapInfo<
       clang::tidy::cppcoreguidelines::SpecialMemberFunctionsCheck::ClassDefId;
 
   static inline ClassDefId getEmptyKey() {
-    return ClassDefId(DenseMapInfo<clang::SourceLocation>::getEmptyKey(),
-                      "EMPTY");
+    return {DenseMapInfo<clang::SourceLocation>::getEmptyKey(),
+                      "EMPTY"};
   }
 
   static inline ClassDefId getTombstoneKey() {
-    return ClassDefId(DenseMapInfo<clang::SourceLocation>::getTombstoneKey(),
-                      "TOMBSTONE");
+    return {DenseMapInfo<clang::SourceLocation>::getTombstoneKey(),
+                      "TOMBSTONE"};
   }
 
   static unsigned getHashValue(ClassDefId Val) {

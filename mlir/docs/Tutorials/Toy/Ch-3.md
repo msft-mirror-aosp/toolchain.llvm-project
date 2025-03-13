@@ -37,7 +37,7 @@ def transpose_transpose(x) {
 Which corresponds to the following IR:
 
 ```mlir
-func @transpose_transpose(%arg0: tensor<*xf64>) -> tensor<*xf64> {
+toy.func @transpose_transpose(%arg0: tensor<*xf64>) -> tensor<*xf64> {
   %0 = toy.transpose(%arg0 : tensor<*xf64>) to tensor<*xf64>
   %1 = toy.transpose(%0 : tensor<*xf64>) to tensor<*xf64>
   toy.return %1 : tensor<*xf64>
@@ -86,7 +86,7 @@ struct SimplifyRedundantTranspose : public mlir::OpRewritePattern<TransposeOp> {
   /// This method is attempting to match a pattern and rewrite it. The rewriter
   /// argument is the orchestrator of the sequence of rewrites. It is expected
   /// to interact with it to perform any changes to the IR from here.
-  mlir::LogicalResult
+  llvm::LogicalResult
   matchAndRewrite(TransposeOp op,
                   mlir::PatternRewriter &rewriter) const override {
     // Look through the input of the current transpose.
@@ -108,14 +108,14 @@ The implementation of this rewriter is in `ToyCombine.cpp`. The
 [canonicalization pass](../../Canonicalization.md) applies transformations
 defined by operations in a greedy, iterative manner. To ensure that the
 canonicalization pass applies our new transform, we set
-[hasCanonicalizer = 1](../../OpDefinitions.md#hascanonicalizer) and register the
+[hasCanonicalizer = 1](../../DefiningDialects/Operations.md/#hascanonicalizer) and register the
 pattern with the canonicalization framework.
 
 ```c++
 // Register our patterns for rewrite by the Canonicalization framework.
 void TransposeOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<SimplifyRedundantTranspose>(context);
+    RewritePatternSet &results, MLIRContext *context) {
+  results.add<SimplifyRedundantTranspose>(context);
 }
 ```
 
@@ -124,15 +124,15 @@ pipeline. In MLIR, the optimizations are run through a `PassManager` in a
 similar way to LLVM:
 
 ```c++
-  mlir::PassManager pm(module.getContext());
-  pm.addNestedPass<mlir::FuncOp>(mlir::createCanonicalizerPass());
+  mlir::PassManager pm(module->getName());
+  pm.addNestedPass<mlir::toy::FuncOp>(mlir::createCanonicalizerPass());
 ```
 
-Finally, we can run `toyc-ch3 test/Examples/Toy/Ch3/transpose_transpose.toy 
+Finally, we can run `toyc-ch3 test/Examples/Toy/Ch3/transpose_transpose.toy
 -emit=mlir -opt` and observe our pattern in action:
 
 ```mlir
-func @transpose_transpose(%arg0: tensor<*xf64>) -> tensor<*xf64> {
+toy.func @transpose_transpose(%arg0: tensor<*xf64>) -> tensor<*xf64> {
   %0 = toy.transpose(%arg0 : tensor<*xf64>) to tensor<*xf64>
   toy.return %arg0 : tensor<*xf64>
 }
@@ -144,16 +144,16 @@ eliminated. That is not ideal! What happened is that our pattern replaced the
 last transform with the function input and left behind the now dead transpose
 input. The Canonicalizer knows to clean up dead operations; however, MLIR
 conservatively assumes that operations may have side-effects. We can fix this by
-adding a new trait, `NoSideEffect`, to our `TransposeOp`:
+adding a new trait, `Pure`, to our `TransposeOp`:
 
 ```tablegen
-def TransposeOp : Toy_Op<"transpose", [NoSideEffect]> {...}
+def TransposeOp : Toy_Op<"transpose", [Pure]> {...}
 ```
 
 Let's retry now `toyc-ch3 test/transpose_transpose.toy -emit=mlir -opt`:
 
 ```mlir
-func @transpose_transpose(%arg0: tensor<*xf64>) -> tensor<*xf64> {
+toy.func @transpose_transpose(%arg0: tensor<*xf64>) -> tensor<*xf64> {
   toy.return %arg0 : tensor<*xf64>
 }
 ```
@@ -228,7 +228,7 @@ def main() {
 
 ```mlir
 module {
-  func @main() {
+  toy.func @main() {
     %0 = toy.constant dense<[1.000000e+00, 2.000000e+00]> : tensor<2xf64>
     %1 = toy.reshape(%0 : tensor<2xf64>) to tensor<2x1xf64>
     %2 = toy.reshape(%1 : tensor<2x1xf64>) to tensor<2x1xf64>
@@ -239,12 +239,12 @@ module {
 }
 ```
 
-We can try to run `toyc-ch3 test/Examples/Toy/Ch3/trivial_reshape.toy -emit=mlir 
+We can try to run `toyc-ch3 test/Examples/Toy/Ch3/trivial_reshape.toy -emit=mlir
 -opt` and observe our pattern in action:
 
 ```mlir
 module {
-  func @main() {
+  toy.func @main() {
     %0 = toy.constant dense<[[1.000000e+00], [2.000000e+00]]> : tensor<2x1xf64>
     toy.print %0 : tensor<2x1xf64>
     toy.return

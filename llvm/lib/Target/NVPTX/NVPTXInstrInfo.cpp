@@ -12,12 +12,9 @@
 
 #include "NVPTXInstrInfo.h"
 #include "NVPTX.h"
-#include "NVPTXTargetMachine.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/IR/Function.h"
 
 using namespace llvm;
 
@@ -27,12 +24,13 @@ using namespace llvm;
 // Pin the vtable to this file.
 void NVPTXInstrInfo::anchor() {}
 
-NVPTXInstrInfo::NVPTXInstrInfo() : NVPTXGenInstrInfo(), RegInfo() {}
+NVPTXInstrInfo::NVPTXInstrInfo() : RegInfo() {}
 
 void NVPTXInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator I,
                                  const DebugLoc &DL, MCRegister DestReg,
-                                 MCRegister SrcReg, bool KillSrc) const {
+                                 MCRegister SrcReg, bool KillSrc,
+                                 bool RenamableDest, bool RenamableSrc) const {
   const MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
   const TargetRegisterClass *DestRC = MRI.getRegClass(DestReg);
   const TargetRegisterClass *SrcRC = MRI.getRegClass(SrcReg);
@@ -51,11 +49,8 @@ void NVPTXInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   } else if (DestRC == &NVPTX::Int64RegsRegClass) {
     Op = (SrcRC == &NVPTX::Int64RegsRegClass ? NVPTX::IMOV64rr
                                              : NVPTX::BITCONVERT_64_F2I);
-  } else if (DestRC == &NVPTX::Float16RegsRegClass) {
-    Op = (SrcRC == &NVPTX::Float16RegsRegClass ? NVPTX::FMOV16rr
-                                               : NVPTX::BITCONVERT_16_I2F);
-  } else if (DestRC == &NVPTX::Float16x2RegsRegClass) {
-    Op = NVPTX::IMOV32rr;
+  } else if (DestRC == &NVPTX::Int128RegsRegClass) {
+    Op = NVPTX::IMOV128rr;
   } else if (DestRC == &NVPTX::Float32RegsRegClass) {
     Op = (SrcRC == &NVPTX::Float32RegsRegClass ? NVPTX::FMOV32rr
                                                : NVPTX::BITCONVERT_32_I2F);
@@ -195,13 +190,32 @@ unsigned NVPTXInstrInfo::insertBranch(MachineBasicBlock &MBB,
     if (Cond.empty()) // Unconditional branch
       BuildMI(&MBB, DL, get(NVPTX::GOTO)).addMBB(TBB);
     else // Conditional branch
-      BuildMI(&MBB, DL, get(NVPTX::CBranch)).addReg(Cond[0].getReg())
-          .addMBB(TBB);
+      BuildMI(&MBB, DL, get(NVPTX::CBranch)).add(Cond[0]).addMBB(TBB);
     return 1;
   }
 
   // Two-way Conditional Branch.
-  BuildMI(&MBB, DL, get(NVPTX::CBranch)).addReg(Cond[0].getReg()).addMBB(TBB);
+  BuildMI(&MBB, DL, get(NVPTX::CBranch)).add(Cond[0]).addMBB(TBB);
   BuildMI(&MBB, DL, get(NVPTX::GOTO)).addMBB(FBB);
   return 2;
+}
+
+bool NVPTXInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
+                                          const MachineBasicBlock *MBB,
+                                          const MachineFunction &MF) const {
+  // Prevent the scheduler from reordering & splitting up MachineInstrs
+  // which must stick together (in initially set order) to
+  // comprise a valid PTX function call sequence.
+  switch (MI.getOpcode()) {
+  case NVPTX::CallUniPrintCallRetInst1:
+  case NVPTX::CallArgBeginInst:
+  case NVPTX::CallArgI32imm:
+  case NVPTX::CallArgParam:
+  case NVPTX::LastCallArgI32imm:
+  case NVPTX::LastCallArgParam:
+  case NVPTX::CallArgEndInst1:
+    return true;
+  }
+
+  return TargetInstrInfo::isSchedulingBoundary(MI, MBB, MF);
 }

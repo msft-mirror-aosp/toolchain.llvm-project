@@ -16,23 +16,24 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
+#include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/MachineValueType.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Printable.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -48,19 +49,16 @@ static cl::opt<unsigned>
                               "high compile time cost in global splitting."),
                      cl::init(5000));
 
-TargetRegisterInfo::TargetRegisterInfo(const TargetRegisterInfoDesc *ID,
-                             regclass_iterator RCB, regclass_iterator RCE,
-                             const char *const *SRINames,
-                             const LaneBitmask *SRILaneMasks,
-                             LaneBitmask SRICoveringLanes,
-                             const RegClassInfo *const RCIs,
-                             unsigned Mode)
-  : InfoDesc(ID), SubRegIndexNames(SRINames),
-    SubRegIndexLaneMasks(SRILaneMasks),
-    RegClassBegin(RCB), RegClassEnd(RCE),
-    CoveringLanes(SRICoveringLanes),
-    RCInfos(RCIs), HwMode(Mode) {
-}
+TargetRegisterInfo::TargetRegisterInfo(
+    const TargetRegisterInfoDesc *ID, regclass_iterator RCB,
+    regclass_iterator RCE, const char *const *SRINames,
+    const SubRegCoveredBits *SubIdxRanges, const LaneBitmask *SRILaneMasks,
+    LaneBitmask SRICoveringLanes, const RegClassInfo *const RCIs,
+    const MVT::SimpleValueType *const RCVTLists, unsigned Mode)
+    : InfoDesc(ID), SubRegIndexNames(SRINames), SubRegIdxRanges(SubIdxRanges),
+      SubRegIndexLaneMasks(SRILaneMasks), RegClassBegin(RCB), RegClassEnd(RCE),
+      CoveringLanes(SRICoveringLanes), RCInfos(RCIs), RCVTLists(RCVTLists),
+      HwMode(Mode) {}
 
 TargetRegisterInfo::~TargetRegisterInfo() = default;
 
@@ -77,8 +75,8 @@ bool TargetRegisterInfo::shouldRegionSplitForVirtReg(
 
 void TargetRegisterInfo::markSuperRegs(BitVector &RegisterSet,
                                        MCRegister Reg) const {
-  for (MCSuperRegIterator AI(Reg, this, true); AI.isValid(); ++AI)
-    RegisterSet.set(*AI);
+  for (MCPhysReg SR : superregs_inclusive(Reg))
+    RegisterSet.set(SR);
 }
 
 bool TargetRegisterInfo::checkAllSuperRegsMarked(const BitVector &RegisterSet,
@@ -88,9 +86,9 @@ bool TargetRegisterInfo::checkAllSuperRegsMarked(const BitVector &RegisterSet,
   for (unsigned Reg : RegisterSet.set_bits()) {
     if (Checked[Reg])
       continue;
-    for (MCSuperRegIterator SR(Reg, this); SR.isValid(); ++SR) {
-      if (!RegisterSet[*SR] && !is_contained(Exceptions, Reg)) {
-        dbgs() << "Error: Super register " << printReg(*SR, this)
+    for (MCPhysReg SR : superregs(Reg)) {
+      if (!RegisterSet[SR] && !is_contained(Exceptions, Reg)) {
+        dbgs() << "Error: Super register " << printReg(SR, this)
                << " of reserved register " << printReg(Reg, this)
                << " is not reserved.\n";
         return false;
@@ -98,7 +96,7 @@ bool TargetRegisterInfo::checkAllSuperRegsMarked(const BitVector &RegisterSet,
 
       // We transitively check superregs. So we can remember this for later
       // to avoid compiletime explosion in deep register hierarchies.
-      Checked.set(*SR);
+      Checked.set(SR);
     }
   }
   return true;
@@ -111,17 +109,17 @@ Printable printReg(Register Reg, const TargetRegisterInfo *TRI,
   return Printable([Reg, TRI, SubIdx, MRI](raw_ostream &OS) {
     if (!Reg)
       OS << "$noreg";
-    else if (Register::isStackSlot(Reg))
-      OS << "SS#" << Register::stackSlot2Index(Reg);
-    else if (Register::isVirtualRegister(Reg)) {
+    else if (Reg.isStack())
+      OS << "SS#" << Reg.stackSlotIndex();
+    else if (Reg.isVirtual()) {
       StringRef Name = MRI ? MRI->getVRegName(Reg) : "";
       if (Name != "") {
         OS << '%' << Name;
       } else {
-        OS << '%' << Register::virtReg2Index(Reg);
+        OS << '%' << Reg.virtRegIndex();
       }
     } else if (!TRI)
-      OS << '$' << "physreg" << Reg;
+      OS << '$' << "physreg" << Reg.id();
     else if (Reg < TRI->getNumRegs()) {
       OS << '$';
       printLowerCase(TRI->getName(Reg), OS);
@@ -203,25 +201,81 @@ TargetRegisterInfo::getAllocatableClass(const TargetRegisterClass *RC) const {
   return nullptr;
 }
 
-/// getMinimalPhysRegClass - Returns the Register Class of a physical
-/// register of the given type, picking the most sub register class of
-/// the right type that contains this physreg.
-const TargetRegisterClass *
-TargetRegisterInfo::getMinimalPhysRegClass(MCRegister reg, MVT VT) const {
-  assert(Register::isPhysicalRegister(reg) &&
-         "reg must be a physical register");
+template <typename TypeT>
+static const TargetRegisterClass *
+getMinimalPhysRegClass(const TargetRegisterInfo *TRI, MCRegister Reg,
+                       TypeT Ty) {
+  static_assert(std::is_same_v<TypeT, MVT> || std::is_same_v<TypeT, LLT>);
+  assert(Reg.isPhysical() && "reg must be a physical register");
+
+  bool IsDefault = [&]() {
+    if constexpr (std::is_same_v<TypeT, MVT>)
+      return Ty == MVT::Other;
+    else
+      return !Ty.isValid();
+  }();
 
   // Pick the most sub register class of the right type that contains
   // this physreg.
-  const TargetRegisterClass* BestRC = nullptr;
-  for (const TargetRegisterClass* RC : regclasses()) {
-    if ((VT == MVT::Other || isTypeLegalForClass(*RC, VT)) &&
-        RC->contains(reg) && (!BestRC || BestRC->hasSubClass(RC)))
+  const TargetRegisterClass *BestRC = nullptr;
+  for (const TargetRegisterClass *RC : TRI->regclasses()) {
+    if ((IsDefault || TRI->isTypeLegalForClass(*RC, Ty)) && RC->contains(Reg) &&
+        (!BestRC || BestRC->hasSubClass(RC)))
       BestRC = RC;
   }
 
-  assert(BestRC && "Couldn't find the register class");
+  if constexpr (std::is_same_v<TypeT, MVT>)
+    assert(BestRC && "Couldn't find the register class");
   return BestRC;
+}
+
+template <typename TypeT>
+static const TargetRegisterClass *
+getCommonMinimalPhysRegClass(const TargetRegisterInfo *TRI, MCRegister Reg1,
+                             MCRegister Reg2, TypeT Ty) {
+  static_assert(std::is_same_v<TypeT, MVT> || std::is_same_v<TypeT, LLT>);
+  assert(Reg1.isPhysical() && Reg2.isPhysical() &&
+         "Reg1/Reg2 must be a physical register");
+
+  bool IsDefault = [&]() {
+    if constexpr (std::is_same_v<TypeT, MVT>)
+      return Ty == MVT::Other;
+    else
+      return !Ty.isValid();
+  }();
+
+  // Pick the most sub register class of the right type that contains
+  // this physreg.
+  const TargetRegisterClass *BestRC = nullptr;
+  for (const TargetRegisterClass *RC : TRI->regclasses()) {
+    if ((IsDefault || TRI->isTypeLegalForClass(*RC, Ty)) &&
+        RC->contains(Reg1, Reg2) && (!BestRC || BestRC->hasSubClass(RC)))
+      BestRC = RC;
+  }
+
+  if constexpr (std::is_same_v<TypeT, MVT>)
+    assert(BestRC && "Couldn't find the register class");
+  return BestRC;
+}
+
+const TargetRegisterClass *
+TargetRegisterInfo::getMinimalPhysRegClass(MCRegister Reg, MVT VT) const {
+  return ::getMinimalPhysRegClass(this, Reg, VT);
+}
+
+const TargetRegisterClass *TargetRegisterInfo::getCommonMinimalPhysRegClass(
+    MCRegister Reg1, MCRegister Reg2, MVT VT) const {
+  return ::getCommonMinimalPhysRegClass(this, Reg1, Reg2, VT);
+}
+
+const TargetRegisterClass *
+TargetRegisterInfo::getMinimalPhysRegClassLLT(MCRegister Reg, LLT Ty) const {
+  return ::getMinimalPhysRegClass(this, Reg, Ty);
+}
+
+const TargetRegisterClass *TargetRegisterInfo::getCommonMinimalPhysRegClassLLT(
+    MCRegister Reg1, MCRegister Reg2, LLT Ty) const {
+  return ::getCommonMinimalPhysRegClass(this, Reg1, Reg2, Ty);
 }
 
 /// getAllocatableSetForRC - Toggle the bits that represent allocatable
@@ -230,8 +284,8 @@ static void getAllocatableSetForRC(const MachineFunction &MF,
                                    const TargetRegisterClass *RC, BitVector &R){
   assert(RC->isAllocatable() && "invalid for nonallocatable sets");
   ArrayRef<MCPhysReg> Order = RC->getRawAllocationOrder(MF);
-  for (unsigned i = 0; i != Order.size(); ++i)
-    R.set(Order[i]);
+  for (MCPhysReg PR : Order)
+    R.set(PR);
 }
 
 BitVector TargetRegisterInfo::getAllocatableSet(const MachineFunction &MF,
@@ -249,8 +303,9 @@ BitVector TargetRegisterInfo::getAllocatableSet(const MachineFunction &MF,
   }
 
   // Mask out the reserved registers
-  BitVector Reserved = getReservedRegs(MF);
-  Allocatable &= Reserved.flip();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  const BitVector &Reserved = MRI.getReservedRegs();
+  Allocatable.reset(Reserved);
 
   return Allocatable;
 }
@@ -261,7 +316,7 @@ const TargetRegisterClass *firstCommonClass(const uint32_t *A,
                                             const TargetRegisterInfo *TRI) {
   for (unsigned I = 0, E = TRI->getNumRegClasses(); I < E; I += 32)
     if (unsigned Common = *A++ & *B++)
-      return TRI->getRegClass(I + countTrailingZeros(Common));
+      return TRI->getRegClass(I + llvm::countr_zero(Common));
   return nullptr;
 }
 
@@ -404,13 +459,16 @@ bool TargetRegisterInfo::getRegAllocationHints(
     SmallVectorImpl<MCPhysReg> &Hints, const MachineFunction &MF,
     const VirtRegMap *VRM, const LiveRegMatrix *Matrix) const {
   const MachineRegisterInfo &MRI = MF.getRegInfo();
-  const std::pair<Register, SmallVector<Register, 4>> &Hints_MRI =
-    MRI.getRegAllocationHints(VirtReg);
+  const std::pair<unsigned, SmallVector<Register, 4>> *Hints_MRI =
+      MRI.getRegAllocationHints(VirtReg);
+
+  if (!Hints_MRI)
+    return false;
 
   SmallSet<Register, 32> HintedRegs;
   // First hint may be a target hint.
-  bool Skip = (Hints_MRI.first != 0);
-  for (auto Reg : Hints_MRI.second) {
+  bool Skip = (Hints_MRI->first != 0);
+  for (auto Reg : Hints_MRI->second) {
     if (Skip) {
       Skip = false;
       continue;
@@ -444,37 +502,23 @@ bool TargetRegisterInfo::getRegAllocationHints(
 
 bool TargetRegisterInfo::isCalleeSavedPhysReg(
     MCRegister PhysReg, const MachineFunction &MF) const {
-  if (PhysReg == 0)
+  if (!PhysReg)
     return false;
   const uint32_t *callerPreservedRegs =
       getCallPreservedMask(MF, MF.getFunction().getCallingConv());
   if (callerPreservedRegs) {
-    assert(Register::isPhysicalRegister(PhysReg) &&
-           "Expected physical register");
-    return (callerPreservedRegs[PhysReg / 32] >> PhysReg % 32) & 1;
+    assert(PhysReg.isPhysical() && "Expected physical register");
+    return (callerPreservedRegs[PhysReg.id() / 32] >> PhysReg.id() % 32) & 1;
   }
   return false;
 }
 
 bool TargetRegisterInfo::canRealignStack(const MachineFunction &MF) const {
-  return !MF.getFunction().hasFnAttribute("no-realign-stack");
+  return MF.getFrameInfo().isStackRealignable();
 }
 
-bool TargetRegisterInfo::needsStackRealignment(
-    const MachineFunction &MF) const {
-  const MachineFrameInfo &MFI = MF.getFrameInfo();
-  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
-  const Function &F = MF.getFunction();
-  Align StackAlign = TFI->getStackAlign();
-  bool requiresRealignment = ((MFI.getMaxAlign() > StackAlign) ||
-                              F.hasFnAttribute(Attribute::StackAlignment));
-  if (F.hasFnAttribute("stackrealign") || requiresRealignment) {
-    if (canRealignStack(MF))
-      return true;
-    LLVM_DEBUG(dbgs() << "Can't realign function's stack: " << F.getName()
-                      << "\n");
-  }
-  return false;
+bool TargetRegisterInfo::shouldRealignStack(const MachineFunction &MF) const {
+  return MF.getFrameInfo().shouldRealignStack();
 }
 
 bool TargetRegisterInfo::regmaskSubsetEqual(const uint32_t *mask0,
@@ -486,7 +530,7 @@ bool TargetRegisterInfo::regmaskSubsetEqual(const uint32_t *mask0,
   return true;
 }
 
-unsigned
+TypeSize
 TargetRegisterInfo::getRegSizeInBits(Register Reg,
                                      const MachineRegisterInfo &MRI) const {
   const TargetRegisterClass *RC{};
@@ -495,18 +539,104 @@ TargetRegisterInfo::getRegSizeInBits(Register Reg,
     // Instead, we need to access a register class that contains Reg and
     // get the size of that register class.
     RC = getMinimalPhysRegClass(Reg);
-  } else {
-    LLT Ty = MRI.getType(Reg);
-    unsigned RegSize = Ty.isValid() ? Ty.getSizeInBits() : 0;
-    // If Reg is not a generic register, query the register class to
-    // get its size.
-    if (RegSize)
-      return RegSize;
-    // Since Reg is not a generic register, it must have a register class.
-    RC = MRI.getRegClass(Reg);
+    assert(RC && "Unable to deduce the register class");
+    return getRegSizeInBits(*RC);
   }
+  LLT Ty = MRI.getType(Reg);
+  if (Ty.isValid())
+    return Ty.getSizeInBits();
+
+  // Since Reg is not a generic register, it may have a register class.
+  RC = MRI.getRegClass(Reg);
   assert(RC && "Unable to deduce the register class");
   return getRegSizeInBits(*RC);
+}
+
+bool TargetRegisterInfo::getCoveringSubRegIndexes(
+    const TargetRegisterClass *RC, LaneBitmask LaneMask,
+    SmallVectorImpl<unsigned> &NeededIndexes) const {
+  SmallVector<unsigned, 8> PossibleIndexes;
+  unsigned BestIdx = 0;
+  unsigned BestCover = 0;
+
+  for (unsigned Idx = 1, E = getNumSubRegIndices(); Idx < E; ++Idx) {
+    // Is this index even compatible with the given class?
+    if (getSubClassWithSubReg(RC, Idx) != RC)
+      continue;
+    LaneBitmask SubRegMask = getSubRegIndexLaneMask(Idx);
+    // Early exit if we found a perfect match.
+    if (SubRegMask == LaneMask) {
+      BestIdx = Idx;
+      break;
+    }
+
+    // The index must not cover any lanes outside \p LaneMask.
+    if ((SubRegMask & ~LaneMask).any())
+      continue;
+
+    unsigned PopCount = SubRegMask.getNumLanes();
+    PossibleIndexes.push_back(Idx);
+    if (PopCount > BestCover) {
+      BestCover = PopCount;
+      BestIdx = Idx;
+    }
+  }
+
+  // Abort if we cannot possibly implement the COPY with the given indexes.
+  if (BestIdx == 0)
+    return false;
+
+  NeededIndexes.push_back(BestIdx);
+
+  // Greedy heuristic: Keep iterating keeping the best covering subreg index
+  // each time.
+  LaneBitmask LanesLeft = LaneMask & ~getSubRegIndexLaneMask(BestIdx);
+  while (LanesLeft.any()) {
+    unsigned BestIdx = 0;
+    int BestCover = std::numeric_limits<int>::min();
+    for (unsigned Idx : PossibleIndexes) {
+      LaneBitmask SubRegMask = getSubRegIndexLaneMask(Idx);
+      // Early exit if we found a perfect match.
+      if (SubRegMask == LanesLeft) {
+        BestIdx = Idx;
+        break;
+      }
+
+      // Do not cover already-covered lanes to avoid creating cycles
+      // in copy bundles (= bundle contains copies that write to the
+      // registers).
+      if ((SubRegMask & ~LanesLeft).any())
+        continue;
+
+      // Try to cover as many of the remaining lanes as possible.
+      const int Cover = (SubRegMask & LanesLeft).getNumLanes();
+      if (Cover > BestCover) {
+        BestCover = Cover;
+        BestIdx = Idx;
+      }
+    }
+
+    if (BestIdx == 0)
+      return false; // Impossible to handle
+
+    NeededIndexes.push_back(BestIdx);
+
+    LanesLeft &= ~getSubRegIndexLaneMask(BestIdx);
+  }
+
+  return BestIdx;
+}
+
+unsigned TargetRegisterInfo::getSubRegIdxSize(unsigned Idx) const {
+  assert(Idx && Idx < getNumSubRegIndices() &&
+         "This is not a subregister index");
+  return SubRegIdxRanges[HwMode * getNumSubRegIndices() + Idx].Size;
+}
+
+unsigned TargetRegisterInfo::getSubRegIdxOffset(unsigned Idx) const {
+  assert(Idx && Idx < getNumSubRegIndices() &&
+         "This is not a subregister index");
+  return SubRegIdxRanges[HwMode * getNumSubRegIndices() + Idx].Offset;
 }
 
 Register
@@ -530,6 +660,56 @@ TargetRegisterInfo::lookThruCopyLike(Register SrcReg,
 
     SrcReg = CopySrcReg;
   }
+}
+
+Register TargetRegisterInfo::lookThruSingleUseCopyChain(
+    Register SrcReg, const MachineRegisterInfo *MRI) const {
+  while (true) {
+    const MachineInstr *MI = MRI->getVRegDef(SrcReg);
+    // Found the real definition, return it if it has a single use.
+    if (!MI->isCopyLike())
+      return MRI->hasOneNonDBGUse(SrcReg) ? SrcReg : Register();
+
+    Register CopySrcReg;
+    if (MI->isCopy())
+      CopySrcReg = MI->getOperand(1).getReg();
+    else {
+      assert(MI->isSubregToReg() && "Bad opcode for lookThruCopyLike");
+      CopySrcReg = MI->getOperand(2).getReg();
+    }
+
+    // Continue only if the next definition in the chain is for a virtual
+    // register that has a single use.
+    if (!CopySrcReg.isVirtual() || !MRI->hasOneNonDBGUse(CopySrcReg))
+      return Register();
+
+    SrcReg = CopySrcReg;
+  }
+}
+
+void TargetRegisterInfo::getOffsetOpcodes(
+    const StackOffset &Offset, SmallVectorImpl<uint64_t> &Ops) const {
+  assert(!Offset.getScalable() && "Scalable offsets are not handled");
+  DIExpression::appendOffset(Ops, Offset.getFixed());
+}
+
+DIExpression *
+TargetRegisterInfo::prependOffsetExpression(const DIExpression *Expr,
+                                            unsigned PrependFlags,
+                                            const StackOffset &Offset) const {
+  assert((PrependFlags &
+          ~(DIExpression::DerefBefore | DIExpression::DerefAfter |
+            DIExpression::StackValue | DIExpression::EntryValue)) == 0 &&
+         "Unsupported prepend flag");
+  SmallVector<uint64_t, 16> OffsetExpr;
+  if (PrependFlags & DIExpression::DerefBefore)
+    OffsetExpr.push_back(dwarf::DW_OP_deref);
+  getOffsetOpcodes(Offset, OffsetExpr);
+  if (PrependFlags & DIExpression::DerefAfter)
+    OffsetExpr.push_back(dwarf::DW_OP_deref);
+  return DIExpression::prependOpcodes(Expr, OffsetExpr,
+                                      PrependFlags & DIExpression::StackValue,
+                                      PrependFlags & DIExpression::EntryValue);
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)

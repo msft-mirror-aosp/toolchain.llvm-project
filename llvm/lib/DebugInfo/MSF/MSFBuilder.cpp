@@ -15,6 +15,8 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileOutputBuffer.h"
+#include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/TimeProfiler.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -204,8 +206,7 @@ Error MSFBuilder::setStreamSize(uint32_t Idx, uint32_t Size) {
     if (auto EC = allocateBlocks(AddedBlocks, AddedBlockList))
       return EC;
     auto &CurrentBlocks = StreamData[Idx].second;
-    CurrentBlocks.insert(CurrentBlocks.end(), AddedBlockList.begin(),
-                         AddedBlockList.end());
+    llvm::append_range(CurrentBlocks, AddedBlockList);
   } else if (OldBlocks > NewBlocks) {
     // For shrinking, free all the Blocks in the Block map, update the stream
     // data, then shrink the directory.
@@ -248,6 +249,8 @@ uint32_t MSFBuilder::computeDirectoryByteSize() const {
 }
 
 Expected<MSFLayout> MSFBuilder::generateLayout() {
+  llvm::TimeTraceScope timeScope("MSF: Generate layout");
+
   SuperBlock *SB = Allocator.Allocate<SuperBlock>();
   MSFLayout L;
   L.SB = SB;
@@ -268,8 +271,7 @@ Expected<MSFLayout> MSFBuilder::generateLayout() {
     ExtraBlocks.resize(NumExtraBlocks);
     if (auto EC = allocateBlocks(NumExtraBlocks, ExtraBlocks))
       return std::move(EC);
-    DirectoryBlocks.insert(DirectoryBlocks.end(), ExtraBlocks.begin(),
-                           ExtraBlocks.end());
+    llvm::append_range(DirectoryBlocks, ExtraBlocks);
   } else if (NumDirectoryBlocks < DirectoryBlocks.size()) {
     uint32_t NumUnnecessaryBlocks = DirectoryBlocks.size() - NumDirectoryBlocks;
     for (auto B :
@@ -337,19 +339,54 @@ static void commitFpm(WritableBinaryStream &MsfBuffer, const MSFLayout &Layout,
 
 Expected<FileBufferByteStream> MSFBuilder::commit(StringRef Path,
                                                   MSFLayout &Layout) {
+  llvm::TimeTraceScope timeScope("Commit MSF");
+
   Expected<MSFLayout> L = generateLayout();
   if (!L)
     return L.takeError();
 
   Layout = std::move(*L);
 
-  uint64_t FileSize = Layout.SB->BlockSize * Layout.SB->NumBlocks;
+  uint64_t FileSize = uint64_t(Layout.SB->BlockSize) * Layout.SB->NumBlocks;
+  // Ensure that the file size is under the limit for the specified block size.
+  if (FileSize > getMaxFileSizeFromBlockSize(Layout.SB->BlockSize)) {
+    msf_error_code error_code = [](uint32_t BlockSize) {
+      switch (BlockSize) {
+      case 8192:
+        return msf_error_code::size_overflow_8192;
+      case 16384:
+        return msf_error_code::size_overflow_16384;
+      case 32768:
+        return msf_error_code::size_overflow_32768;
+      default:
+        return msf_error_code::size_overflow_4096;
+      }
+    }(Layout.SB->BlockSize);
+
+    return make_error<MSFError>(
+        error_code,
+        formatv("File size {0,1:N} too large for current PDB page size {1}",
+                FileSize, Layout.SB->BlockSize));
+  }
+
+  uint64_t NumDirectoryBlocks =
+      bytesToBlocks(Layout.SB->NumDirectoryBytes, Layout.SB->BlockSize);
+  uint64_t DirectoryBlockMapSize =
+      NumDirectoryBlocks * sizeof(support::ulittle32_t);
+  if (DirectoryBlockMapSize > Layout.SB->BlockSize) {
+    return make_error<MSFError>(msf_error_code::stream_directory_overflow,
+                                formatv("The directory block map ({0} bytes) "
+                                        "doesn't fit in a block ({1} bytes)",
+                                        DirectoryBlockMapSize,
+                                        Layout.SB->BlockSize));
+  }
+
   auto OutFileOrError = FileOutputBuffer::create(Path, FileSize);
   if (auto EC = OutFileOrError.takeError())
     return std::move(EC);
 
   FileBufferByteStream Buffer(std::move(*OutFileOrError),
-                              llvm::support::little);
+                              llvm::endianness::little);
   BinaryStreamWriter Writer(Buffer);
 
   if (auto EC = Writer.writeObject(*Layout.SB))

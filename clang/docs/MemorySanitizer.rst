@@ -8,10 +8,17 @@ MemorySanitizer
 Introduction
 ============
 
-MemorySanitizer is a detector of uninitialized reads. It consists of a
+MemorySanitizer is a detector of uninitialized memory use. It consists of a
 compiler instrumentation module and a run-time library.
 
 Typical slowdown introduced by MemorySanitizer is **3x**.
+
+Here is a not comprehensive of list cases when MemorySanitizer will report an error:
+
+* Uninitialized value was used in a conditional branch.
+* Uninitialized pointer was used for memory accesses.
+* Uninitialized value was passed or returned from a function call, which is considered an undefined behavior. The check can be disabled with ``-fno-sanitize-memory-param-retval``.
+* Uninitialized data was passed into some libc calls.
 
 How to build
 ============
@@ -85,8 +92,17 @@ particular function.  MemorySanitizer may still instrument such functions to
 avoid false positives.  This attribute may not be supported by other compilers,
 so we suggest to use it together with ``__has_feature(memory_sanitizer)``.
 
-Blacklist
----------
+``__attribute__((disable_sanitizer_instrumentation))``
+--------------------------------------------------------
+
+The ``disable_sanitizer_instrumentation`` attribute can be applied to functions
+to prevent all kinds of instrumentation. As a result, it may introduce false
+positives and therefore should be used with care, and only if absolutely
+required; for example for certain code that cannot tolerate any instrumentation
+and resulting side-effects. This attribute overrides ``no_sanitize("memory")``.
+
+Ignorelist
+----------
 
 MemorySanitizer supports ``src`` and ``fun`` entity types in
 :doc:`SanitizerSpecialCaseList`, that can be used to relax MemorySanitizer
@@ -153,16 +169,16 @@ not intermediate stores.
 Use-after-destruction detection
 ===============================
 
-You can enable experimental use-after-destruction detection in MemorySanitizer.
-After invocation of the destructor, the object will be considered no longer
-readable, and using underlying memory will lead to error reports in runtime.
+MemorySanitizer includes use-after-destruction detection. After invocation of
+the destructor, the object will be considered no longer readable, and using
+underlying memory will lead to error reports in runtime. Refer to the standard
+for `lifetime <https://eel.is/c++draft/basic.life#1>`_ definition.
 
-This feature is still experimental, in order to enable it at runtime you need
-to:
+This feature can be disabled with either:
 
-#. Pass addition Clang option ``-fsanitize-memory-use-after-dtor`` during
+#. Pass addition Clang option ``-fno-sanitize-memory-use-after-dtor`` during
    compilation.
-#. Set environment variable `MSAN_OPTIONS=poison_in_dtor=1` before running
+#. Set environment variable `MSAN_OPTIONS=poison_in_dtor=0` before running
    the program.
 
 Handling external code
@@ -181,6 +197,14 @@ to run MemorySanitizer-instrumented programs linked with
 uninstrumented libc. For example, the authors were able to bootstrap
 MemorySanitizer-instrumented Clang compiler by linking it with
 self-built instrumented libc++ (as a replacement for libstdc++).
+
+Security Considerations
+=======================
+
+MemorySanitizer is a bug detection tool and its runtime is not meant to be
+linked against production executables. While it may be useful for testing,
+MemorySanitizer's runtime was not developed with security-sensitive
+constraints in mind and may compromise the security of the resulting executable.
 
 Supported Platforms
 ===================

@@ -6,9 +6,9 @@ target triple = "x86_64-unknown-linux-gnux32"
 
 %struct.a = type { [65 x i32] }
 
-@c = global %struct.a zeroinitializer, align 4
+@c = dso_local global %struct.a zeroinitializer, align 4
 
-define void @e() nounwind {
+define dso_local void @e() nounwind {
 ; CHECK-LABEL: e:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    pushq %rbx # encoding: [0x53]
@@ -36,12 +36,11 @@ define void @e() nounwind {
 ; CHECK-NEXT:    retq # encoding: [0xc3]
 entry:
   %byval-temp = alloca %struct.a, align 8
-  %0 = bitcast %struct.a* %byval-temp to i8*
-  call void @llvm.memcpy.p0i8.p0i8.i32(i8* nonnull align 8 %0, i8* align 4 bitcast (%struct.a* @c to i8*), i32 260, i1 false)
-  call void @d(%struct.a* byval(%struct.a) nonnull align 8 %byval-temp)
+  call void @llvm.memcpy.p0.p0.i32(ptr nonnull align 8 %byval-temp, ptr align 4 @c, i32 260, i1 false)
+  call void @d(ptr byval(%struct.a) nonnull align 8 %byval-temp)
   ret void
 }
 
-declare dso_local void @d(%struct.a* byval(%struct.a) align 8) local_unnamed_addr #1
+declare dso_local void @d(ptr byval(%struct.a) align 8) local_unnamed_addr #1
 
-declare dso_local void @llvm.memcpy.p0i8.p0i8.i32(i8* nocapture writeonly, i8* nocapture readonly, i32, i1)
+declare dso_local void @llvm.memcpy.p0.p0.i32(ptr nocapture writeonly, ptr nocapture readonly, i32, i1)

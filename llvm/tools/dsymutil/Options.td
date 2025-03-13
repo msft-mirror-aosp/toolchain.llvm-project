@@ -24,6 +24,18 @@ def verbose: F<"verbose">,
   HelpText<"Enable verbose mode.">,
   Group<grp_general>;
 
+def quiet: F<"quiet">,
+  HelpText<"Enable quiet mode.">,
+  Group<grp_general>;
+def: Flag<["-"], "q">,
+  Alias<quiet>,
+  HelpText<"Alias for --quiet">,
+  Group<grp_general>;
+
+def keep_func_for_static: F<"keep-function-for-static">,
+  HelpText<"Make a static variable keep the enclosing function even if it would have been omitted otherwise.">,
+  Group<grp_general>;
+
 def statistics: F<"statistics">,
   HelpText<"Print statistics about the contribution of each object file to "
            "the linked debug info. This prints a table after linking with the "
@@ -34,8 +46,16 @@ def statistics: F<"statistics">,
   Group<grp_general>;
 
 def verify: F<"verify">,
-  HelpText<"Run the DWARF verifier on the linked DWARF debug info.">,
+  HelpText<"Alias for --verify-dwarf=output">,
   Group<grp_general>;
+
+def verify_dwarf: Separate<["--", "-"], "verify-dwarf">,
+  MetaVarName<"<verification mode>">,
+  HelpText<"Run the DWARF verifier on the input and/or output. "
+           "Valid options are 'none, 'input', 'output', 'all' or 'auto' "
+           "which runs the output verifier only if input verification passed.">,
+  Group<grp_general>;
+def: Joined<["--", "-"], "verify-dwarf=">, Alias<verify_dwarf>;
 
 def no_output: F<"no-output">,
   HelpText<"Do the link in memory, but do not emit the result file.">,
@@ -45,20 +65,20 @@ def no_swiftmodule_timestamp: F<"no-swiftmodule-timestamp">,
   HelpText<"Don't check timestamp for swiftmodule files.">,
   Group<grp_general>;
 
+def no_object_timestamp: F<"no-object-timestamp">,
+  HelpText<"Don't check timestamp for object files.">,
+  Group<grp_general>;
+
 def no_odr: F<"no-odr">,
   HelpText<"Do not use ODR (One Definition Rule) for type uniquing.">,
   Group<grp_general>;
 
 def dump_debug_map: F<"dump-debug-map">,
-  HelpText<"Parse and dump the debug map to standard output. Not DWARF link will take place.">,
+  HelpText<"Parse and dump the debug map to standard output. No DWARF link will take place.">,
   Group<grp_general>;
 
 def yaml_input: Flag<["-", "--"], "y">,
   HelpText<"Treat the input file is a YAML debug map rather than a binary.">,
-  Group<grp_general>;
-
-def papertrail: F<"papertrail">,
-  HelpText<"Embed warnings in the linked DWARF debug info.">,
   Group<grp_general>;
 
 def assembly: Flag<["-", "--"], "S">,
@@ -81,17 +101,8 @@ def: Flag<["-"], "f">,
   HelpText<"Alias for --flat">,
   Group<grp_general>;
 
-def minimize: F<"minimize">,
-  HelpText<"When used when creating a dSYM file with Apple accelerator tables, "
-           "this option will suppress the emission of the .debug_inlines, "
-           ".debug_pubnames, and .debug_pubtypes sections since dsymutil "
-           "has better equivalents: .apple_names and .apple_types. When used in "
-           "conjunction with --update option, this option will cause redundant "
-           "accelerator tables to be removed.">,
-  Group<grp_general>;
-def: Flag<["-"], "z">,
-  Alias<minimize>,
-  HelpText<"Alias for --minimize">,
+def fat64: F<"fat64">,
+  HelpText<"Use a 64-bit header when emitting universal binaries.">,
   Group<grp_general>;
 
 def update: F<"update">,
@@ -122,31 +133,25 @@ def: Joined<["--", "-"], "oso-prepend-path=">, Alias<oso_prepend_path>;
 
 def object_prefix_map: Separate<["--", "-"], "object-prefix-map">,
     MetaVarName<"<prefix=remapped>">,
-    HelpText<"Remap object file paths (but no source paths) before processing."
-             "Use this for Clang objects where the module cache location was"
-             "remapped using -fdebug-prefix-map; to help dsymutil"
+    HelpText<"Remap object file paths (but no source paths) before processing. "
+             "Use this for Clang objects where the module cache location was "
+             "remapped using -fdebug-prefix-map; to help dsymutil "
              "find the Clang module cache.">,
     Group<grp_general>;
 def: Joined<["--", "-"], "object-prefix-map=">, Alias<object_prefix_map>;
 
-def symbolmap: Separate<["--", "-"], "symbol-map">,
-  MetaVarName<"<bcsymbolmap>">,
-  HelpText<"Updates the existing dSYMs inplace using symbol map specified.">,
-  Group<grp_general>;
-def: Joined<["--", "-"], "symbol-map=">, Alias<symbolmap>;
-
 def arch: Separate<["--", "-"], "arch">,
   MetaVarName<"<arch>">,
-  HelpText<"Link DWARF debug information only for specified CPU architecture"
-           "types. This option can be specified multiple times, once for each"
-           "desired architecture. All CPU architectures will be linked by"
+  HelpText<"Link DWARF debug information only for specified CPU architecture "
+           "types. This option can be specified multiple times, once for each "
+           "desired architecture. All CPU architectures will be linked by "
            "default.">,
   Group<grp_general>;
 def: Joined<["--", "-"], "arch=">, Alias<arch>;
 
 def accelerator: Separate<["--", "-"], "accelerator">,
   MetaVarName<"<accelerator type>">,
-  HelpText<"Specify the desired type of accelerator table. Valid options are 'Apple', 'Dwarf' and 'Default'">,
+  HelpText<"Specify the desired type of accelerator table. Valid options are 'Apple' (.apple_names, .apple_namespaces, .apple_types, .apple_objc), 'Dwarf' (.debug_names), 'Pub' (.debug_pubnames, .debug_pubtypes), 'Default' and 'None'">,
   Group<grp_general>;
 def: Joined<["--", "-"], "accelerator=">, Alias<accelerator>;
 
@@ -164,8 +169,14 @@ def: Separate<["-"], "j">,
   HelpText<"Alias for --num-threads">,
   Group<grp_general>;
 
+def reproducer: Separate<["--", "-"], "reproducer">,
+  MetaVarName<"<mode>">,
+  HelpText<"Specify the reproducer generation mode. Valid options are 'GenerateOnExit', 'GenerateOnCrash', 'Off'.">,
+  Group<grp_general>;
+def: Joined<["--", "-"], "reproducer=">, Alias<reproducer>;
+
 def gen_reproducer: F<"gen-reproducer">,
-  HelpText<"Generate a reproducer consisting of the input object files.">,
+  HelpText<"Generate a reproducer consisting of the input object files. Alias for --reproducer=GenerateOnExit.">,
   Group<grp_general>;
 
 def use_reproducer: Separate<["--", "-"], "use-reproducer">,
@@ -185,3 +196,25 @@ def remarks_output_format: Separate<["--", "-"], "remarks-output-format">,
   HelpText<"Specify the format to be used when serializing the linked remarks.">,
   Group<grp_general>;
 def: Joined<["--", "-"], "remarks-output-format=">, Alias<remarks_output_format>;
+
+def remarks_drop_without_debug: Flag<["--", "-"], "remarks-drop-without-debug">,
+  HelpText<"Drop remarks without valid debug locations. Without this flags, "
+           "all remarks are kept.">,
+  Group<grp_general>;
+
+def linker: Separate<["--", "-"], "linker">,
+  MetaVarName<"<DWARF linker type>">,
+  HelpText<"Specify the desired type of DWARF linker. Defaults to 'classic'">,
+  Group<grp_general>;
+def: Joined<["--", "-"], "linker=">, Alias<linker>;
+
+def build_variant_suffix: Separate<["--", "-"], "build-variant-suffix">,
+  MetaVarName<"<suffix=buildvariant>">,
+  HelpText<"Specify the build variant suffix used to build the executable file.">,
+  Group<grp_general>;
+def: Joined<["--", "-"], "build-variant-suffix=">, Alias<build_variant_suffix>;
+
+def dsym_search_path: Separate<["-", "--"], "D">,
+  MetaVarName<"<path>">,
+  HelpText<"Specify a directory that contain dSYM files to search for.">,
+  Group<grp_general>;

@@ -11,7 +11,7 @@
 
 #include "lldb/API/SBDefines.h"
 
-#include <stdio.h>
+#include <cstdio>
 
 namespace lldb {
 
@@ -44,11 +44,13 @@ public:
 
   void AppendInstruction(lldb::SBInstruction inst);
 
+#ifndef SWIG
   void Print(FILE *out);
+#endif
 
   void Print(SBFile out);
 
-  void Print(FileSP out);
+  void Print(FileSP BORROWED);
 
   bool GetDescription(lldb::SBStream &description);
 

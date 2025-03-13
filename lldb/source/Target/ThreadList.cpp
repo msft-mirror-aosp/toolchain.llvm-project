@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <stdlib.h>
+#include <cstdlib>
 
 #include <algorithm>
 
@@ -16,13 +16,14 @@
 #include "lldb/Target/ThreadList.h"
 #include "lldb/Target/ThreadPlan.h"
 #include "lldb/Utility/LLDBAssert.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/State.h"
 
 using namespace lldb;
 using namespace lldb_private;
 
-ThreadList::ThreadList(Process *process)
+ThreadList::ThreadList(Process &process)
     : ThreadCollection(), m_process(process), m_stop_id(0),
       m_selected_tid(LLDB_INVALID_THREAD_ID) {}
 
@@ -35,14 +36,13 @@ ThreadList::ThreadList(const ThreadList &rhs)
 
 const ThreadList &ThreadList::operator=(const ThreadList &rhs) {
   if (this != &rhs) {
-    // Lock both mutexes to make sure neither side changes anyone on us while
-    // the assignment occurs
-    std::lock(GetMutex(), rhs.GetMutex());
-    std::lock_guard<std::recursive_mutex> guard(GetMutex(), std::adopt_lock);
-    std::lock_guard<std::recursive_mutex> rhs_guard(rhs.GetMutex(), 
-                                                    std::adopt_lock);
+    // We only allow assignments between thread lists describing the same
+    // process. Same process implies same mutex, which means it's enough to lock
+    // just the current object.
+    assert(&m_process == &rhs.m_process);
+    assert(&GetMutex() == &rhs.GetMutex());
+    std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
-    m_process = rhs.m_process;
     m_stop_id = rhs.m_stop_id;
     m_threads = rhs.m_threads;
     m_selected_tid = rhs.m_selected_tid;
@@ -83,7 +83,7 @@ uint32_t ThreadList::GetSize(bool can_update) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   if (can_update)
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
   return m_threads.size();
 }
 
@@ -91,7 +91,7 @@ ThreadSP ThreadList::GetThreadAtIndex(uint32_t idx, bool can_update) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   if (can_update)
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
 
   ThreadSP thread_sp;
   if (idx < m_threads.size())
@@ -103,7 +103,7 @@ ThreadSP ThreadList::FindThreadByID(lldb::tid_t tid, bool can_update) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   if (can_update)
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
 
   ThreadSP thread_sp;
   uint32_t idx = 0;
@@ -121,7 +121,7 @@ ThreadSP ThreadList::FindThreadByProtocolID(lldb::tid_t tid, bool can_update) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   if (can_update)
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
 
   ThreadSP thread_sp;
   uint32_t idx = 0;
@@ -139,7 +139,7 @@ ThreadSP ThreadList::RemoveThreadByID(lldb::tid_t tid, bool can_update) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   if (can_update)
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
 
   ThreadSP thread_sp;
   uint32_t idx = 0;
@@ -159,7 +159,7 @@ ThreadSP ThreadList::RemoveThreadByProtocolID(lldb::tid_t tid,
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   if (can_update)
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
 
   ThreadSP thread_sp;
   uint32_t idx = 0;
@@ -209,7 +209,7 @@ ThreadSP ThreadList::FindThreadByIndexID(uint32_t index_id, bool can_update) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   if (can_update)
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
 
   ThreadSP thread_sp;
   const uint32_t num_threads = m_threads.size();
@@ -225,7 +225,7 @@ ThreadSP ThreadList::FindThreadByIndexID(uint32_t index_id, bool can_update) {
 bool ThreadList::ShouldStop(Event *event_ptr) {
   // Running events should never stop, obviously...
 
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+  Log *log = GetLog(LLDBLog::Step);
 
   // The ShouldStop method of the threads can do a whole lot of work, figuring
   // out whether the thread plan conditions are met.  So we don't want to keep
@@ -240,18 +240,21 @@ bool ThreadList::ShouldStop(Event *event_ptr) {
     // Scope for locker
     std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
-    m_process->UpdateThreadListIfNeeded();
+    m_process.UpdateThreadListIfNeeded();
     for (lldb::ThreadSP thread_sp : m_threads) {
       // This is an optimization...  If we didn't let a thread run in between
       // the previous stop and this one, we shouldn't have to consult it for
-      // ShouldStop.  So just leave it off the list we are going to inspect. On
-      // Linux, if a thread-specific conditional breakpoint was hit, it won't
+      // ShouldStop.  So just leave it off the list we are going to inspect.
+      // If the thread didn't run but had work to do before declaring a public
+      // stop, then also include it.
+      // On Linux, if a thread-specific conditional breakpoint was hit, it won't
       // necessarily be the thread that hit the breakpoint itself that
       // evaluates the conditional expression, so the thread that hit the
       // breakpoint could still be asked to stop, even though it hasn't been
       // allowed to run since the previous stop.
       if (thread_sp->GetTemporaryResumeState() != eStateSuspended ||
-          thread_sp->IsStillAtLastBreakpointHit())
+          thread_sp->IsStillAtLastBreakpointHit()
+          || thread_sp->ShouldRunBeforePublicStop())
         threads_copy.push_back(thread_sp);
     }
 
@@ -299,6 +302,10 @@ bool ThreadList::ShouldStop(Event *event_ptr) {
     thread_sp->GetStopInfo();
   }
 
+  // If a thread needs to finish some job that can be done just on this thread
+  // before broadcastion the stop, it will signal that by returning true for
+  // ShouldRunBeforePublicStop.  This variable gathers the results from that.
+  bool a_thread_needs_to_run = false;
   for (pos = threads_copy.begin(); pos != end; ++pos) {
     ThreadSP thread_sp(*pos);
 
@@ -328,11 +335,23 @@ bool ThreadList::ShouldStop(Event *event_ptr) {
       did_anybody_stop_for_a_reason |= thread_sp->ThreadStoppedForAReason();
 
     const bool thread_should_stop = thread_sp->ShouldStop(event_ptr);
+
     if (thread_should_stop)
       should_stop |= true;
+    else {
+      bool this_thread_forces_run = thread_sp->ShouldRunBeforePublicStop();
+      a_thread_needs_to_run |= this_thread_forces_run;
+      if (this_thread_forces_run) 
+        LLDB_LOG(log,
+                 "ThreadList::{0} thread: {1:x}, "
+                 "says it needs to run before public stop.",
+                 __FUNCTION__, thread_sp->GetID());
+    }
   }
 
-  if (!should_stop && !did_anybody_stop_for_a_reason) {
+  if (a_thread_needs_to_run) {
+    should_stop = false;
+  } else if (!should_stop && !did_anybody_stop_for_a_reason) {
     should_stop = true;
     LLDB_LOGF(log,
               "ThreadList::%s we stopped but no threads had a stop reason, "
@@ -357,19 +376,27 @@ Vote ThreadList::ShouldReportStop(Event *event_ptr) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   Vote result = eVoteNoOpinion;
-  m_process->UpdateThreadListIfNeeded();
+  m_process.UpdateThreadListIfNeeded();
   collection::iterator pos, end = m_threads.end();
 
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+  Log *log = GetLog(LLDBLog::Step);
 
   LLDB_LOGF(log, "ThreadList::%s %" PRIu64 " threads", __FUNCTION__,
             (uint64_t)m_threads.size());
 
   // Run through the threads and ask whether we should report this event. For
   // stopping, a YES vote wins over everything.  A NO vote wins over NO
-  // opinion.
+  // opinion.  The exception is if a thread has work it needs to force before
+  // a public stop, which overrides everyone else's opinion:
   for (pos = m_threads.begin(); pos != end; ++pos) {
     ThreadSP thread_sp(*pos);
+    if (thread_sp->ShouldRunBeforePublicStop()) {
+      LLDB_LOG(log, "Thread {0:x} has private business to complete, overrode "
+               "the should report stop.", thread_sp->GetID());
+      result = eVoteNo;
+      break;
+    }
+
     const Vote vote = thread_sp->ShouldReportStop(event_ptr);
     switch (vote) {
     case eVoteNoOpinion:
@@ -397,7 +424,7 @@ Vote ThreadList::ShouldReportStop(Event *event_ptr) {
 void ThreadList::SetShouldReportStop(Vote vote) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
-  m_process->UpdateThreadListIfNeeded();
+  m_process.UpdateThreadListIfNeeded();
   collection::iterator pos, end = m_threads.end();
   for (pos = m_threads.begin(); pos != end; ++pos) {
     ThreadSP thread_sp(*pos);
@@ -410,13 +437,13 @@ Vote ThreadList::ShouldReportRun(Event *event_ptr) {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
   Vote result = eVoteNoOpinion;
-  m_process->UpdateThreadListIfNeeded();
+  m_process.UpdateThreadListIfNeeded();
   collection::iterator pos, end = m_threads.end();
 
   // Run through the threads and ask whether we should report this event. The
   // rule is NO vote wins over everything, a YES vote wins over no opinion.
 
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+  Log *log = GetLog(LLDBLog::Step);
 
   for (pos = m_threads.begin(); pos != end; ++pos) {
     if ((*pos)->GetResumeState() != eStateSuspended) {
@@ -458,9 +485,9 @@ void ThreadList::Destroy() {
 void ThreadList::RefreshStateAfterStop() {
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
-  m_process->UpdateThreadListIfNeeded();
+  m_process.UpdateThreadListIfNeeded();
 
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+  Log *log = GetLog(LLDBLog::Step);
   if (log && log->GetVerbose())
     LLDB_LOGF(log,
               "Turning off notification of new threads while single stepping "
@@ -487,97 +514,107 @@ bool ThreadList::WillResume() {
   // they are.
 
   std::lock_guard<std::recursive_mutex> guard(GetMutex());
-  m_process->UpdateThreadListIfNeeded();
+  m_process.UpdateThreadListIfNeeded();
 
   collection::iterator pos, end = m_threads.end();
 
-  // See if any thread wants to run stopping others.  If it does, then we won't
-  // setup the other threads for resume, since they aren't going to get a
-  // chance to run.  This is necessary because the SetupForResume might add
-  // "StopOthers" plans which would then get to be part of the who-gets-to-run
-  // negotiation, but they're coming in after the fact, and the threads that
-  // are already set up should take priority.
+  // Go through the threads and see if any thread wants to run just itself.
+  // if so then pick one and run it.
 
-  bool wants_solo_run = false;
+  ThreadList run_me_only_list(m_process);
 
+  run_me_only_list.SetStopID(m_process.GetStopID());
+
+  // One or more threads might want to "Stop Others".  We want to handle all
+  // those requests first.  And if there is a thread that wanted to "resume
+  // before a public stop", let it get the first crack:
+  // There are two special kinds of thread that have priority for "StopOthers":
+  // a "ShouldRunBeforePublicStop thread, or the currently selected thread.  If
+  // we find one satisfying that critereon, put it here.
+  ThreadSP thread_to_run;
   for (pos = m_threads.begin(); pos != end; ++pos) {
-    lldbassert((*pos)->GetCurrentPlan() &&
-               "thread should not have null thread plan");
-    if ((*pos)->GetResumeState() != eStateSuspended &&
-        (*pos)->GetCurrentPlan()->StopOthers()) {
-      if ((*pos)->IsOperatingSystemPluginThread() &&
-          !(*pos)->GetBackingThread())
+    ThreadSP thread_sp(*pos);
+    if (thread_sp->GetResumeState() != eStateSuspended &&
+        thread_sp->GetCurrentPlan()->StopOthers()) {
+      if (thread_sp->IsOperatingSystemPluginThread() &&
+          !thread_sp->GetBackingThread())
         continue;
-      wants_solo_run = true;
-      break;
+
+      // You can't say "stop others" and also want yourself to be suspended.
+      assert(thread_sp->GetCurrentPlan()->RunState() != eStateSuspended);
+      run_me_only_list.AddThread(thread_sp);
+
+      if (thread_sp == GetSelectedThread())
+        thread_to_run = thread_sp;
+
+      if (thread_sp->ShouldRunBeforePublicStop()) {
+        // This takes precedence, so if we find one of these, service it:
+        thread_to_run = thread_sp;
+        break;
+      }
     }
   }
 
-  if (wants_solo_run) {
-    Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
-    if (log && log->GetVerbose())
-      LLDB_LOGF(log, "Turning on notification of new threads while single "
-                     "stepping a thread.");
-    m_process->StartNoticingNewThreads();
-  } else {
-    Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
-    if (log && log->GetVerbose())
-      LLDB_LOGF(log, "Turning off notification of new threads while single "
-                     "stepping a thread.");
-    m_process->StopNoticingNewThreads();
+  if (run_me_only_list.GetSize(false) > 0 && !thread_to_run) {
+    if (run_me_only_list.GetSize(false) == 1) {
+      thread_to_run = run_me_only_list.GetThreadAtIndex(0);
+    } else {
+      int random_thread =
+          (int)((run_me_only_list.GetSize(false) * (double)rand()) /
+                (RAND_MAX + 1.0));
+      thread_to_run = run_me_only_list.GetThreadAtIndex(random_thread);
+    }
   }
 
   // Give all the threads that are likely to run a last chance to set up their
   // state before we negotiate who is actually going to get a chance to run...
   // Don't set to resume suspended threads, and if any thread wanted to stop
   // others, only call setup on the threads that request StopOthers...
-
-  for (pos = m_threads.begin(); pos != end; ++pos) {
-    if ((*pos)->GetResumeState() != eStateSuspended &&
-        (!wants_solo_run || (*pos)->GetCurrentPlan()->StopOthers())) {
-      if ((*pos)->IsOperatingSystemPluginThread() &&
-          !(*pos)->GetBackingThread())
-        continue;
-      (*pos)->SetupForResume();
+  if (thread_to_run != nullptr) {
+    // See if any thread wants to run stopping others.  If it does, then we
+    // won't setup the other threads for resume, since they aren't going to get
+    // a chance to run.  This is necessary because the SetupForResume might add
+    // "StopOthers" plans which would then get to be part of the who-gets-to-run
+    // negotiation, but they're coming in after the fact, and the threads that
+    // are already set up should take priority.
+    thread_to_run->SetupForResume();
+  } else {
+    for (pos = m_threads.begin(); pos != end; ++pos) {
+      ThreadSP thread_sp(*pos);
+      if (thread_sp->GetResumeState() != eStateSuspended) {
+        if (thread_sp->IsOperatingSystemPluginThread() &&
+            !thread_sp->GetBackingThread())
+          continue;
+        if (thread_sp->SetupForResume()) {
+          // You can't say "stop others" and also want yourself to be suspended.
+          assert(thread_sp->GetCurrentPlan()->RunState() != eStateSuspended);
+          thread_to_run = thread_sp;
+          if (thread_sp->ShouldRunBeforePublicStop()) {
+            // This takes precedence, so if we find one of these, service it:
+            break;
+          }
+        }
+      }
     }
   }
 
-  // Now go through the threads and see if any thread wants to run just itself.
-  // if so then pick one and run it.
-
-  ThreadList run_me_only_list(m_process);
-
-  run_me_only_list.SetStopID(m_process->GetStopID());
-
-  bool run_only_current_thread = false;
-
-  for (pos = m_threads.begin(); pos != end; ++pos) {
-    ThreadSP thread_sp(*pos);
-    if (thread_sp->GetResumeState() != eStateSuspended &&
-        thread_sp->GetCurrentPlan()->StopOthers()) {
-      if ((*pos)->IsOperatingSystemPluginThread() &&
-          !(*pos)->GetBackingThread())
-        continue;
-
-      // You can't say "stop others" and also want yourself to be suspended.
-      assert(thread_sp->GetCurrentPlan()->RunState() != eStateSuspended);
-
-      if (thread_sp == GetSelectedThread()) {
-        // If the currently selected thread wants to run on its own, always let
-        // it.
-        run_only_current_thread = true;
-        run_me_only_list.Clear();
-        run_me_only_list.AddThread(thread_sp);
-        break;
-      }
-
-      run_me_only_list.AddThread(thread_sp);
-    }
+  if (thread_to_run != nullptr) {
+    Log *log = GetLog(LLDBLog::Step);
+    if (log && log->GetVerbose())
+      LLDB_LOGF(log, "Turning on notification of new threads while single "
+                     "stepping a thread.");
+    m_process.StartNoticingNewThreads();
+  } else {
+    Log *log = GetLog(LLDBLog::Step);
+    if (log && log->GetVerbose())
+      LLDB_LOGF(log, "Turning off notification of new threads while single "
+                     "stepping a thread.");
+    m_process.StopNoticingNewThreads();
   }
 
   bool need_to_resume = true;
 
-  if (run_me_only_list.GetSize(false) == 0) {
+  if (thread_to_run == nullptr) {
     // Everybody runs as they wish:
     for (pos = m_threads.begin(); pos != end; ++pos) {
       ThreadSP thread_sp(*pos);
@@ -590,22 +627,12 @@ bool ThreadList::WillResume() {
         need_to_resume = false;
     }
   } else {
-    ThreadSP thread_to_run;
-
-    if (run_only_current_thread) {
-      thread_to_run = GetSelectedThread();
-    } else if (run_me_only_list.GetSize(false) == 1) {
-      thread_to_run = run_me_only_list.GetThreadAtIndex(0);
-    } else {
-      int random_thread =
-          (int)((run_me_only_list.GetSize(false) * (double)rand()) /
-                (RAND_MAX + 1.0));
-      thread_to_run = run_me_only_list.GetThreadAtIndex(random_thread);
-    }
-
     for (pos = m_threads.begin(); pos != end; ++pos) {
       ThreadSP thread_sp(*pos);
       if (thread_sp == thread_to_run) {
+        // Note, a thread might be able to fulfil it's plan w/o actually
+        // resuming.  An example of this is a step that changes the current
+        // inlined function depth w/o moving the PC.  Check that here:
         if (!thread_sp->ShouldResume(thread_sp->GetCurrentPlan()->RunState()))
           need_to_resume = false;
       } else
@@ -623,7 +650,7 @@ void ThreadList::DidResume() {
     // Don't clear out threads that aren't going to get a chance to run, rather
     // leave their state for the next time around.
     ThreadSP thread_sp(*pos);
-    if (thread_sp->GetResumeState() != eStateSuspended)
+    if (thread_sp->GetTemporaryResumeState() != eStateSuspended)
       thread_sp->DidResume();
   }
 }
@@ -690,19 +717,23 @@ bool ThreadList::SetSelectedThreadByIndexID(uint32_t index_id, bool notify) {
 void ThreadList::NotifySelectedThreadChanged(lldb::tid_t tid) {
   ThreadSP selected_thread_sp(FindThreadByID(tid));
   if (selected_thread_sp->EventTypeHasListeners(
-          Thread::eBroadcastBitThreadSelected))
-    selected_thread_sp->BroadcastEvent(
-        Thread::eBroadcastBitThreadSelected,
-        new Thread::ThreadEventData(selected_thread_sp));
+          Thread::eBroadcastBitThreadSelected)) {
+    auto data_sp =
+        std::make_shared<Thread::ThreadEventData>(selected_thread_sp);
+    selected_thread_sp->BroadcastEvent(Thread::eBroadcastBitThreadSelected,
+                                       data_sp);
+  }
 }
 
 void ThreadList::Update(ThreadList &rhs) {
   if (this != &rhs) {
-    // Lock both mutexes to make sure neither side changes anyone on us while
-    // the assignment occurs
+    // We only allow assignments between thread lists describing the same
+    // process. Same process implies same mutex, which means it's enough to lock
+    // just the current object.
+    assert(&m_process == &rhs.m_process);
+    assert(&GetMutex() == &rhs.GetMutex());
     std::lock_guard<std::recursive_mutex> guard(GetMutex());
 
-    m_process = rhs.m_process;
     m_stop_id = rhs.m_stop_id;
     m_threads.swap(rhs.m_threads);
     m_selected_tid = rhs.m_selected_tid;
@@ -746,7 +777,7 @@ void ThreadList::Flush() {
 }
 
 std::recursive_mutex &ThreadList::GetMutex() const {
-  return m_process->m_thread_mutex;
+  return m_process.m_thread_mutex;
 }
 
 ThreadList::ExpressionExecutionThreadPusher::ExpressionExecutionThreadPusher(

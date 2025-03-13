@@ -31,6 +31,7 @@ public:
     VK_Sparc_L44,
     VK_Sparc_HH,
     VK_Sparc_HM,
+    VK_Sparc_LM,
     VK_Sparc_PC22,
     VK_Sparc_PC10,
     VK_Sparc_GOT22,
@@ -38,6 +39,7 @@ public:
     VK_Sparc_GOT13,
     VK_Sparc_13,
     VK_Sparc_WPLT30,
+    VK_Sparc_WDISP30,
     VK_Sparc_R_DISP32,
     VK_Sparc_TLS_GD_HI22,
     VK_Sparc_TLS_GD_LO10,
@@ -56,7 +58,12 @@ public:
     VK_Sparc_TLS_IE_LDX,
     VK_Sparc_TLS_IE_ADD,
     VK_Sparc_TLS_LE_HIX22,
-    VK_Sparc_TLS_LE_LOX10
+    VK_Sparc_TLS_LE_LOX10,
+    VK_Sparc_HIX22,
+    VK_Sparc_LOX10,
+    VK_Sparc_GOTDATA_HIX22,
+    VK_Sparc_GOTDATA_LOX10,
+    VK_Sparc_GOTDATA_OP,
   };
 
 private:
@@ -87,8 +94,7 @@ public:
 
   /// @}
   void printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const override;
-  bool evaluateAsRelocatableImpl(MCValue &Res,
-                                 const MCAsmLayout *Layout,
+  bool evaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
                                  const MCFixup *Fixup) const override;
   void visitUsedExpr(MCStreamer &Streamer) const override;
   MCFragment *findAssociatedFragment() const override {
@@ -100,8 +106,6 @@ public:
   static bool classof(const MCExpr *E) {
     return E->getKind() == MCExpr::Target;
   }
-
-  static bool classof(const SparcMCExpr *) { return true; }
 
   static VariantKind parseVariantKind(StringRef name);
   static bool printVariantKind(raw_ostream &OS, VariantKind Kind);

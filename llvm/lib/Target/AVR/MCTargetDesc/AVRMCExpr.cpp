@@ -8,7 +8,6 @@
 
 #include "AVRMCExpr.h"
 
-#include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
@@ -19,15 +18,15 @@ namespace llvm {
 namespace {
 
 const struct ModifierEntry {
-  const char * const Spelling;
+  const char *const Spelling;
   AVRMCExpr::VariantKind VariantKind;
 } ModifierNames[] = {
     {"lo8", AVRMCExpr::VK_AVR_LO8},       {"hi8", AVRMCExpr::VK_AVR_HI8},
     {"hh8", AVRMCExpr::VK_AVR_HH8}, // synonym with hlo8
     {"hlo8", AVRMCExpr::VK_AVR_HH8},      {"hhi8", AVRMCExpr::VK_AVR_HHI8},
 
-    {"pm_lo8", AVRMCExpr::VK_AVR_PM_LO8}, {"pm_hi8", AVRMCExpr::VK_AVR_PM_HI8},
-    {"pm_hh8", AVRMCExpr::VK_AVR_PM_HH8},
+    {"pm", AVRMCExpr::VK_AVR_PM},         {"pm_lo8", AVRMCExpr::VK_AVR_PM_LO8},
+    {"pm_hi8", AVRMCExpr::VK_AVR_PM_HI8}, {"pm_hh8", AVRMCExpr::VK_AVR_PM_HH8},
 
     {"lo8_gs", AVRMCExpr::VK_AVR_LO8_GS}, {"hi8_gs", AVRMCExpr::VK_AVR_HI8_GS},
     {"gs", AVRMCExpr::VK_AVR_GS},
@@ -42,12 +41,12 @@ const AVRMCExpr *AVRMCExpr::create(VariantKind Kind, const MCExpr *Expr,
 
 void AVRMCExpr::printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const {
   assert(Kind != VK_AVR_None);
-
-  if (isNegated())
-    OS << '-';
-
   OS << getName() << '(';
+  if (isNegated())
+    OS << '-' << '(';
   getSubExpr()->print(OS, MAI);
+  if (isNegated())
+    OS << ')';
   OS << ')';
 }
 
@@ -69,10 +68,10 @@ bool AVRMCExpr::evaluateAsConstant(int64_t &Result) const {
 }
 
 bool AVRMCExpr::evaluateAsRelocatableImpl(MCValue &Result,
-                                          const MCAsmLayout *Layout,
+                                          const MCAssembler *Asm,
                                           const MCFixup *Fixup) const {
   MCValue Value;
-  bool isRelocatable = SubExpr->evaluateAsRelocatable(Value, Layout, Fixup);
+  bool isRelocatable = SubExpr->evaluateAsRelocatable(Value, Asm, Fixup);
 
   if (!isRelocatable)
     return false;
@@ -80,13 +79,17 @@ bool AVRMCExpr::evaluateAsRelocatableImpl(MCValue &Result,
   if (Value.isAbsolute()) {
     Result = MCValue::get(evaluateAsInt64(Value.getConstant()));
   } else {
-    if (!Layout) return false;
+    if (!Asm || !Asm->hasLayout())
+      return false;
 
-    MCContext &Context = Layout->getAssembler().getContext();
+    MCContext &Context = Asm->getContext();
     const MCSymbolRefExpr *Sym = Value.getSymA();
     MCSymbolRefExpr::VariantKind Modifier = Sym->getKind();
     if (Modifier != MCSymbolRefExpr::VK_None)
       return false;
+    if (Kind == VK_AVR_PM) {
+      Modifier = MCSymbolRefExpr::VK_AVR_PM;
+    }
 
     Sym = MCSymbolRefExpr::create(&Sym->getSymbol(), Modifier, Context);
     Result = MCValue::get(Sym, Value.getSymB(), Value.getConstant());
@@ -131,6 +134,7 @@ int64_t AVRMCExpr::evaluateAsInt64(int64_t Value) const {
     Value &= 0xff0000;
     Value >>= 16;
     break;
+  case AVRMCExpr::VK_AVR_PM:
   case AVRMCExpr::VK_AVR_GS:
     Value >>= 1; // Program memory addresses must always be shifted by one.
     break;
@@ -167,6 +171,7 @@ AVR::Fixups AVRMCExpr::getFixupKind() const {
   case VK_AVR_PM_HH8:
     Kind = isNegated() ? AVR::fixup_hh8_ldi_pm_neg : AVR::fixup_hh8_ldi_pm;
     break;
+  case VK_AVR_PM:
   case VK_AVR_GS:
     Kind = AVR::fixup_16_pm;
     break;
@@ -189,9 +194,10 @@ void AVRMCExpr::visitUsedExpr(MCStreamer &Streamer) const {
 }
 
 const char *AVRMCExpr::getName() const {
-  const auto &Modifier = std::find_if(
-      std::begin(ModifierNames), std::end(ModifierNames),
-      [this](ModifierEntry const &Mod) { return Mod.VariantKind == Kind; });
+  const auto &Modifier =
+      llvm::find_if(ModifierNames, [this](ModifierEntry const &Mod) {
+        return Mod.VariantKind == Kind;
+      });
 
   if (Modifier != std::end(ModifierNames)) {
     return Modifier->Spelling;
@@ -200,9 +206,10 @@ const char *AVRMCExpr::getName() const {
 }
 
 AVRMCExpr::VariantKind AVRMCExpr::getKindByName(StringRef Name) {
-  const auto &Modifier = std::find_if(
-      std::begin(ModifierNames), std::end(ModifierNames),
-      [&Name](ModifierEntry const &Mod) { return Mod.Spelling == Name; });
+  const auto &Modifier =
+      llvm::find_if(ModifierNames, [&Name](ModifierEntry const &Mod) {
+        return Mod.Spelling == Name;
+      });
 
   if (Modifier != std::end(ModifierNames)) {
     return Modifier->VariantKind;
@@ -211,4 +218,3 @@ AVRMCExpr::VariantKind AVRMCExpr::getKindByName(StringRef Name) {
 }
 
 } // end of namespace llvm
-

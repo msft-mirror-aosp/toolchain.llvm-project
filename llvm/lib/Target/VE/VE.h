@@ -20,16 +20,16 @@
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
-class FunctionPass;
-class VETargetMachine;
-class formatted_raw_ostream;
 class AsmPrinter;
+class FunctionPass;
 class MCInst;
 class MachineInstr;
+class PassRegistry;
+class VETargetMachine;
 
 FunctionPass *createVEISelDag(VETargetMachine &TM);
-FunctionPass *createVEPromoteToI1Pass();
 FunctionPass *createLVLGenPass();
+void initializeVEDAGToDAGISelLegacyPass(PassRegistry &);
 
 void LowerVEMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
                                  AsmPrinter &AP);
@@ -145,6 +145,10 @@ inline static VECC::CondCode stringToVEFCondCode(StringRef S) {
       .Case("at", VECC::CC_AT)
       .Case("", VECC::CC_AT)
       .Default(VECC::UNKNOWN);
+}
+
+inline static bool isIntVECondCode(VECC::CondCode CC) {
+  return CC < VECC::CC_AF;
 }
 
 inline static unsigned VECondCodeToVal(VECC::CondCode CC) {
@@ -334,7 +338,7 @@ inline static bool isMImmVal(uint64_t Val) {
     return true;
   }
   // (m)1 patterns
-  return (Val & (1UL << 63)) && isShiftedMask_64(Val);
+  return (Val & (UINT64_C(1) << 63)) && isShiftedMask_64(Val);
 }
 
 inline static bool isMImm32Val(uint32_t Val) {
@@ -347,16 +351,16 @@ inline static bool isMImm32Val(uint32_t Val) {
     return true;
   }
   // (m)1 patterns
-  return (Val & (1 << 31)) && isShiftedMask_32(Val);
+  return (Val & (UINT32_C(1) << 31)) && isShiftedMask_32(Val);
 }
 
 /// val2MImm - Convert an integer immediate value to target MImm immediate.
 inline static uint64_t val2MImm(uint64_t Val) {
   if (Val == 0)
     return 0; // (0)1
-  if (Val & (1UL << 63))
-    return countLeadingOnes(Val);       // (m)1
-  return countLeadingZeros(Val) | 0x40; // (m)0
+  if (Val & (UINT64_C(1) << 63))
+    return llvm::countl_one(Val);       // (m)1
+  return llvm::countl_zero(Val) | 0x40; // (m)0
 }
 
 /// mimm2Val - Convert a target MImm immediate to an integer immediate value.
@@ -364,12 +368,15 @@ inline static uint64_t mimm2Val(uint64_t Val) {
   if (Val == 0)
     return 0; // (0)1
   if ((Val & 0x40) == 0)
-    return (uint64_t)((1L << 63) >> (Val & 0x3f)); // (m)1
-  return ((uint64_t)(-1L) >> (Val & 0x3f));        // (m)0
+    return (uint64_t)((INT64_C(1) << 63) >> (Val & 0x3f)); // (m)1
+  return ((uint64_t)INT64_C(-1) >> (Val & 0x3f));          // (m)0
 }
 
 inline unsigned M0(unsigned Val) { return Val + 64; }
 inline unsigned M1(unsigned Val) { return Val; }
+
+static const unsigned StandardVectorWidth = 256;
+static const unsigned PackedVectorWidth = 512;
 
 } // namespace llvm
 #endif

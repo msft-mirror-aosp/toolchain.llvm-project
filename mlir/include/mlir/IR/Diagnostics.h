@@ -15,25 +15,26 @@
 
 #include "mlir/IR/Location.h"
 #include <functional>
+#include <optional>
 
 namespace llvm {
 class MemoryBuffer;
 class SMLoc;
 class SourceMgr;
-} // end namespace llvm
+} // namespace llvm
 
 namespace mlir {
 class DiagnosticEngine;
-class Identifier;
-struct LogicalResult;
 class MLIRContext;
 class Operation;
 class OperationName;
+class OpPrintingFlags;
 class Type;
+class Value;
 
 namespace detail {
 struct DiagnosticEngineImpl;
-} // end namespace detail
+} // namespace detail
 
 /// Defines the different supported severity of a diagnostic.
 enum class DiagnosticSeverity {
@@ -50,6 +51,34 @@ enum class DiagnosticSeverity {
 /// A variant type that holds a single argument for a diagnostic.
 class DiagnosticArgument {
 public:
+  /// Note: The constructors below are only exposed due to problems accessing
+  /// constructors from type traits, they should not be used directly by users.
+  // Construct from an Attribute.
+  explicit DiagnosticArgument(Attribute attr);
+  // Construct from a floating point number.
+  explicit DiagnosticArgument(double val)
+      : kind(DiagnosticArgumentKind::Double), doubleVal(val) {}
+  explicit DiagnosticArgument(float val) : DiagnosticArgument(double(val)) {}
+  // Construct from a signed integer.
+  template <typename T>
+  explicit DiagnosticArgument(
+      T val, std::enable_if_t<std::is_signed<T>::value &&
+                              std::numeric_limits<T>::is_integer &&
+                              sizeof(T) <= sizeof(int64_t)> * = nullptr)
+      : kind(DiagnosticArgumentKind::Integer), opaqueVal(int64_t(val)) {}
+  // Construct from an unsigned integer.
+  template <typename T>
+  explicit DiagnosticArgument(
+      T val, std::enable_if_t<std::is_unsigned<T>::value &&
+                              std::numeric_limits<T>::is_integer &&
+                              sizeof(T) <= sizeof(uint64_t)> * = nullptr)
+      : kind(DiagnosticArgumentKind::Unsigned), opaqueVal(uint64_t(val)) {}
+  // Construct from a string reference.
+  explicit DiagnosticArgument(StringRef val)
+      : kind(DiagnosticArgumentKind::String), stringVal(val) {}
+  // Construct from a Type.
+  explicit DiagnosticArgument(Type val);
+
   /// Enum that represents the different kinds of diagnostic arguments
   /// supported.
   enum class DiagnosticArgumentKind {
@@ -100,37 +129,6 @@ public:
 private:
   friend class Diagnostic;
 
-  // Construct from an Attribute.
-  explicit DiagnosticArgument(Attribute attr);
-
-  // Construct from a floating point number.
-  explicit DiagnosticArgument(double val)
-      : kind(DiagnosticArgumentKind::Double), doubleVal(val) {}
-  explicit DiagnosticArgument(float val) : DiagnosticArgument(double(val)) {}
-
-  // Construct from a signed integer.
-  template <typename T>
-  explicit DiagnosticArgument(
-      T val, typename std::enable_if<std::is_signed<T>::value &&
-                                     std::numeric_limits<T>::is_integer &&
-                                     sizeof(T) <= sizeof(int64_t)>::type * = 0)
-      : kind(DiagnosticArgumentKind::Integer), opaqueVal(int64_t(val)) {}
-
-  // Construct from an unsigned integer.
-  template <typename T>
-  explicit DiagnosticArgument(
-      T val, typename std::enable_if<std::is_unsigned<T>::value &&
-                                     std::numeric_limits<T>::is_integer &&
-                                     sizeof(T) <= sizeof(uint64_t)>::type * = 0)
-      : kind(DiagnosticArgumentKind::Unsigned), opaqueVal(uint64_t(val)) {}
-
-  // Construct from a string reference.
-  explicit DiagnosticArgument(StringRef val)
-      : kind(DiagnosticArgumentKind::String), stringVal(val) {}
-
-  // Construct from a Type.
-  explicit DiagnosticArgument(Type val);
-
   /// The kind of this argument.
   DiagnosticArgumentKind kind;
 
@@ -157,20 +155,6 @@ inline raw_ostream &operator<<(raw_ostream &os, const DiagnosticArgument &arg) {
 class Diagnostic {
   using NoteVector = std::vector<std::unique_ptr<Diagnostic>>;
 
-  /// This class implements a wrapper iterator around NoteVector::iterator to
-  /// implicitly dereference the unique_ptr.
-  template <typename IteratorTy, typename NotePtrTy = decltype(*IteratorTy()),
-            typename ResultTy = decltype(**IteratorTy())>
-  class NoteIteratorImpl
-      : public llvm::mapped_iterator<IteratorTy, ResultTy (*)(NotePtrTy)> {
-    static ResultTy &unwrap(NotePtrTy note) { return *note; }
-
-  public:
-    NoteIteratorImpl(IteratorTy it)
-        : llvm::mapped_iterator<IteratorTy, ResultTy (*)(NotePtrTy)>(it,
-                                                                     &unwrap) {}
-  };
-
 public:
   Diagnostic(Location loc, DiagnosticSeverity severity)
       : loc(loc), severity(severity) {}
@@ -189,15 +173,18 @@ public:
 
   /// Stream operator for inserting new diagnostic arguments.
   template <typename Arg>
-  typename std::enable_if<!std::is_convertible<Arg, StringRef>::value,
-                          Diagnostic &>::type
+  std::enable_if_t<!std::is_convertible<Arg, StringRef>::value &&
+                       std::is_constructible<DiagnosticArgument, Arg>::value,
+                   Diagnostic &>
   operator<<(Arg &&val) {
     arguments.push_back(DiagnosticArgument(std::forward<Arg>(val)));
     return *this;
   }
+  Diagnostic &operator<<(StringAttr val);
 
   /// Stream in a string literal.
-  Diagnostic &operator<<(const char *val) {
+  template <size_t n>
+  Diagnostic &operator<<(const char (&val)[n]) {
     arguments.push_back(DiagnosticArgument(val));
     return *this;
   }
@@ -207,30 +194,30 @@ public:
   Diagnostic &operator<<(const Twine &val);
   Diagnostic &operator<<(Twine &&val);
 
-  /// Stream in an Identifier.
-  Diagnostic &operator<<(Identifier val);
-
   /// Stream in an OperationName.
   Diagnostic &operator<<(OperationName val);
 
   /// Stream in an Operation.
-  Diagnostic &operator<<(Operation &val);
-  Diagnostic &operator<<(Operation *val) {
-    return *this << *val;
-  }
+  Diagnostic &operator<<(Operation &op);
+  Diagnostic &operator<<(Operation *op) { return *this << *op; }
+  /// Append an operation with the given printing flags.
+  Diagnostic &appendOp(Operation &op, const OpPrintingFlags &flags);
+
+  /// Stream in a Value.
+  Diagnostic &operator<<(Value val);
 
   /// Stream in a range.
-  template <typename T> Diagnostic &operator<<(iterator_range<T> range) {
-    return appendRange(range);
-  }
-  template <typename T> Diagnostic &operator<<(ArrayRef<T> range) {
+  template <typename T, typename ValueT = llvm::detail::ValueOfRange<T>>
+  std::enable_if_t<!std::is_constructible<DiagnosticArgument, T>::value,
+                   Diagnostic &>
+  operator<<(T &&range) {
     return appendRange(range);
   }
 
   /// Append a range to the diagnostic. The default delimiter between elements
   /// is ','.
-  template <typename T, template <typename> class Container>
-  Diagnostic &appendRange(const Container<T> &c, const char *delim = ", ") {
+  template <typename T>
+  Diagnostic &appendRange(const T &c, const char *delim = ", ") {
     llvm::interleave(
         c, [this](const auto &a) { *this << a; }, [&]() { *this << delim; });
     return *this;
@@ -238,12 +225,13 @@ public:
 
   /// Append arguments to the diagnostic.
   template <typename Arg1, typename Arg2, typename... Args>
-  Diagnostic &append(Arg1 &&arg1, Arg2 &&arg2, Args &&... args) {
+  Diagnostic &append(Arg1 &&arg1, Arg2 &&arg2, Args &&...args) {
     append(std::forward<Arg1>(arg1));
     return append(std::forward<Arg2>(arg2), std::forward<Args>(args)...);
   }
   /// Append one argument to the diagnostic.
-  template <typename Arg> Diagnostic &append(Arg &&arg) {
+  template <typename Arg>
+  Diagnostic &append(Arg &&arg) {
     *this << std::forward<Arg>(arg);
     return *this;
   }
@@ -257,21 +245,35 @@ public:
   /// Attaches a note to this diagnostic. A new location may be optionally
   /// provided, if not, then the location defaults to the one specified for this
   /// diagnostic. Notes may not be attached to other notes.
-  Diagnostic &attachNote(Optional<Location> noteLoc = llvm::None);
+  Diagnostic &attachNote(std::optional<Location> noteLoc = std::nullopt);
 
-  using note_iterator = NoteIteratorImpl<NoteVector::iterator>;
-  using const_note_iterator = NoteIteratorImpl<NoteVector::const_iterator>;
+  using note_iterator = llvm::pointee_iterator<NoteVector::iterator>;
+  using const_note_iterator =
+      llvm::pointee_iterator<NoteVector::const_iterator>;
 
   /// Returns the notes held by this diagnostic.
   iterator_range<note_iterator> getNotes() {
-    return {notes.begin(), notes.end()};
+    return llvm::make_pointee_range(notes);
   }
   iterator_range<const_note_iterator> getNotes() const {
-    return {notes.begin(), notes.end()};
+    return llvm::make_pointee_range(notes);
   }
 
   /// Allow a diagnostic to be converted to 'failure'.
   operator LogicalResult() const;
+
+  /// Allow a diagnostic to be converted to 'failure'.
+  operator ParseResult() const { return ParseResult(LogicalResult(*this)); }
+
+  /// Allow a diagnostic to be converted to FailureOr<T>. Always results in
+  /// 'failure' because this cast cannot possibly return an object of 'T'.
+  template <typename T>
+  operator FailureOr<T>() const {
+    return failure();
+  }
+
+  /// Returns the current list of diagnostic metadata.
+  SmallVectorImpl<DiagnosticArgument> &getMetadata() { return metadata; }
 
 private:
   Diagnostic(const Diagnostic &rhs) = delete;
@@ -292,6 +294,9 @@ private:
 
   /// A list of attached notes.
   NoteVector notes;
+
+  /// A list of metadata attached to this Diagnostic.
+  SmallVector<DiagnosticArgument, 0> metadata;
 };
 
 inline raw_ostream &operator<<(raw_ostream &os, const Diagnostic &diag) {
@@ -321,29 +326,37 @@ public:
   }
 
   /// Stream operator for new diagnostic arguments.
-  template <typename Arg> InFlightDiagnostic &operator<<(Arg &&arg) & {
+  template <typename Arg>
+  InFlightDiagnostic &operator<<(Arg &&arg) & {
     return append(std::forward<Arg>(arg));
   }
-  template <typename Arg> InFlightDiagnostic &&operator<<(Arg &&arg) && {
+  template <typename Arg>
+  InFlightDiagnostic &&operator<<(Arg &&arg) && {
     return std::move(append(std::forward<Arg>(arg)));
   }
 
   /// Append arguments to the diagnostic.
-  template <typename... Args> InFlightDiagnostic &append(Args &&... args) & {
+  template <typename... Args>
+  InFlightDiagnostic &append(Args &&...args) & {
     assert(isActive() && "diagnostic not active");
     if (isInFlight())
       impl->append(std::forward<Args>(args)...);
     return *this;
   }
-  template <typename... Args> InFlightDiagnostic &&append(Args &&... args) && {
+  template <typename... Args>
+  InFlightDiagnostic &&append(Args &&...args) && {
     return std::move(append(std::forward<Args>(args)...));
   }
 
   /// Attaches a note to this diagnostic.
-  Diagnostic &attachNote(Optional<Location> noteLoc = llvm::None) {
+  Diagnostic &attachNote(std::optional<Location> noteLoc = std::nullopt) {
     assert(isActive() && "diagnostic not active");
     return impl->attachNote(noteLoc);
   }
+
+  /// Returns the underlying diagnostic or nullptr if this diagnostic isn't
+  /// active.
+  Diagnostic *getUnderlyingDiagnostic() { return impl ? &*impl : nullptr; }
 
   /// Reports the diagnostic to the engine.
   void report();
@@ -355,6 +368,18 @@ public:
   /// 'success' if this is an empty diagnostic.
   operator LogicalResult() const;
 
+  /// Allow an inflight diagnostic to be converted to 'failure', otherwise
+  /// 'success' if this is an empty diagnostic.
+  operator ParseResult() const { return ParseResult(LogicalResult(*this)); }
+
+  /// Allow an inflight diagnostic to be converted to FailureOr<T>. Always
+  /// results in 'failure' because this cast cannot possibly return an object of
+  /// 'T'.
+  template <typename T>
+  operator FailureOr<T>() const {
+    return failure();
+  }
+
 private:
   InFlightDiagnostic &operator=(const InFlightDiagnostic &) = delete;
   InFlightDiagnostic &operator=(InFlightDiagnostic &&) = delete;
@@ -363,7 +388,7 @@ private:
 
   /// Returns true if the diagnostic is still active, i.e. it has a live
   /// diagnostic.
-  bool isActive() const { return impl.hasValue(); }
+  bool isActive() const { return impl.has_value(); }
 
   /// Returns true if the diagnostic is still in flight to be reported.
   bool isInFlight() const { return owner; }
@@ -375,7 +400,7 @@ private:
   DiagnosticEngine *owner = nullptr;
 
   /// The raw diagnostic that is inflight to be reported.
-  Optional<Diagnostic> impl;
+  std::optional<Diagnostic> impl;
 };
 
 //===----------------------------------------------------------------------===//
@@ -403,7 +428,7 @@ public:
   /// The handler type for MLIR diagnostics. This function takes a diagnostic as
   /// input, and returns success if the handler has fully processed this
   /// diagnostic. Returns failure otherwise.
-  using HandlerTy = std::function<LogicalResult(Diagnostic &)>;
+  using HandlerTy = llvm::unique_function<LogicalResult(Diagnostic &)>;
 
   /// A handle to a specific registered handler object.
   using HandlerID = uint64_t;
@@ -413,7 +438,7 @@ public:
   /// handlers will process diagnostics first. This function returns a unique
   /// identifier for the registered handler, which can be used to unregister
   /// this handler at a later time.
-  HandlerID registerHandler(const HandlerTy &handler);
+  HandlerID registerHandler(HandlerTy handler);
 
   /// Set the diagnostic handler with a function that returns void. This is a
   /// convenient wrapper for handlers that always completely process the given
@@ -439,8 +464,9 @@ public:
   }
 
   /// Emit a diagnostic using the registered issue handler if present, or with
-  /// the default behavior if not.
-  void emit(Diagnostic diag);
+  /// the default behavior if not. The diagnostic instance is consumed in the
+  /// process.
+  void emit(Diagnostic &&diag);
 
 private:
   friend class MLIRContextImpl;
@@ -468,19 +494,19 @@ InFlightDiagnostic emitRemark(Location loc, const Twine &message);
 /// the diagnostic arguments directly instead of relying on the returned
 /// InFlightDiagnostic.
 template <typename... Args>
-LogicalResult emitOptionalError(Optional<Location> loc, Args &&... args) {
+LogicalResult emitOptionalError(std::optional<Location> loc, Args &&...args) {
   if (loc)
     return emitError(*loc).append(std::forward<Args>(args)...);
   return failure();
 }
 template <typename... Args>
-LogicalResult emitOptionalWarning(Optional<Location> loc, Args &&... args) {
+LogicalResult emitOptionalWarning(std::optional<Location> loc, Args &&...args) {
   if (loc)
     return emitWarning(*loc).append(std::forward<Args>(args)...);
   return failure();
 }
 template <typename... Args>
-LogicalResult emitOptionalRemark(Optional<Location> loc, Args &&... args) {
+LogicalResult emitOptionalRemark(std::optional<Location> loc, Args &&...args) {
   if (loc)
     return emitRemark(*loc).append(std::forward<Args>(args)...);
   return failure();
@@ -505,7 +531,8 @@ public:
 
 protected:
   /// Set the handler to manage via RAII.
-  template <typename FuncTy> void setHandler(FuncTy &&handler) {
+  template <typename FuncTy>
+  void setHandler(FuncTy &&handler) {
     auto &diagEngine = ctx->getDiagEngine();
     if (handlerID)
       diagEngine.eraseHandler(handlerID);
@@ -526,19 +553,33 @@ private:
 
 namespace detail {
 struct SourceMgrDiagnosticHandlerImpl;
-} // end namespace detail
+} // namespace detail
 
 /// This class is a utility diagnostic handler for use with llvm::SourceMgr.
 class SourceMgrDiagnosticHandler : public ScopedDiagnosticHandler {
 public:
+  /// This type represents a functor used to filter out locations when printing
+  /// a diagnostic. It should return true if the provided location is okay to
+  /// display, false otherwise. If all locations in a diagnostic are filtered
+  /// out, the first location is used as the sole location. When deciding
+  /// whether or not to filter a location, this function should not recurse into
+  /// any nested location. This recursion is handled automatically by the
+  /// caller.
+  using ShouldShowLocFn = llvm::unique_function<bool(Location)>;
+
   SourceMgrDiagnosticHandler(llvm::SourceMgr &mgr, MLIRContext *ctx,
-                             raw_ostream &os);
-  SourceMgrDiagnosticHandler(llvm::SourceMgr &mgr, MLIRContext *ctx);
+                             raw_ostream &os,
+                             ShouldShowLocFn &&shouldShowLocFn = {});
+  SourceMgrDiagnosticHandler(llvm::SourceMgr &mgr, MLIRContext *ctx,
+                             ShouldShowLocFn &&shouldShowLocFn = {});
   ~SourceMgrDiagnosticHandler();
 
   /// Emit the given diagnostic information with the held source manager.
   void emitDiagnostic(Location loc, Twine message, DiagnosticSeverity kind,
                       bool displaySourceLine = true);
+
+  /// Set the maximum depth that a call stack will be printed. Defaults to 10.
+  void setCallStackLimit(unsigned limit);
 
 protected:
   /// Emit the given diagnostic with the held source manager.
@@ -554,12 +595,19 @@ protected:
   /// The output stream to use when printing diagnostics.
   raw_ostream &os;
 
+  /// A functor used when determining if a location for a diagnostic should be
+  /// shown. If null, all locations should be shown.
+  ShouldShowLocFn shouldShowLocFn;
+
 private:
   /// Convert a location into the given memory buffer into an SMLoc.
-  llvm::SMLoc convertLocToSMLoc(FileLineColLoc loc);
+  SMLoc convertLocToSMLoc(FileLineColLoc loc);
+
+  /// Given a location, returns the first nested location (including 'loc') that
+  /// can be shown to the user.
+  std::optional<Location> findLocToShow(Location loc);
 
   /// The maximum depth that a call stack will be printed.
-  /// TODO: This should be a tunable flag.
   unsigned callStackLimit = 10;
 
   std::unique_ptr<detail::SourceMgrDiagnosticHandlerImpl> impl;
@@ -571,7 +619,7 @@ private:
 
 namespace detail {
 struct SourceMgrDiagnosticVerifierHandlerImpl;
-} // end namespace detail
+} // namespace detail
 
 /// This class is a utility diagnostic handler for use with llvm::SourceMgr that
 /// verifies that emitted diagnostics match 'expected-*' lines on the
@@ -604,7 +652,7 @@ private:
 
 namespace detail {
 struct ParallelDiagnosticHandlerImpl;
-} // end namespace detail
+} // namespace detail
 
 /// This class is a utility diagnostic handler for use when multi-threading some
 /// part of the compiler where diagnostics may be emitted. This handler ensures

@@ -1,10 +1,16 @@
-// RUN: pp-trace -callbacks '*,-FileChanged,-MacroDefined' %s -- -x cl | FileCheck --strict-whitespace %s
+// RUN: pp-trace -callbacks '*,-FileChanged,-MacroDefined' %s -- -x cl -cl-no-stdinc | FileCheck --strict-whitespace %s
 
 #pragma OPENCL EXTENSION all : disable
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : disable
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
 
 // CHECK: ---
+// CHECK-NEXT: - Callback: PragmaDirective
+// CHECK-NEXT:   Loc: "<built-in>:{{.+}}:1"
+// CHECK-NEXT:   Introducer: PIK_HashPragma
+// CHECK-NEXT: - Callback: PragmaDirective
+// CHECK-NEXT:   Loc: "<built-in>:{{.+}}:1"
+// CHECK-NEXT:   Introducer: PIK_HashPragma
 // CHECK-NEXT: - Callback: PragmaDirective
 // CHECK-NEXT:   Loc: "{{.*}}{{[/\\]}}pp-trace-pragma-opencl.cpp:3:1"
 // CHECK-NEXT:   Introducer: PIK_HashPragma

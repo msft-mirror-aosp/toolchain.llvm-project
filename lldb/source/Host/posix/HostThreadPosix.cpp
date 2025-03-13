@@ -9,28 +9,28 @@
 #include "lldb/Host/posix/HostThreadPosix.h"
 #include "lldb/Utility/Status.h"
 
-#include <errno.h>
+#include <cerrno>
 #include <pthread.h>
 
 using namespace lldb;
 using namespace lldb_private;
 
-HostThreadPosix::HostThreadPosix() {}
+HostThreadPosix::HostThreadPosix() = default;
 
 HostThreadPosix::HostThreadPosix(lldb::thread_t thread)
     : HostNativeThreadBase(thread) {}
 
-HostThreadPosix::~HostThreadPosix() {}
+HostThreadPosix::~HostThreadPosix() = default;
 
 Status HostThreadPosix::Join(lldb::thread_result_t *result) {
   Status error;
   if (IsJoinable()) {
     int err = ::pthread_join(m_thread, result);
-    error.SetError(err, lldb::eErrorTypePOSIX);
+    error = Status(err, lldb::eErrorTypePOSIX);
   } else {
     if (result)
       *result = nullptr;
-    error.SetError(EINVAL, eErrorTypePOSIX);
+    error = Status(EINVAL, eErrorTypePOSIX);
   }
 
   Reset();
@@ -44,7 +44,7 @@ Status HostThreadPosix::Cancel() {
     llvm_unreachable("someone is calling HostThread::Cancel()");
 #else
     int err = ::pthread_cancel(m_thread);
-    error.SetError(err, eErrorTypePOSIX);
+    error = Status(err, eErrorTypePOSIX);
 #endif
   }
   return error;
@@ -54,7 +54,7 @@ Status HostThreadPosix::Detach() {
   Status error;
   if (IsJoinable()) {
     int err = ::pthread_detach(m_thread);
-    error.SetError(err, eErrorTypePOSIX);
+    error = Status(err, eErrorTypePOSIX);
   }
   Reset();
   return error;

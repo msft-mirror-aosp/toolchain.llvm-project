@@ -8,7 +8,7 @@
 
 #include "lldb/Host/windows/AutoHandle.h"
 #include "lldb/Host/windows/windows.h"
-#include <stdio.h>
+#include <cstdio>
 
 #include "lldb/Host/FileSystem.h"
 #include "lldb/Host/Host.h"
@@ -30,12 +30,12 @@
 using namespace lldb;
 using namespace lldb_private;
 
-namespace {
-bool GetTripleForProcess(const FileSpec &executable, llvm::Triple &triple) {
+static bool GetTripleForProcess(const FileSpec &executable,
+                                llvm::Triple &triple) {
   // Open the PE File as a binary file, and parse just enough information to
   // determine the machine type.
   auto imageBinaryP = FileSystem::Instance().Open(
-      executable, File::eOpenOptionRead, lldb::eFilePermissionsUserRead);
+      executable, File::eOpenOptionReadOnly, lldb::eFilePermissionsUserRead);
   if (!imageBinaryP)
     return llvm::errorToBool(imageBinaryP.takeError());
   File &imageBinary = *imageBinaryP.get();
@@ -66,7 +66,8 @@ bool GetTripleForProcess(const FileSpec &executable, llvm::Triple &triple) {
   return true;
 }
 
-bool GetExecutableForProcess(const AutoHandle &handle, std::string &path) {
+static bool GetExecutableForProcess(const AutoHandle &handle,
+                                    std::string &path) {
   // Get the process image path.  MAX_PATH isn't long enough, paths can
   // actually be up to 32KB.
   std::vector<wchar_t> buffer(PATH_MAX);
@@ -76,8 +77,8 @@ bool GetExecutableForProcess(const AutoHandle &handle, std::string &path) {
   return llvm::convertWideToUTF8(buffer.data(), path);
 }
 
-void GetProcessExecutableAndTriple(const AutoHandle &handle,
-                                   ProcessInstanceInfo &process) {
+static void GetProcessExecutableAndTriple(const AutoHandle &handle,
+                                          ProcessInstanceInfo &process) {
   // We may not have permissions to read the path from the process.  So start
   // off by setting the executable file to whatever Toolhelp32 gives us, and
   // then try to enhance this with more detailed information, but fail
@@ -96,14 +97,15 @@ void GetProcessExecutableAndTriple(const AutoHandle &handle,
 
   // TODO(zturner): Add the ability to get the process user name.
 }
-}
 
 lldb::thread_t Host::GetCurrentThread() {
   return lldb::thread_t(::GetCurrentThread());
 }
 
 void Host::Kill(lldb::pid_t pid, int signo) {
-  TerminateProcess((HANDLE)pid, 1);
+  AutoHandle handle(::OpenProcess(PROCESS_TERMINATE, FALSE, pid), nullptr);
+  if (handle.IsValid())
+    ::TerminateProcess(handle.get(), 1);
 }
 
 const char *Host::GetSignalAsCString(int signo) { return NULL; }
@@ -195,8 +197,7 @@ bool Host::GetProcessInfo(lldb::pid_t pid, ProcessInstanceInfo &process_info) {
 }
 
 llvm::Expected<HostThread> Host::StartMonitoringChildProcess(
-    const Host::MonitorChildProcessCallback &callback, lldb::pid_t pid,
-    bool monitor_signals) {
+    const Host::MonitorChildProcessCallback &callback, lldb::pid_t pid) {
   return HostThread();
 }
 
@@ -205,13 +206,14 @@ Status Host::ShellExpandArguments(ProcessLaunchInfo &launch_info) {
   if (launch_info.GetFlags().Test(eLaunchFlagShellExpandArguments)) {
     FileSpec expand_tool_spec = HostInfo::GetSupportExeDir();
     if (!expand_tool_spec) {
-      error.SetErrorString("could not find support executable directory for "
-                           "the lldb-argdumper tool");
+      error = Status::FromErrorString(
+          "could not find support executable directory for "
+          "the lldb-argdumper tool");
       return error;
     }
     expand_tool_spec.AppendPathComponent("lldb-argdumper.exe");
     if (!FileSystem::Instance().Exists(expand_tool_spec)) {
-      error.SetErrorString("could not find the lldb-argdumper tool");
+      error = Status::FromErrorString("could not find the lldb-argdumper tool");
       return error;
     }
 
@@ -234,32 +236,32 @@ Status Host::ShellExpandArguments(ProcessLaunchInfo &launch_info) {
       return e;
 
     if (status != 0) {
-      error.SetErrorStringWithFormat("lldb-argdumper exited with error %d",
-                                     status);
+      error = Status::FromErrorStringWithFormat(
+          "lldb-argdumper exited with error %d", status);
       return error;
     }
 
     auto data_sp = StructuredData::ParseJSON(output);
     if (!data_sp) {
-      error.SetErrorString("invalid JSON");
+      error = Status::FromErrorString("invalid JSON");
       return error;
     }
 
     auto dict_sp = data_sp->GetAsDictionary();
-    if (!data_sp) {
-      error.SetErrorString("invalid JSON");
+    if (!dict_sp) {
+      error = Status::FromErrorString("invalid JSON");
       return error;
     }
 
     auto args_sp = dict_sp->GetObjectForDotSeparatedPath("arguments");
     if (!args_sp) {
-      error.SetErrorString("invalid JSON");
+      error = Status::FromErrorString("invalid JSON");
       return error;
     }
 
     auto args_array_sp = args_sp->GetAsArray();
     if (!args_array_sp) {
-      error.SetErrorString("invalid JSON");
+      error = Status::FromErrorString("invalid JSON");
       return error;
     }
 

@@ -46,13 +46,13 @@ void XCoreTargetObjectFile::Initialize(MCContext &Ctx, const TargetMachine &TM){
                         ELF::SHF_ALLOC | ELF::XCORE_SHF_CP_SECTION);
   MergeableConst4Section = Ctx.getELFSection(
       ".cp.rodata.cst4", ELF::SHT_PROGBITS,
-      ELF::SHF_ALLOC | ELF::SHF_MERGE | ELF::XCORE_SHF_CP_SECTION, 4, "");
+      ELF::SHF_ALLOC | ELF::SHF_MERGE | ELF::XCORE_SHF_CP_SECTION, 4);
   MergeableConst8Section = Ctx.getELFSection(
       ".cp.rodata.cst8", ELF::SHT_PROGBITS,
-      ELF::SHF_ALLOC | ELF::SHF_MERGE | ELF::XCORE_SHF_CP_SECTION, 8, "");
+      ELF::SHF_ALLOC | ELF::SHF_MERGE | ELF::XCORE_SHF_CP_SECTION, 8);
   MergeableConst16Section = Ctx.getELFSection(
       ".cp.rodata.cst16", ELF::SHT_PROGBITS,
-      ELF::SHF_ALLOC | ELF::SHF_MERGE | ELF::XCORE_SHF_CP_SECTION, 16, "");
+      ELF::SHF_ALLOC | ELF::SHF_MERGE | ELF::XCORE_SHF_CP_SECTION, 16);
   CStringSection =
       Ctx.getELFSection(".cp.rodata.string", ELF::SHT_PROGBITS,
                         ELF::SHF_ALLOC | ELF::SHF_MERGE | ELF::SHF_STRINGS |
@@ -98,7 +98,7 @@ MCSection *XCoreTargetObjectFile::getExplicitSectionGlobal(
     const GlobalObject *GO, SectionKind Kind, const TargetMachine &TM) const {
   StringRef SectionName = GO->getSection();
   // Infer section flags from the section name if we can.
-  bool IsCPRel = SectionName.startswith(".cp.");
+  bool IsCPRel = SectionName.starts_with(".cp.");
   if (IsCPRel && !Kind.isReadOnly())
     report_fatal_error("Using .cp. section for writeable object.");
   return getContext().getELFSection(SectionName, getXCoreSectionType(Kind),
@@ -118,7 +118,7 @@ MCSection *XCoreTargetObjectFile::SelectSectionForGlobal(
     if (Kind.isMergeableConst16())      return MergeableConst16Section;
   }
   Type *ObjType = GO->getValueType();
-  auto &DL = GO->getParent()->getDataLayout();
+  auto &DL = GO->getDataLayout();
   if (TM.getCodeModel() == CodeModel::Small || !ObjType->isSized() ||
       DL.getTypeAllocSize(ObjType) < CodeModelLargeSize) {
     if (Kind.isReadOnly())              return UseCPRel? ReadOnlySection

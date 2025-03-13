@@ -90,7 +90,7 @@ QualType APValue::LValueBase::getType() const {
   // For a materialized temporary, the type of the temporary we materialized
   // may not be the type of the expression.
   if (const MaterializeTemporaryExpr *MTE =
-          clang::dyn_cast<MaterializeTemporaryExpr>(Base)) {
+          llvm::dyn_cast<MaterializeTemporaryExpr>(Base)) {
     SmallVector<const Expr *, 2> CommaLHSs;
     SmallVector<SubobjectAdjustment, 2> Adjustments;
     const Expr *Temp = MTE->getSubExpr();
@@ -152,6 +152,14 @@ APValue::LValuePathEntry::LValuePathEntry(BaseOrMemberType BaseOrMember) {
 
 void APValue::LValuePathEntry::Profile(llvm::FoldingSetNodeID &ID) const {
   ID.AddInteger(Value);
+}
+
+APValue::LValuePathSerializationHelper::LValuePathSerializationHelper(
+    ArrayRef<LValuePathEntry> Path, QualType ElemTy)
+    : Ty((const void *)ElemTy.getTypePtrOrNull()), Path(Path) {}
+
+QualType APValue::LValuePathSerializationHelper::getType() {
+  return QualType::getFromOpaquePtr(Ty);
 }
 
 namespace {
@@ -300,7 +308,8 @@ APValue::UnionData::~UnionData () {
   delete Value;
 }
 
-APValue::APValue(const APValue &RHS) : Kind(None) {
+APValue::APValue(const APValue &RHS)
+    : Kind(None), AllowConstexprUnknown(RHS.AllowConstexprUnknown) {
   switch (RHS.getKind()) {
   case None:
   case Indeterminate:
@@ -371,22 +380,29 @@ APValue::APValue(const APValue &RHS) : Kind(None) {
   }
 }
 
-APValue::APValue(APValue &&RHS) : Kind(RHS.Kind), Data(RHS.Data) {
+APValue::APValue(APValue &&RHS)
+    : Kind(RHS.Kind), AllowConstexprUnknown(RHS.AllowConstexprUnknown),
+      Data(RHS.Data) {
   RHS.Kind = None;
 }
 
 APValue &APValue::operator=(const APValue &RHS) {
   if (this != &RHS)
     *this = APValue(RHS);
+
+  AllowConstexprUnknown = RHS.AllowConstexprUnknown;
   return *this;
 }
 
 APValue &APValue::operator=(APValue &&RHS) {
-  if (Kind != None && Kind != Indeterminate)
-    DestroyDataAndMakeUninit();
-  Kind = RHS.Kind;
-  Data = RHS.Data;
-  RHS.Kind = None;
+  if (this != &RHS) {
+    if (Kind != None && Kind != Indeterminate)
+      DestroyDataAndMakeUninit();
+    Kind = RHS.Kind;
+    Data = RHS.Data;
+    AllowConstexprUnknown = RHS.AllowConstexprUnknown;
+    RHS.Kind = None;
+  }
   return *this;
 }
 
@@ -416,6 +432,7 @@ void APValue::DestroyDataAndMakeUninit() {
   else if (Kind == AddrLabelDiff)
     ((AddrLabelDiffData *)(char *)&Data)->~AddrLabelDiffData();
   Kind = None;
+  AllowConstexprUnknown = false;
 }
 
 bool APValue::needsCleanup() const {
@@ -458,6 +475,10 @@ bool APValue::needsCleanup() const {
 void APValue::swap(APValue &RHS) {
   std::swap(Kind, RHS.Kind);
   std::swap(Data, RHS.Data);
+  // We can't use std::swap w/ bit-fields
+  bool tmp = AllowConstexprUnknown;
+  AllowConstexprUnknown = RHS.AllowConstexprUnknown;
+  RHS.AllowConstexprUnknown = tmp;
 }
 
 /// Profile the value of an APInt, excluding its bit-width.
@@ -617,6 +638,69 @@ static double GetApproxValue(const llvm::APFloat &F) {
   return V.convertToDouble();
 }
 
+static bool TryPrintAsStringLiteral(raw_ostream &Out,
+                                    const PrintingPolicy &Policy,
+                                    const ArrayType *ATy,
+                                    ArrayRef<APValue> Inits) {
+  if (Inits.empty())
+    return false;
+
+  QualType Ty = ATy->getElementType();
+  if (!Ty->isAnyCharacterType())
+    return false;
+
+  // Nothing we can do about a sequence that is not null-terminated
+  if (!Inits.back().isInt() || !Inits.back().getInt().isZero())
+    return false;
+
+  Inits = Inits.drop_back();
+
+  llvm::SmallString<40> Buf;
+  Buf.push_back('"');
+
+  // Better than printing a two-digit sequence of 10 integers.
+  constexpr size_t MaxN = 36;
+  StringRef Ellipsis;
+  if (Inits.size() > MaxN && !Policy.EntireContentsOfLargeArray) {
+    Ellipsis = "[...]";
+    Inits =
+        Inits.take_front(std::min(MaxN - Ellipsis.size() / 2, Inits.size()));
+  }
+
+  for (auto &Val : Inits) {
+    if (!Val.isInt())
+      return false;
+    int64_t Char64 = Val.getInt().getExtValue();
+    if (!isASCII(Char64))
+      return false; // Bye bye, see you in integers.
+    auto Ch = static_cast<unsigned char>(Char64);
+    // The diagnostic message is 'quoted'
+    StringRef Escaped = escapeCStyle<EscapeChar::SingleAndDouble>(Ch);
+    if (Escaped.empty()) {
+      if (!isPrintable(Ch))
+        return false;
+      Buf.emplace_back(Ch);
+    } else {
+      Buf.append(Escaped);
+    }
+  }
+
+  Buf.append(Ellipsis);
+  Buf.push_back('"');
+
+  if (Ty->isWideCharType())
+    Out << 'L';
+  else if (Ty->isChar8Type())
+    Out << "u8";
+  else if (Ty->isChar16Type())
+    Out << 'u';
+  else if (Ty->isChar32Type())
+    Out << 'U';
+
+  Out << Buf;
+  return true;
+}
+
 void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
                           QualType Ty) const {
   printPretty(Out, Ctx.getPrintingPolicy(), Ty, &Ctx);
@@ -630,6 +714,9 @@ void APValue::printPretty(raw_ostream &Out, const PrintingPolicy &Policy,
     Out << "void()";
     return;
   }
+
+  if (const auto *AT = Ty->getAs<AtomicType>())
+    Ty = AT->getValueType();
 
   switch (getKind()) {
   case APValue::None:
@@ -692,7 +779,9 @@ void APValue::printPretty(raw_ostream &Out, const PrintingPolicy &Policy,
     if (!hasLValuePath()) {
       // No lvalue path: just print the offset.
       CharUnits O = getLValueOffset();
-      CharUnits S = Ctx ? Ctx->getTypeSizeInChars(InnerTy) : CharUnits::Zero();
+      CharUnits S = Ctx ? Ctx->getTypeSizeInCharsIfKnown(InnerTy).value_or(
+                              CharUnits::Zero())
+                        : CharUnits::Zero();
       if (!O.isZero()) {
         if (IsReference)
           Out << "*(";
@@ -766,6 +855,10 @@ void APValue::printPretty(raw_ostream &Out, const PrintingPolicy &Policy,
           Out << *VD;
           ElemTy = VD->getType();
         }
+      } else if (ElemTy->isAnyComplexType()) {
+        // The lvalue refers to a complex type
+        Out << (Path[I].getAsArrayIndex() == 0 ? ".real" : ".imag");
+        ElemTy = ElemTy->castAs<ComplexType>()->getElementType();
       } else {
         // The lvalue must refer to an array.
         Out << '[' << Path[I].getAsArrayIndex() << ']';
@@ -785,17 +878,23 @@ void APValue::printPretty(raw_ostream &Out, const PrintingPolicy &Policy,
   }
   case APValue::Array: {
     const ArrayType *AT = Ty->castAsArrayTypeUnsafe();
+    unsigned N = getArrayInitializedElts();
+    if (N != 0 && TryPrintAsStringLiteral(Out, Policy, AT,
+                                          {&getArrayInitializedElt(0), N}))
+      return;
     QualType ElemTy = AT->getElementType();
     Out << '{';
-    if (unsigned N = getArrayInitializedElts()) {
-      getArrayInitializedElt(0).printPretty(Out, Policy, ElemTy, Ctx);
-      for (unsigned I = 1; I != N; ++I) {
+    unsigned I = 0;
+    switch (N) {
+    case 0:
+      for (; I != N; ++I) {
         Out << ", ";
-        if (I == 10) {
-          // Avoid printing out the entire contents of large arrays.
-          Out << "...";
-          break;
+        if (I == 10 && !Policy.EntireContentsOfLargeArray) {
+          Out << "...}";
+          return;
         }
+        [[fallthrough]];
+      default:
         getArrayInitializedElt(I).printPretty(Out, Policy, ElemTy, Ctx);
       }
     }
@@ -820,7 +919,8 @@ void APValue::printPretty(raw_ostream &Out, const PrintingPolicy &Policy,
     for (const auto *FI : RD->fields()) {
       if (!First)
         Out << ", ";
-      if (FI->isUnnamedBitfield()) continue;
+      if (FI->isUnnamedBitField())
+        continue;
       getStructField(FI->getFieldIndex()).
         printPretty(Out, Policy, FI->getType(), Ctx);
       First = false;
@@ -858,7 +958,6 @@ std::string APValue::getAsString(const ASTContext &Ctx, QualType Ty) const {
   std::string Result;
   llvm::raw_string_ostream Out(Result);
   printPretty(Out, Ctx, Ty);
-  Out.flush();
   return Result;
 }
 
@@ -905,7 +1004,7 @@ bool APValue::hasLValuePath() const {
 ArrayRef<APValue::LValuePathEntry> APValue::getLValuePath() const {
   assert(isLValue() && hasLValuePath() && "Invalid accessor");
   const LV &LVal = *((const LV *)(const char *)&Data);
-  return llvm::makeArrayRef(LVal.getPath(), LVal.PathLength);
+  return llvm::ArrayRef(LVal.getPath(), LVal.PathLength);
 }
 
 unsigned APValue::getLValueCallIndex() const {
@@ -952,8 +1051,10 @@ void APValue::setLValue(LValueBase B, const CharUnits &O,
                         bool IsNullPtr) {
   MutableArrayRef<APValue::LValuePathEntry> InternalPath =
       setLValueUninit(B, O, Path.size(), IsOnePastTheEnd, IsNullPtr);
-  memcpy(InternalPath.data(), Path.data(),
-         Path.size() * sizeof(LValuePathEntry));
+  if (Path.size()) {
+    memcpy(InternalPath.data(), Path.data(),
+           Path.size() * sizeof(LValuePathEntry));
+  }
 }
 
 void APValue::setUnion(const FieldDecl *Field, const APValue &Value) {
@@ -981,7 +1082,7 @@ ArrayRef<const CXXRecordDecl*> APValue::getMemberPointerPath() const {
   assert(isMemberPointer() && "Invalid accessor");
   const MemberPointerData &MPD =
       *((const MemberPointerData *)(const char *)&Data);
-  return llvm::makeArrayRef(MPD.getPath(), MPD.PathLength);
+  return llvm::ArrayRef(MPD.getPath(), MPD.PathLength);
 }
 
 void APValue::MakeLValue() {
@@ -996,10 +1097,6 @@ void APValue::MakeArray(unsigned InitElts, unsigned Size) {
   new ((void *)(char *)&Data) Arr(InitElts, Size);
   Kind = Array;
 }
-
-MutableArrayRef<APValue::LValuePathEntry>
-setLValueUninit(APValue::LValueBase B, const CharUnits &O, unsigned Size,
-                bool OnePastTheEnd, bool IsNullPtr);
 
 MutableArrayRef<const CXXRecordDecl *>
 APValue::setMemberPointerUninit(const ValueDecl *Member, bool IsDerivedMember,
@@ -1028,7 +1125,7 @@ LinkageInfo LinkageComputer::getLVForValue(const APValue &V,
 
   auto MergeLV = [&](LinkageInfo MergeLV) {
     LV.merge(MergeLV);
-    return LV.getLinkage() == InternalLinkage;
+    return LV.getLinkage() == Linkage::Internal;
   };
   auto Merge = [&](const APValue &V) {
     return MergeLV(getLVForValue(V, computation));

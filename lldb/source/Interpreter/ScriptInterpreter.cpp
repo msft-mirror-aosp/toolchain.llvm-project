@@ -18,9 +18,10 @@
 #if defined(_WIN32)
 #include "lldb/Host/windows/ConnectionGenericFileWindows.h"
 #endif
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
-#include <stdio.h>
-#include <stdlib.h>
+#include <optional>
 #include <string>
 
 using namespace lldb;
@@ -30,29 +31,29 @@ ScriptInterpreter::ScriptInterpreter(Debugger &debugger,
                                      lldb::ScriptLanguage script_lang)
     : m_debugger(debugger), m_script_lang(script_lang) {}
 
-ScriptInterpreter::~ScriptInterpreter() {}
-
 void ScriptInterpreter::CollectDataForBreakpointCommandCallback(
-    std::vector<BreakpointOptions *> &bp_options_vec,
+    std::vector<std::reference_wrapper<BreakpointOptions>> &bp_options_vec,
     CommandReturnObject &result) {
-  result.SetStatus(eReturnStatusFailed);
   result.AppendError(
       "This script interpreter does not support breakpoint callbacks.");
 }
 
 void ScriptInterpreter::CollectDataForWatchpointCommandCallback(
     WatchpointOptions *bp_options, CommandReturnObject &result) {
-  result.SetStatus(eReturnStatusFailed);
   result.AppendError(
       "This script interpreter does not support watchpoint callbacks.");
 }
 
+StructuredData::DictionarySP ScriptInterpreter::GetInterpreterInfo() {
+  return nullptr;
+}
+
 bool ScriptInterpreter::LoadScriptingModule(const char *filename,
-                                            bool init_session,
+                                            const LoadScriptOptions &options,
                                             lldb_private::Status &error,
                                             StructuredData::ObjectSP *module_sp,
                                             FileSpec extra_search_dir) {
-  error.SetErrorString(
+  error = Status::FromErrorString(
       "This script interpreter does not support importing modules.");
   return false;
 }
@@ -71,34 +72,94 @@ std::string ScriptInterpreter::LanguageToString(lldb::ScriptLanguage language) {
   llvm_unreachable("Unhandled ScriptInterpreter!");
 }
 
+lldb::DataExtractorSP
+ScriptInterpreter::GetDataExtractorFromSBData(const lldb::SBData &data) const {
+  return data.m_opaque_sp;
+}
+
+lldb::BreakpointSP ScriptInterpreter::GetOpaqueTypeFromSBBreakpoint(
+    const lldb::SBBreakpoint &breakpoint) const {
+  return breakpoint.m_opaque_wp.lock();
+}
+
+lldb::ProcessAttachInfoSP ScriptInterpreter::GetOpaqueTypeFromSBAttachInfo(
+    const lldb::SBAttachInfo &attach_info) const {
+  return attach_info.m_opaque_sp;
+}
+
+lldb::ProcessLaunchInfoSP ScriptInterpreter::GetOpaqueTypeFromSBLaunchInfo(
+    const lldb::SBLaunchInfo &launch_info) const {
+  return std::make_shared<ProcessLaunchInfo>(
+      *reinterpret_cast<ProcessLaunchInfo *>(launch_info.m_opaque_sp.get()));
+}
+
+Status
+ScriptInterpreter::GetStatusFromSBError(const lldb::SBError &error) const {
+  if (error.m_opaque_up)
+    return error.m_opaque_up->Clone();
+
+  return Status();
+}
+
+Event *
+ScriptInterpreter::GetOpaqueTypeFromSBEvent(const lldb::SBEvent &event) const {
+  return event.m_opaque_ptr;
+}
+
+lldb::StreamSP ScriptInterpreter::GetOpaqueTypeFromSBStream(
+    const lldb::SBStream &stream) const {
+  if (stream.m_opaque_up) {
+    lldb::StreamSP s = std::make_shared<lldb_private::StreamString>();
+    *s << reinterpret_cast<StreamString *>(stream.m_opaque_up.get())->m_packet;
+    return s;
+  }
+
+  return nullptr;
+}
+
+std::optional<MemoryRegionInfo>
+ScriptInterpreter::GetOpaqueTypeFromSBMemoryRegionInfo(
+    const lldb::SBMemoryRegionInfo &mem_region) const {
+  if (!mem_region.m_opaque_up)
+    return std::nullopt;
+  return *mem_region.m_opaque_up.get();
+}
+
+lldb::ExecutionContextRefSP
+ScriptInterpreter::GetOpaqueTypeFromSBExecutionContext(
+    const lldb::SBExecutionContext &exe_ctx) const {
+  return exe_ctx.m_exe_ctx_sp;
+}
+
 lldb::ScriptLanguage
 ScriptInterpreter::StringToLanguage(const llvm::StringRef &language) {
-  if (language.equals_lower(LanguageToString(eScriptLanguageNone)))
+  if (language.equals_insensitive(LanguageToString(eScriptLanguageNone)))
     return eScriptLanguageNone;
-  if (language.equals_lower(LanguageToString(eScriptLanguagePython)))
+  if (language.equals_insensitive(LanguageToString(eScriptLanguagePython)))
     return eScriptLanguagePython;
-  if (language.equals_lower(LanguageToString(eScriptLanguageLua)))
+  if (language.equals_insensitive(LanguageToString(eScriptLanguageLua)))
     return eScriptLanguageLua;
   return eScriptLanguageUnknown;
 }
 
 Status ScriptInterpreter::SetBreakpointCommandCallback(
-    std::vector<BreakpointOptions *> &bp_options_vec,
+    std::vector<std::reference_wrapper<BreakpointOptions>> &bp_options_vec,
     const char *callback_text) {
-  Status return_error;
-  for (BreakpointOptions *bp_options : bp_options_vec) {
-    return_error = SetBreakpointCommandCallback(bp_options, callback_text);
-    if (return_error.Success())
+  Status error;
+  for (BreakpointOptions &bp_options : bp_options_vec) {
+    error = SetBreakpointCommandCallback(bp_options, callback_text,
+                                         /*is_callback=*/false);
+    if (!error.Success())
       break;
   }
-  return return_error;
+  return error;
 }
 
 Status ScriptInterpreter::SetBreakpointCommandCallbackFunction(
-    std::vector<BreakpointOptions *> &bp_options_vec, const char *function_name,
-    StructuredData::ObjectSP extra_args_sp) {
+    std::vector<std::reference_wrapper<BreakpointOptions>> &bp_options_vec,
+    const char *function_name, StructuredData::ObjectSP extra_args_sp) {
   Status error;
-  for (BreakpointOptions *bp_options : bp_options_vec) {
+  for (BreakpointOptions &bp_options : bp_options_vec) {
     error = SetBreakpointCommandCallbackFunction(bp_options, function_name,
                                                  extra_args_sp);
     if (!error.Success())
@@ -129,12 +190,12 @@ ScriptInterpreterIORedirect::Create(bool enable_io, Debugger &debugger,
         new ScriptInterpreterIORedirect(debugger, result));
 
   auto nullin = FileSystem::Instance().Open(FileSpec(FileSystem::DEV_NULL),
-                                            File::eOpenOptionRead);
+                                            File::eOpenOptionReadOnly);
   if (!nullin)
     return nullin.takeError();
 
   auto nullout = FileSystem::Instance().Open(FileSpec(FileSystem::DEV_NULL),
-                                             File::eOpenOptionWrite);
+                                             File::eOpenOptionWriteOnly);
   if (!nullout)
     return nullin.takeError();
 

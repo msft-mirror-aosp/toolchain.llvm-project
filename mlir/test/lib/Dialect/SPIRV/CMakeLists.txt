@@ -9,12 +9,13 @@ add_mlir_library(MLIRSPIRVTestPasses
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/SPIRV
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/IR
-
-  LINK_LIBS PUBLIC
-  MLIRGPU
+  )
+mlir_target_link_libraries(MLIRSPIRVTestPasses PUBLIC
+  MLIRGPUDialect
   MLIRIR
   MLIRPass
-  MLIRSPIRV
+  MLIRSPIRVDialect
+  MLIRSPIRVConversion
   MLIRSPIRVModuleCombiner
   MLIRSupport
   )

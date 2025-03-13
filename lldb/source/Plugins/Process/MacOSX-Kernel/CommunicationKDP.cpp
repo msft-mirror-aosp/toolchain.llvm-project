@@ -8,10 +8,9 @@
 
 #include "CommunicationKDP.h"
 
-#include <errno.h>
-#include <limits.h>
-#include <string.h>
-
+#include <cerrno>
+#include <climits>
+#include <cstring>
 
 #include "lldb/Core/DumpDataExtractor.h"
 #include "lldb/Host/Host.h"
@@ -30,7 +29,7 @@ using namespace lldb_private;
 
 // CommunicationKDP constructor
 CommunicationKDP::CommunicationKDP(const char *comm_name)
-    : Communication(comm_name), m_addr_byte_size(4),
+    : Communication(), m_addr_byte_size(4),
       m_byte_order(eByteOrderLittle), m_packet_timeout(5), m_sequence_mutex(),
       m_is_running(false), m_session_key(0u), m_request_sequence_id(0u),
       m_exception_sequence_id(0u), m_kdp_version_version(0u),
@@ -66,7 +65,7 @@ bool CommunicationKDP::SendRequestAndGetReply(
     const CommandType command, const PacketStreamType &request_packet,
     DataExtractor &reply_packet) {
   if (IsRunning()) {
-    Log *log(ProcessKDPLog::GetLogIfAllCategoriesSet(KDP_LOG_PACKETS));
+    Log *log = GetLog(KDPLog::Packets);
     if (log) {
       PacketStreamType log_strm;
       DumpPacket(log_strm, request_packet.GetData(), request_packet.GetSize());
@@ -134,7 +133,7 @@ bool CommunicationKDP::SendRequestPacketNoLock(
     const char *packet_data = request_packet.GetData();
     const size_t packet_size = request_packet.GetSize();
 
-    Log *log(ProcessKDPLog::GetLogIfAllCategoriesSet(KDP_LOG_PACKETS));
+    Log *log = GetLog(KDPLog::Packets);
     if (log) {
       PacketStreamType log_strm;
       DumpPacket(log_strm, packet_data, packet_size);
@@ -179,7 +178,7 @@ size_t CommunicationKDP::WaitForPacketWithTimeoutMicroSecondsNoLock(
   uint8_t buffer[8192];
   Status error;
 
-  Log *log(ProcessKDPLog::GetLogIfAllCategoriesSet(KDP_LOG_PACKETS));
+  Log *log = GetLog(KDPLog::Packets);
 
   // Check for a packet from our cache first without trying any reading...
   if (CheckForPacket(NULL, 0, packet))
@@ -190,7 +189,7 @@ size_t CommunicationKDP::WaitForPacketWithTimeoutMicroSecondsNoLock(
     lldb::ConnectionStatus status = eConnectionStatusNoConnection;
     size_t bytes_read = Read(buffer, sizeof(buffer),
                              timeout_usec == UINT32_MAX
-                                 ? Timeout<std::micro>(llvm::None)
+                                 ? Timeout<std::micro>(std::nullopt)
                                  : std::chrono::microseconds(timeout_usec),
                              status, &error);
 
@@ -232,7 +231,7 @@ bool CommunicationKDP::CheckForPacket(const uint8_t *src, size_t src_len,
   // Put the packet data into the buffer in a thread safe fashion
   std::lock_guard<std::recursive_mutex> guard(m_bytes_mutex);
 
-  Log *log(ProcessKDPLog::GetLogIfAllCategoriesSet(KDP_LOG_PACKETS));
+  Log *log = GetLog(KDPLog::Packets);
 
   if (src && src_len > 0) {
     if (log && log->GetVerbose()) {
@@ -268,7 +267,7 @@ bool CommunicationKDP::CheckForPacket(const uint8_t *src, size_t src_len,
         SendRequestPacketNoLock(request_ack_packet);
       }
       // Fall through to case below to get packet contents
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case ePacketTypeReply | KDP_CONNECT:
     case ePacketTypeReply | KDP_DISCONNECT:
     case ePacketTypeReply | KDP_HOSTINFO:
@@ -572,12 +571,12 @@ uint32_t CommunicationKDP::SendRequestReadMemory(lldb::addr_t addr, void *dst,
       }
     }
     if (kdp_error)
-      error.SetErrorStringWithFormat("kdp read memory failed (error %u)",
-                                     kdp_error);
+      error = Status::FromErrorStringWithFormat(
+          "kdp read memory failed (error %u)", kdp_error);
     else
-      error.SetErrorString("kdp read memory failed");
+      error = Status::FromErrorString("kdp read memory failed");
   } else {
-    error.SetErrorString("failed to send packet");
+    error = Status::FromErrorString("failed to send packet");
   }
   return 0;
 }
@@ -603,14 +602,14 @@ uint32_t CommunicationKDP::SendRequestWriteMemory(lldb::addr_t addr,
     lldb::offset_t offset = 8;
     uint32_t kdp_error = reply_packet.GetU32(&offset);
     if (kdp_error)
-      error.SetErrorStringWithFormat("kdp write memory failed (error %u)",
-                                     kdp_error);
+      error = Status::FromErrorStringWithFormat(
+          "kdp write memory failed (error %u)", kdp_error);
     else {
       error.Clear();
       return src_len;
     }
   } else {
-    error.SetErrorString("failed to send packet");
+    error = Status::FromErrorString("failed to send packet");
   }
   return 0;
 }
@@ -632,14 +631,14 @@ bool CommunicationKDP::SendRawRequest(
     lldb::offset_t offset = 8;
     uint32_t kdp_error = reply_packet.GetU32(&offset);
     if (kdp_error && (command_byte != KDP_DUMPINFO))
-      error.SetErrorStringWithFormat("request packet 0x%8.8x failed (error %u)",
-                                     command_byte, kdp_error);
+      error = Status::FromErrorStringWithFormat(
+          "request packet 0x%8.8x failed (error %u)", command_byte, kdp_error);
     else {
       error.Clear();
       return true;
     }
   } else {
-    error.SetErrorString("failed to send packet");
+    error = Status::FromErrorString("failed to send packet");
   }
   return false;
 }
@@ -1195,14 +1194,14 @@ uint32_t CommunicationKDP::SendRequestReadRegisters(uint32_t cpu,
       }
     }
     if (kdp_error)
-      error.SetErrorStringWithFormat(
+      error = Status::FromErrorStringWithFormat(
           "failed to read kdp registers for cpu %u flavor %u (error %u)", cpu,
           flavor, kdp_error);
     else
-      error.SetErrorStringWithFormat(
+      error = Status::FromErrorStringWithFormat(
           "failed to read kdp registers for cpu %u flavor %u", cpu, flavor);
   } else {
-    error.SetErrorString("failed to send packet");
+    error = Status::FromErrorString("failed to send packet");
   }
   return 0;
 }
@@ -1227,11 +1226,11 @@ uint32_t CommunicationKDP::SendRequestWriteRegisters(uint32_t cpu,
     uint32_t kdp_error = reply_packet.GetU32(&offset);
     if (kdp_error == 0)
       return src_len;
-    error.SetErrorStringWithFormat(
+    error = Status::FromErrorStringWithFormat(
         "failed to read kdp registers for cpu %u flavor %u (error %u)", cpu,
         flavor, kdp_error);
   } else {
-    error.SetErrorString("failed to send packet");
+    error = Status::FromErrorString("failed to send packet");
   }
   return 0;
 }

@@ -1,4 +1,4 @@
-//===--------------------- catch_pointer_nullptr.cpp ----------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,6 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: no-exceptions
+
+// mps2-an385 machine used for testing of picolibc has just 4 MB of "flash"
+// memory and this test requires almost 5 MB
+// UNSUPPORTED: LIBCXX-PICOLIBC-FIXME
 
 #include <cassert>
 #include <cstdio>

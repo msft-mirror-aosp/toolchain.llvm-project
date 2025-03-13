@@ -10,59 +10,71 @@
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_CLANGDLSPSERVER_H
 
 #include "ClangdServer.h"
-#include "DraftStore.h"
-#include "Features.inc"
-#include "FindSymbols.h"
+#include "Diagnostics.h"
 #include "GlobalCompilationDatabase.h"
+#include "LSPBinder.h"
 #include "Protocol.h"
 #include "Transport.h"
 #include "support/Context.h"
 #include "support/MemoryTree.h"
 #include "support/Path.h"
-#include "clang/Tooling/Core/Replacement.h"
-#include "llvm/ADT/Optional.h"
-#include "llvm/ADT/StringSet.h"
+#include "support/Threading.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/JSON.h"
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <vector>
 
 namespace clang {
 namespace clangd {
-
-class SymbolIndex;
 
 /// This class exposes ClangdServer's capabilities via Language Server Protocol.
 ///
 /// MessageHandler binds the implemented LSP methods (e.g. onInitialize) to
 /// corresponding JSON-RPC methods ("initialize").
 /// The server also supports $/cancelRequest (MessageHandler provides this).
-class ClangdLSPServer : private ClangdServer::Callbacks {
+class ClangdLSPServer : private ClangdServer::Callbacks,
+                        private LSPBinder::RawOutgoing {
 public:
   struct Options : ClangdServer::Options {
+    /// Supplies configuration (overrides ClangdServer::ContextProvider).
+    config::Provider *ConfigProvider = nullptr;
     /// Look for compilation databases, rather than using compile commands
     /// set via LSP (extensions) only.
     bool UseDirBasedCDB = true;
-    /// A fixed directory to search for a compilation database in.
-    /// If not set, we search upward from the source file.
-    llvm::Optional<Path> CompileCommandsDir;
-    /// The offset-encoding to use, or None to negotiate it over LSP.
-    llvm::Optional<OffsetEncoding> Encoding;
+    /// The offset-encoding to use, or std::nullopt to negotiate it over LSP.
+    std::optional<OffsetEncoding> Encoding;
+    /// If set, periodically called to release memory.
+    /// Consider malloc_trim(3)
+    std::function<void()> MemoryCleanup = nullptr;
 
     /// Per-feature options. Generally ClangdServer lets these vary
     /// per-request, but LSP allows limited/no customizations.
     clangd::CodeCompleteOptions CodeComplete;
+    MarkupKind SignatureHelpDocumentationFormat = MarkupKind::PlainText;
     clangd::RenameOptions Rename;
     /// Returns true if the tweak should be enabled.
     std::function<bool(const Tweak &)> TweakFilter = [](const Tweak &T) {
       return !T.hidden(); // only enable non-hidden tweaks.
     };
+
+    /// Limit the number of references returned (0 means no limit).
+    size_t ReferencesLimit = 0;
+
+    /// Flag to hint the experimental modules support is enabled.
+    bool EnableExperimentalModulesSupport = false;
   };
 
   ClangdLSPServer(Transport &Transp, const ThreadsafeFS &TFS,
                   const ClangdLSPServer::Options &Opts);
   /// The destructor blocks on any outstanding background tasks.
   ~ClangdLSPServer();
+
+  ClangdLSPServer(const ClangdLSPServer &other) = delete;
+  ClangdLSPServer &operator=(const ClangdLSPServer &other) = delete;
 
   /// Run LSP server loop, communicating with the Transport provided in the
   /// constructor. This method must not be executed more than once.
@@ -76,24 +88,24 @@ public:
 private:
   // Implement ClangdServer::Callbacks.
   void onDiagnosticsReady(PathRef File, llvm::StringRef Version,
-                          std::vector<Diag> Diagnostics) override;
+                          llvm::ArrayRef<Diag> Diagnostics) override;
   void onFileUpdated(PathRef File, const TUStatus &Status) override;
-  void
-  onHighlightingsReady(PathRef File, llvm::StringRef Version,
-                       std::vector<HighlightingToken> Highlightings) override;
   void onBackgroundIndexProgress(const BackgroundQueue::Stats &Stats) override;
+  void onSemanticsMaybeChanged(PathRef File) override;
+  void onInactiveRegionsReady(PathRef File,
+                              std::vector<Range> InactiveRegions) override;
 
   // LSP methods. Notifications have signature void(const Params&).
   // Calls have signature void(const Params&, Callback<Response>).
   void onInitialize(const InitializeParams &, Callback<llvm::json::Value>);
   void onInitialized(const InitializedParams &);
-  void onShutdown(const ShutdownParams &, Callback<std::nullptr_t>);
+  void onShutdown(const NoParams &, Callback<std::nullptr_t>);
   void onSync(const NoParams &, Callback<std::nullptr_t>);
   void onDocumentDidOpen(const DidOpenTextDocumentParams &);
   void onDocumentDidChange(const DidChangeTextDocumentParams &);
   void onDocumentDidClose(const DidCloseTextDocumentParams &);
   void onDocumentDidSave(const DidSaveTextDocumentParams &);
-  void onAST(const ASTParams &, Callback<llvm::Optional<ASTNode>>);
+  void onAST(const ASTParams &, Callback<std::optional<ASTNode>>);
   void onDocumentOnTypeFormatting(const DocumentOnTypeFormattingParams &,
                                   Callback<std::vector<TextEdit>>);
   void onDocumentRangeFormatting(const DocumentRangeFormattingParams &,
@@ -115,26 +127,33 @@ private:
                          Callback<std::vector<Location>>);
   void onGoToDefinition(const TextDocumentPositionParams &,
                         Callback<std::vector<Location>>);
+  void onGoToType(const TextDocumentPositionParams &,
+                  Callback<std::vector<Location>>);
   void onGoToImplementation(const TextDocumentPositionParams &,
                             Callback<std::vector<Location>>);
-  void onReference(const ReferenceParams &, Callback<std::vector<Location>>);
+  void onReference(const ReferenceParams &, Callback<std::vector<ReferenceLocation>>);
   void onSwitchSourceHeader(const TextDocumentIdentifier &,
-                            Callback<llvm::Optional<URIForFile>>);
+                            Callback<std::optional<URIForFile>>);
   void onDocumentHighlight(const TextDocumentPositionParams &,
                            Callback<std::vector<DocumentHighlight>>);
   void onFileEvent(const DidChangeWatchedFilesParams &);
-  void onCommand(const ExecuteCommandParams &, Callback<llvm::json::Value>);
   void onWorkspaceSymbol(const WorkspaceSymbolParams &,
                          Callback<std::vector<SymbolInformation>>);
   void onPrepareRename(const TextDocumentPositionParams &,
-                       Callback<llvm::Optional<Range>>);
+                       Callback<PrepareRenameResult>);
   void onRename(const RenameParams &, Callback<WorkspaceEdit>);
   void onHover(const TextDocumentPositionParams &,
-               Callback<llvm::Optional<Hover>>);
-  void onTypeHierarchy(const TypeHierarchyParams &,
-                       Callback<llvm::Optional<TypeHierarchyItem>>);
+               Callback<std::optional<Hover>>);
+  void onPrepareTypeHierarchy(const TypeHierarchyPrepareParams &,
+                              Callback<std::vector<TypeHierarchyItem>>);
+  void onSuperTypes(const ResolveTypeHierarchyItemParams &,
+                    Callback<std::optional<std::vector<TypeHierarchyItem>>>);
+  void onSubTypes(const ResolveTypeHierarchyItemParams &,
+                  Callback<std::vector<TypeHierarchyItem>>);
+  void onTypeHierarchy(const TypeHierarchyPrepareParams &,
+                       Callback<llvm::json::Value>);
   void onResolveTypeHierarchy(const ResolveTypeHierarchyItemParams &,
-                              Callback<llvm::Optional<TypeHierarchyItem>>);
+                              Callback<llvm::json::Value>);
   void onPrepareCallHierarchy(const CallHierarchyPrepareParams &,
                               Callback<std::vector<CallHierarchyItem>>);
   void onCallHierarchyIncomingCalls(
@@ -143,6 +162,9 @@ private:
   void onCallHierarchyOutgoingCalls(
       const CallHierarchyOutgoingCallsParams &,
       Callback<std::vector<CallHierarchyOutgoingCall>>);
+  void onClangdInlayHints(const InlayHintsParams &,
+                          Callback<llvm::json::Value>);
+  void onInlayHint(const InlayHintsParams &, Callback<std::vector<InlayHint>>);
   void onChangeConfiguration(const DidChangeConfigurationParams &);
   void onSymbolInfo(const TextDocumentPositionParams &,
                     Callback<std::vector<SymbolDetails>>);
@@ -156,8 +178,37 @@ private:
   /// This is a clangd extension. Provides a json tree representing memory usage
   /// hierarchy.
   void onMemoryUsage(const NoParams &, Callback<MemoryTree>);
+  void onCommand(const ExecuteCommandParams &, Callback<llvm::json::Value>);
 
-  std::vector<Fix> getFixes(StringRef File, const clangd::Diagnostic &D);
+  /// Implement commands.
+  void onCommandApplyEdit(const WorkspaceEdit &, Callback<llvm::json::Value>);
+  void onCommandApplyTweak(const TweakArgs &, Callback<llvm::json::Value>);
+  void onCommandApplyRename(const RenameParams &, Callback<llvm::json::Value>);
+
+  /// Outgoing LSP calls.
+  LSPBinder::OutgoingMethod<ApplyWorkspaceEditParams,
+                            ApplyWorkspaceEditResponse>
+      ApplyWorkspaceEdit;
+  LSPBinder::OutgoingNotification<ShowMessageParams> ShowMessage;
+  LSPBinder::OutgoingNotification<PublishDiagnosticsParams> PublishDiagnostics;
+  LSPBinder::OutgoingNotification<FileStatus> NotifyFileStatus;
+  LSPBinder::OutgoingNotification<InactiveRegionsParams> PublishInactiveRegions;
+  LSPBinder::OutgoingMethod<WorkDoneProgressCreateParams, std::nullptr_t>
+      CreateWorkDoneProgress;
+  LSPBinder::OutgoingNotification<ProgressParams<WorkDoneProgressBegin>>
+      BeginWorkDoneProgress;
+  LSPBinder::OutgoingNotification<ProgressParams<WorkDoneProgressReport>>
+      ReportWorkDoneProgress;
+  LSPBinder::OutgoingNotification<ProgressParams<WorkDoneProgressEnd>>
+      EndWorkDoneProgress;
+  LSPBinder::OutgoingMethod<NoParams, std::nullptr_t> SemanticTokensRefresh;
+
+  void applyEdit(WorkspaceEdit WE, llvm::json::Value Success,
+                 Callback<llvm::json::Value> Reply);
+
+  void bindMethods(LSPBinder &, const ClientCapabilities &Caps);
+  std::optional<ClangdServer::DiagRef> getDiagRef(StringRef File,
+                                                  const clangd::Diagnostic &D);
 
   /// Checks if completion request should be ignored. We need this due to the
   /// limitation of the LSP. Per LSP, a client sends requests for all "trigger
@@ -165,28 +216,17 @@ private:
   /// produce '->' and '::', respectively.
   bool shouldRunCompletion(const CompletionParams &Params) const;
 
-  /// Requests a reparse of currently opened files using their latest source.
-  /// This will typically only rebuild if something other than the source has
-  /// changed (e.g. the CDB yields different flags, or files included in the
-  /// preamble have been modified).
-  void reparseOpenFilesIfNeeded(
-      llvm::function_ref<bool(llvm::StringRef File)> Filter);
   void applyConfiguration(const ConfigurationSettings &Settings);
-
-  /// Sends a "publishSemanticHighlighting" notification to the LSP client.
-  void
-  publishTheiaSemanticHighlighting(const TheiaSemanticHighlightingParams &);
-
-  /// Sends a "publishDiagnostics" notification to the LSP client.
-  void publishDiagnostics(const PublishDiagnosticsParams &);
 
   /// Runs profiling and exports memory usage metrics if tracing is enabled and
   /// profiling hasn't happened recently.
   void maybeExportMemoryProfile();
+  PeriodicThrottler ShouldProfile;
 
-  /// Timepoint until which profiling is off. It is used to throttle profiling
-  /// requests.
-  std::chrono::steady_clock::time_point NextProfileTime;
+  /// Run the MemoryCleanup callback if it's time.
+  /// This method is thread safe.
+  void maybeCleanupMemory();
+  PeriodicThrottler ShouldCleanupMemory;
 
   /// Since initialization of CDBs and ClangdServer is done lazily, the
   /// following context captures the one used while creating ClangdLSPServer and
@@ -201,69 +241,44 @@ private:
   /// Used to indicate the ClangdLSPServer is being destroyed.
   std::atomic<bool> IsBeingDestroyed = {false};
 
-  std::mutex FixItsMutex;
-  typedef std::map<clangd::Diagnostic, std::vector<Fix>, LSPDiagnosticCompare>
-      DiagnosticToReplacementMap;
-  /// Caches FixIts per file and diagnostics
-  llvm::StringMap<DiagnosticToReplacementMap> FixItsMap;
-  std::mutex HighlightingsMutex;
-  llvm::StringMap<std::vector<HighlightingToken>> FileToHighlightings;
+  // FIXME: The caching is a temporary solution to get corresponding clangd 
+  // diagnostic from a LSP diagnostic.
+  // Ideally, ClangdServer can generate an identifier for each diagnostic,
+  // emit them via the LSP's data field (which was newly added in LSP 3.16).
+  std::mutex DiagRefMutex;
+  struct DiagKey {
+    clangd::Range Rng;
+    std::string Message;
+    bool operator<(const DiagKey &Other) const {
+      return std::tie(Rng, Message) < std::tie(Other.Rng, Other.Message);
+    }
+  };
+  DiagKey toDiagKey(const clangd::Diagnostic &LSPDiag) {
+    return {LSPDiag.range, LSPDiag.message};
+  }
+  /// A map from LSP diagnostic to clangd-naive diagnostic.
+  typedef std::map<DiagKey, ClangdServer::DiagRef>
+      DiagnosticToDiagRefMap;
+  /// Caches the mapping LSP and clangd-naive diagnostics per file.
+  llvm::StringMap<DiagnosticToDiagRefMap>
+      DiagRefMap;
+
   // Last semantic-tokens response, for incremental requests.
   std::mutex SemanticTokensMutex;
   llvm::StringMap<SemanticTokens> LastSemanticTokens;
 
-  // Most code should not deal with Transport directly.
-  // MessageHandler deals with incoming messages, use call() etc for outgoing.
+  // Most code should not deal with Transport, callMethod, notify directly.
+  // Use LSPBinder to handle incoming and outgoing calls.
   clangd::Transport &Transp;
   class MessageHandler;
   std::unique_ptr<MessageHandler> MsgHandler;
   std::mutex TranspWriter;
 
-  template <typename T>
-  static Expected<T> parse(const llvm::json::Value &Raw,
-                           llvm::StringRef PayloadName,
-                           llvm::StringRef PayloadKind) {
-    T Result;
-    llvm::json::Path::Root Root;
-    if (!fromJSON(Raw, Result, Root)) {
-      elog("Failed to decode {0} {1}: {2}", PayloadName, PayloadKind,
-           Root.getError());
-      // Dump the relevant parts of the broken message.
-      std::string Context;
-      llvm::raw_string_ostream OS(Context);
-      Root.printErrorContext(Raw, OS);
-      vlog("{0}", OS.str());
-      // Report the error (e.g. to the client).
-      return llvm::make_error<LSPError>(
-          llvm::formatv("failed to decode {0} {1}: {2}", PayloadName,
-                        PayloadKind, fmt_consume(Root.getError())),
-          ErrorCode::InvalidParams);
-    }
-    return std::move(Result);
-  }
+  void callMethod(StringRef Method, llvm::json::Value Params,
+                  Callback<llvm::json::Value> CB) override;
+  void notify(StringRef Method, llvm::json::Value Params) override;
 
-  template <typename Response>
-  void call(StringRef Method, llvm::json::Value Params, Callback<Response> CB) {
-    // Wrap the callback with LSP conversion and error-handling.
-    auto HandleReply =
-        [CB = std::move(CB), Ctx = Context::current().clone(),
-         Method = Method.str()](
-            llvm::Expected<llvm::json::Value> RawResponse) mutable {
-          if (!RawResponse)
-            return CB(RawResponse.takeError());
-          CB(parse<Response>(*RawResponse, Method, "response"));
-        };
-    callRaw(Method, std::move(Params), std::move(HandleReply));
-  }
-  void callRaw(StringRef Method, llvm::json::Value Params,
-               Callback<llvm::json::Value> CB);
-  void notify(StringRef Method, llvm::json::Value Params);
-  template <typename T> void progress(const llvm::json::Value &Token, T Value) {
-    ProgressParams<T> Params;
-    Params.token = Token;
-    Params.value = std::move(Value);
-    notify("$/progress", Params);
-  }
+  LSPBinder::RawHandlers Handlers;
 
   const ThreadsafeFS &TFS;
   /// Options used for diagnostics.
@@ -272,16 +287,25 @@ private:
   SymbolKindBitset SupportedSymbolKinds;
   /// The supported completion item kinds of the client.
   CompletionItemKindBitset SupportedCompletionItemKinds;
+  // Whether the client supports CompletionItem.labelDetails.
+  bool SupportsCompletionLabelDetails = false;
   /// Whether the client supports CodeAction response objects.
   bool SupportsCodeAction = false;
   /// From capabilities of textDocument/documentSymbol.
   bool SupportsHierarchicalDocumentSymbol = false;
   /// Whether the client supports showing file status.
   bool SupportFileStatus = false;
+  /// Whether the client supports attaching a container string to references.
+  bool SupportsReferenceContainer = false;
   /// Which kind of markup should we use in textDocument/hover responses.
   MarkupKind HoverContentFormat = MarkupKind::PlainText;
   /// Whether the client supports offsets for parameter info labels.
   bool SupportsOffsetsInSignatureHelp = false;
+  /// Whether the client supports the versioned document changes.
+  bool SupportsDocumentChanges = false;
+  /// Whether the client supports change annotations on text edits.
+  bool SupportsChangeAnnotation = false;
+
   std::mutex BackgroundIndexProgressMutex;
   enum class BackgroundIndexProgress {
     // Client doesn't support reporting progress. No transitions possible.
@@ -300,16 +324,16 @@ private:
   BackgroundQueue::Stats PendingBackgroundIndexProgress;
   /// LSP extension: skip WorkDoneProgressCreate, just send progress streams.
   bool BackgroundIndexSkipCreate = false;
-  // Store of the current versions of the open documents.
-  DraftStore DraftMgr;
 
   Options Opts;
   // The CDB is created by the "initialize" LSP method.
   std::unique_ptr<GlobalCompilationDatabase> BaseCDB;
   // CDB is BaseCDB plus any commands overridden via LSP extensions.
-  llvm::Optional<OverlayCDB> CDB;
+  std::optional<OverlayCDB> CDB;
   // The ClangdServer is created by the "initialize" LSP method.
-  llvm::Optional<ClangdServer> Server;
+  std::optional<ClangdServer> Server;
+  // Manages to build module files.
+  std::optional<ModulesBuilder> ModulesManager;
 };
 } // namespace clangd
 } // namespace clang

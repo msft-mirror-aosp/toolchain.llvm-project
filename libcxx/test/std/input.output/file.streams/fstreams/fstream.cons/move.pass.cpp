@@ -6,8 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// UNSUPPORTED: c++03
-
 // <fstream>
 
 // template <class charT, class traits = char_traits<charT> >
@@ -15,10 +13,14 @@
 
 // basic_fstream(basic_fstream&& rhs);
 
+// XFAIL: FROZEN-CXX03-HEADERS-FIXME
+
 #include <fstream>
 #include <cassert>
+
 #include "test_macros.h"
 #include "platform_support.h"
+#include "operator_hijacker.h"
 
 int main(int, char**)
 {
@@ -26,7 +28,7 @@ int main(int, char**)
     {
         std::fstream fso(temp, std::ios_base::in | std::ios_base::out
                                                  | std::ios_base::trunc);
-        std::fstream fs = move(fso);
+        std::fstream fs = std::move(fso);
         double x = 0;
         fs << 3.25;
         fs.seekg(0);
@@ -34,10 +36,24 @@ int main(int, char**)
         assert(x == 3.25);
     }
     std::remove(temp.c_str());
+
+    {
+      std::basic_fstream<char, operator_hijacker_char_traits<char> > fso(
+          temp, std::ios_base::in | std::ios_base::out | std::ios_base::trunc);
+      std::basic_fstream<char, operator_hijacker_char_traits<char> > fs = std::move(fso);
+      std::basic_string<char, operator_hijacker_char_traits<char> > x;
+      fs << "3.25";
+      fs.seekg(0);
+      fs >> x;
+      assert(x == "3.25");
+    }
+    std::remove(temp.c_str());
+
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         std::wfstream fso(temp, std::ios_base::in | std::ios_base::out
                                                   | std::ios_base::trunc);
-        std::wfstream fs = move(fso);
+        std::wfstream fs = std::move(fso);
         double x = 0;
         fs << 3.25;
         fs.seekg(0);
@@ -45,6 +61,19 @@ int main(int, char**)
         assert(x == 3.25);
     }
     std::remove(temp.c_str());
+
+    {
+      std::basic_fstream<wchar_t, operator_hijacker_char_traits<wchar_t> > fso(
+          temp, std::ios_base::in | std::ios_base::out | std::ios_base::trunc);
+      std::basic_fstream<wchar_t, operator_hijacker_char_traits<wchar_t> > fs = std::move(fso);
+      std::basic_string<wchar_t, operator_hijacker_char_traits<wchar_t> > x;
+      fs << L"3.25";
+      fs.seekg(0);
+      fs >> x;
+      assert(x == L"3.25");
+    }
+    std::remove(temp.c_str());
+#endif
 
   return 0;
 }

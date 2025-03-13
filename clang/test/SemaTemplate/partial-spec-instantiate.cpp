@@ -41,7 +41,6 @@ namespace WonkyAccess {
   }
 }
 
-// <rdar://problem/9169404>
 namespace rdar9169404 {
   template<typename T, T N> struct X { };
   template<bool C> struct X<bool, C> {
@@ -51,12 +50,9 @@ namespace rdar9169404 {
   X<bool, -1>::type value;
 #if __cplusplus >= 201103L
   // expected-error@-2 {{non-type template argument evaluates to -1, which cannot be narrowed to type 'bool'}}
-#else
-  // expected-no-diagnostics
 #endif
 }
 
-// rdar://problem/39524996
 namespace rdar39524996 {
   template <typename T, typename U>
   struct enable_if_not_same
@@ -96,5 +92,63 @@ namespace rdar39524996 {
     // implicit constructors to be instantiated.
     Container<int> c;
     takesWrapperInContainer(c);
+  }
+}
+
+namespace InstantiationDependent {
+  template<typename> using ignore = void; // expected-warning 0-1{{extension}}
+  template<typename T, typename = void> struct A {
+    static const bool specialized = false;
+  };
+  template<typename T> struct Hide { typedef void type; };
+  template<typename T> struct A<T, Hide<ignore<typename T::type> >::type> {
+    static const bool specialized = true;
+  };
+
+  struct X {};
+  struct Y { typedef int type; };
+  _Static_assert(!A<X>::specialized, "");
+  _Static_assert(A<Y>::specialized, "");
+}
+
+namespace IgnorePartialSubstitution {
+  template <typename... T> struct tuple {}; // expected-warning 0-1{{extension}}
+  template <typename> struct IsTuple {
+    enum { value = false };
+  };
+  template <typename... Us> struct IsTuple<tuple<Us...> > { // expected-warning 0-1{{extension}}
+    enum { value = true };
+  };
+
+  template <bool...> using ignore = void; // expected-warning 0-2{{extension}}
+  template <class... Pred> ignore<Pred::value...> helper(); // expected-warning 0-1{{extension}}
+
+  using S = IsTuple<tuple<int> >; // expected-warning 0-1{{extension}}
+
+  // This used to pick the primary template, because we got confused and
+  // thought that template parameter 0 was the current partially-substituted
+  // pack (from `helper`) during the deduction for the partial specialization.
+  void f() { helper<S>(); }
+
+  _Static_assert(S::value, "");
+}
+
+namespace GH60778 {
+  template <bool B = false> class ClassTemplate {
+  public:
+      template <typename T, typename = void> class Nested {};
+  };
+
+  template <typename DerivedType> class Base {};
+
+  template <>
+  template <typename T>
+  class ClassTemplate<>::Nested<T> : public Base<ClassTemplate<>::Nested<T> > {};
+
+  void use() {
+    // This should instantiate the body of Nested with the template arguments
+    // from the Partial Specialization. This would previously get confused and
+    // get the template arguments from the primary template instead.
+    ClassTemplate<>::Nested<int> instantiation;
   }
 }

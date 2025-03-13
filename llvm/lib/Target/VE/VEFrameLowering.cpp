@@ -119,11 +119,8 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
-#include "llvm/IR/DataLayout.h"
-#include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Target/TargetOptions.h"
 
 using namespace llvm;
 
@@ -313,18 +310,13 @@ void VEFrameLowering::emitPrologue(MachineFunction &MF,
   const VEInstrInfo &TII = *STI.getInstrInfo();
   const VERegisterInfo &RegInfo = *STI.getRegisterInfo();
   MachineBasicBlock::iterator MBBI = MBB.begin();
-  bool NeedsStackRealignment = RegInfo.needsStackRealignment(MF);
+  bool NeedsStackRealignment = RegInfo.shouldRealignStack(MF);
 
   // Debug location must be unknown since the first debug location is used
   // to determine the end of the prologue.
   DebugLoc DL;
 
-  // FIXME: unfortunately, returning false from canRealignStack
-  // actually just causes needsStackRealignment to return false,
-  // rather than reporting an error, as would be sensible. This is
-  // poor, but fixing that bogosity is going to be a large project.
-  // For now, just see if it's lied, and report an error here.
-  if (!NeedsStackRealignment && MFI.getMaxAlign() > getStackAlign())
+  if (NeedsStackRealignment && !RegInfo.canRealignStack(MF))
     report_fatal_error("Function \"" + Twine(MF.getName()) +
                        "\" required "
                        "stack re-alignment, but LLVM couldn't handle it "
@@ -362,8 +354,8 @@ void VEFrameLowering::emitPrologue(MachineFunction &MF,
 
   // Emit stack adjust instructions
   MaybeAlign RuntimeAlign =
-      NeedsStackRealignment ? MaybeAlign(MFI.getMaxAlign()) : None;
-  assert((RuntimeAlign == None || !FuncInfo->isLeafProc()) &&
+      NeedsStackRealignment ? MaybeAlign(MFI.getMaxAlign()) : std::nullopt;
+  assert((RuntimeAlign == std::nullopt || !FuncInfo->isLeafProc()) &&
          "SP has to be saved in order to align variable sized stack object!");
   emitSPAdjustment(MF, MBB, MBBI, -(int64_t)NumBytes, RuntimeAlign);
 
@@ -413,22 +405,22 @@ void VEFrameLowering::emitEpilogue(MachineFunction &MF,
         .addImm(0);
   } else {
     // Emit stack adjust instructions.
-    emitSPAdjustment(MF, MBB, MBBI, NumBytes, None);
+    emitSPAdjustment(MF, MBB, MBBI, NumBytes, std::nullopt);
   }
 
   // Emit Epilogue instructions to restore multiple registers.
   emitEpilogueInsns(MF, MBB, MBBI, NumBytes, true);
 }
 
-// hasFP - Return true if the specified function should have a dedicated frame
-// pointer register.  This is true if the function has variable sized allocas
-// or if frame pointer elimination is disabled.
-bool VEFrameLowering::hasFP(const MachineFunction &MF) const {
+// hasFPImpl - Return true if the specified function should have a dedicated
+// frame pointer register.  This is true if the function has variable sized
+// allocas or if frame pointer elimination is disabled.
+bool VEFrameLowering::hasFPImpl(const MachineFunction &MF) const {
   const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
 
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   return MF.getTarget().Options.DisableFramePointerElim(MF) ||
-         RegInfo->needsStackRealignment(MF) || MFI.hasVarSizedObjects() ||
+         RegInfo->hasStackRealignment(MF) || MFI.hasVarSizedObjects() ||
          MFI.isFrameAddressTaken();
 }
 
@@ -436,7 +428,7 @@ bool VEFrameLowering::hasBP(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   const TargetRegisterInfo *TRI = STI.getRegisterInfo();
 
-  return MFI.hasVarSizedObjects() && TRI->needsStackRealignment(MF);
+  return MFI.hasVarSizedObjects() && TRI->hasStackRealignment(MF);
 }
 
 bool VEFrameLowering::hasGOT(const MachineFunction &MF) const {
@@ -461,7 +453,7 @@ StackOffset VEFrameLowering::getFrameIndexReference(const MachineFunction &MF,
     return StackOffset::getFixed(FrameOffset +
                                  MF.getFrameInfo().getStackSize());
   }
-  if (RegInfo->needsStackRealignment(MF) && !isFixed) {
+  if (RegInfo->hasStackRealignment(MF) && !isFixed) {
     // If data on stack require realignemnt, frame indexies are based on a %sp
     // or %s17 (bp) register.  If there is a variable sized object, bp is used.
     if (hasBP(MF))

@@ -13,9 +13,9 @@
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64FixupKinds.h"
 #include "MCTargetDesc/AArch64MCExpr.h"
-#include "Utils/AArch64BaseInfo.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCFixup.h"
@@ -24,10 +24,8 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/Endian.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
 
@@ -42,11 +40,9 @@ namespace {
 
 class AArch64MCCodeEmitter : public MCCodeEmitter {
   MCContext &Ctx;
-  const MCInstrInfo &MCII;
 
 public:
-  AArch64MCCodeEmitter(const MCInstrInfo &mcii, MCContext &ctx)
-      : Ctx(ctx), MCII(mcii) {}
+  AArch64MCCodeEmitter(const MCInstrInfo &, MCContext &ctx) : Ctx(ctx) {}
   AArch64MCCodeEmitter(const AArch64MCCodeEmitter &) = delete;
   void operator=(const AArch64MCCodeEmitter &) = delete;
   ~AArch64MCCodeEmitter() override = default;
@@ -88,6 +84,18 @@ public:
   uint32_t getCondBranchTargetOpValue(const MCInst &MI, unsigned OpIdx,
                                       SmallVectorImpl<MCFixup> &Fixups,
                                       const MCSubtargetInfo &STI) const;
+
+  /// getCondCompBranchTargetOpValue - Return the encoded value for a
+  /// conditional compare-and-branch target.
+  uint32_t getCondCompBranchTargetOpValue(const MCInst &MI, unsigned OpIdx,
+                                          SmallVectorImpl<MCFixup> &Fixups,
+                                          const MCSubtargetInfo &STI) const;
+
+  /// getPAuthPCRelOpValue - Return the encoded value for a pointer
+  /// authentication pc-relative operand.
+  uint32_t getPAuthPCRelOpValue(const MCInst &MI, unsigned OpIdx,
+                                SmallVectorImpl<MCFixup> &Fixups,
+                                const MCSubtargetInfo &STI) const;
 
   /// getLoadLiteralOpValue - Return the encoded value for a load-literal
   /// pc-relative address.
@@ -172,7 +180,7 @@ public:
   unsigned fixMOVZ(const MCInst &MI, unsigned EncodedValue,
                    const MCSubtargetInfo &STI) const;
 
-  void encodeInstruction(const MCInst &MI, raw_ostream &OS,
+  void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &STI) const override;
 
@@ -186,11 +194,31 @@ public:
   unsigned fixOneOperandFPComparison(const MCInst &MI, unsigned EncodedValue,
                                      const MCSubtargetInfo &STI) const;
 
-private:
-  FeatureBitset computeAvailableFeatures(const FeatureBitset &FB) const;
-  void
-  verifyInstructionPredicates(const MCInst &MI,
-                              const FeatureBitset &AvailableFeatures) const;
+  template <unsigned Multiple, unsigned Min, unsigned Max>
+  uint32_t EncodeRegMul_MinMax(const MCInst &MI, unsigned OpIdx,
+                               SmallVectorImpl<MCFixup> &Fixups,
+                               const MCSubtargetInfo &STI) const;
+  uint32_t EncodeZK(const MCInst &MI, unsigned OpIdx,
+                    SmallVectorImpl<MCFixup> &Fixups,
+                    const MCSubtargetInfo &STI) const;
+  uint32_t EncodePNR_p8to15(const MCInst &MI, unsigned OpIdx,
+                            SmallVectorImpl<MCFixup> &Fixups,
+                            const MCSubtargetInfo &STI) const;
+
+  uint32_t EncodeZPR2StridedRegisterClass(const MCInst &MI, unsigned OpIdx,
+                                          SmallVectorImpl<MCFixup> &Fixups,
+                                          const MCSubtargetInfo &STI) const;
+  uint32_t EncodeZPR4StridedRegisterClass(const MCInst &MI, unsigned OpIdx,
+                                          SmallVectorImpl<MCFixup> &Fixups,
+                                          const MCSubtargetInfo &STI) const;
+
+  uint32_t EncodeMatrixTileListRegisterClass(const MCInst &MI, unsigned OpIdx,
+                                             SmallVectorImpl<MCFixup> &Fixups,
+                                             const MCSubtargetInfo &STI) const;
+  template <unsigned BaseReg>
+  uint32_t encodeMatrixIndexGPR32(const MCInst &MI, unsigned OpIdx,
+                                  SmallVectorImpl<MCFixup> &Fixups,
+                                  const MCSubtargetInfo &STI) const;
 };
 
 } // end anonymous namespace
@@ -303,6 +331,50 @@ uint32_t AArch64MCCodeEmitter::getCondBranchTargetOpValue(
   assert(MO.isExpr() && "Unexpected target type!");
 
   MCFixupKind Kind = MCFixupKind(AArch64::fixup_aarch64_pcrel_branch19);
+  Fixups.push_back(MCFixup::create(0, MO.getExpr(), Kind, MI.getLoc()));
+
+  ++MCNumFixups;
+
+  // All of the information is in the fixup.
+  return 0;
+}
+
+/// getCondCompBranchTargetOpValue - Return the encoded value for a conditional
+/// compare-and-branch target.
+uint32_t AArch64MCCodeEmitter::getCondCompBranchTargetOpValue(
+    const MCInst &MI, unsigned OpIdx, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpIdx);
+
+  // If the destination is an immediate, we have nothing to do.
+  if (MO.isImm())
+    return MO.getImm();
+  assert(MO.isExpr() && "Unexpected target type!");
+
+  MCFixupKind Kind = MCFixupKind(AArch64::fixup_aarch64_pcrel_branch9);
+  Fixups.push_back(MCFixup::create(0, MO.getExpr(), Kind, MI.getLoc()));
+
+  ++MCNumFixups;
+
+  // All of the information is in the fixup.
+  return 0;
+}
+
+/// getPAuthPCRelOpValue - Return the encoded value for a pointer
+/// authentication pc-relative operand.
+uint32_t
+AArch64MCCodeEmitter::getPAuthPCRelOpValue(const MCInst &MI, unsigned OpIdx,
+                                           SmallVectorImpl<MCFixup> &Fixups,
+                                           const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpIdx);
+
+  // If the destination is an immediate, invert sign as it's a negative value
+  // that should be encoded as unsigned
+  if (MO.isImm())
+    return -(MO.getImm());
+  assert(MO.isExpr() && "Unexpected target type!");
+
+  MCFixupKind Kind = MCFixupKind(AArch64::fixup_aarch64_pcrel_branch16);
   Fixups.push_back(MCFixup::create(0, MO.getExpr(), Kind, MI.getLoc()));
 
   ++MCNumFixups;
@@ -516,6 +588,82 @@ AArch64MCCodeEmitter::getVecShiftL8OpValue(const MCInst &MI, unsigned OpIdx,
   return MO.getImm() - 8;
 }
 
+template <unsigned Multiple, unsigned Min, unsigned Max>
+uint32_t
+AArch64MCCodeEmitter::EncodeRegMul_MinMax(const MCInst &MI, unsigned OpIdx,
+                                          SmallVectorImpl<MCFixup> &Fixups,
+                                          const MCSubtargetInfo &STI) const {
+  assert(llvm::isPowerOf2_32(Multiple) && "Multiple is not a power of 2");
+  auto RegOpnd = MI.getOperand(OpIdx).getReg();
+  unsigned RegVal = Ctx.getRegisterInfo()->getEncodingValue(RegOpnd);
+  assert(RegVal >= Min && RegVal <= Max && (RegVal & (Multiple - 1)) == 0);
+  return (RegVal - Min) / Multiple;
+}
+
+// Zk Is the name of the control vector register Z20-Z23 or Z28-Z31, encoded in
+// the "K:Zk" fields. Z20-Z23 = 000, 001,010, 011  and Z28-Z31 = 100, 101, 110,
+// 111
+uint32_t AArch64MCCodeEmitter::EncodeZK(const MCInst &MI, unsigned OpIdx,
+                                        SmallVectorImpl<MCFixup> &Fixups,
+                                        const MCSubtargetInfo &STI) const {
+  auto RegOpnd = MI.getOperand(OpIdx).getReg();
+  unsigned RegVal = Ctx.getRegisterInfo()->getEncodingValue(RegOpnd);
+
+  // ZZ8-Z31 => Reg is in 3..7 (offset 24)
+  if (RegOpnd > AArch64::Z27)
+    return (RegVal - 24);
+
+  assert((RegOpnd > AArch64::Z19 && RegOpnd < AArch64::Z24) &&
+         "Expected ZK in Z20..Z23 or Z28..Z31");
+  // Z20-Z23 => Reg is in 0..3 (offset 20)
+  return (RegVal - 20);
+}
+
+uint32_t
+AArch64MCCodeEmitter::EncodePNR_p8to15(const MCInst &MI, unsigned OpIdx,
+                                       SmallVectorImpl<MCFixup> &Fixups,
+                                       const MCSubtargetInfo &STI) const {
+  auto RegOpnd = MI.getOperand(OpIdx).getReg();
+  return RegOpnd - AArch64::PN8;
+}
+
+uint32_t AArch64MCCodeEmitter::EncodeZPR2StridedRegisterClass(
+    const MCInst &MI, unsigned OpIdx, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  auto RegOpnd = MI.getOperand(OpIdx).getReg();
+  unsigned RegVal = Ctx.getRegisterInfo()->getEncodingValue(RegOpnd);
+  unsigned T = (RegVal & 0x10) >> 1;
+  unsigned Zt = RegVal & 0x7;
+  return T | Zt;
+}
+
+uint32_t AArch64MCCodeEmitter::EncodeZPR4StridedRegisterClass(
+    const MCInst &MI, unsigned OpIdx, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  auto RegOpnd = MI.getOperand(OpIdx).getReg();
+  unsigned RegVal = Ctx.getRegisterInfo()->getEncodingValue(RegOpnd);
+  unsigned T = (RegVal & 0x10) >> 2;
+  unsigned Zt = RegVal & 0x3;
+  return T | Zt;
+}
+
+uint32_t AArch64MCCodeEmitter::EncodeMatrixTileListRegisterClass(
+    const MCInst &MI, unsigned OpIdx, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  unsigned RegMask = MI.getOperand(OpIdx).getImm();
+  assert(RegMask <= 0xFF && "Invalid register mask!");
+  return RegMask;
+}
+
+template <unsigned BaseReg>
+uint32_t
+AArch64MCCodeEmitter::encodeMatrixIndexGPR32(const MCInst &MI, unsigned OpIdx,
+                                             SmallVectorImpl<MCFixup> &Fixups,
+                                             const MCSubtargetInfo &STI) const {
+  auto RegOpnd = MI.getOperand(OpIdx).getReg();
+  return RegOpnd - BaseReg;
+}
+
 uint32_t
 AArch64MCCodeEmitter::getImm8OptLsl(const MCInst &MI, unsigned OpIdx,
                                     SmallVectorImpl<MCFixup> &Fixups,
@@ -589,30 +737,31 @@ unsigned AArch64MCCodeEmitter::fixMOVZ(const MCInst &MI, unsigned EncodedValue,
   return EncodedValue;
 }
 
-void AArch64MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
+void AArch64MCCodeEmitter::encodeInstruction(const MCInst &MI,
+                                             SmallVectorImpl<char> &CB,
+
                                              SmallVectorImpl<MCFixup> &Fixups,
                                              const MCSubtargetInfo &STI) const {
-  verifyInstructionPredicates(MI,
-                              computeAvailableFeatures(STI.getFeatureBits()));
-
   if (MI.getOpcode() == AArch64::TLSDESCCALL) {
     // This is a directive which applies an R_AARCH64_TLSDESC_CALL to the
     // following (BLR) instruction. It doesn't emit any code itself so it
     // doesn't go through the normal TableGenerated channels.
-    MCFixupKind Fixup = MCFixupKind(AArch64::fixup_aarch64_tlsdesc_call);
-    Fixups.push_back(MCFixup::create(0, MI.getOperand(0).getExpr(), Fixup));
+    auto Reloc = STI.getTargetTriple().getEnvironment() == Triple::GNUILP32
+                     ? ELF::R_AARCH64_P32_TLSDESC_CALL
+                     : ELF::R_AARCH64_TLSDESC_CALL;
+    Fixups.push_back(
+        MCFixup::create(0, MI.getOperand(0).getExpr(),
+                        MCFixupKind(FirstLiteralRelocationKind + Reloc)));
     return;
   }
 
-  if (MI.getOpcode() == AArch64::CompilerBarrier ||
-      MI.getOpcode() == AArch64::SPACE) {
-    // CompilerBarrier just prevents the compiler from reordering accesses, and
+  if (MI.getOpcode() == AArch64::SPACE) {
     // SPACE just increases basic block size, in both cases no actual code.
     return;
   }
 
   uint64_t Binary = getBinaryCodeForInstr(MI, Fixups, STI);
-  support::endian::write<uint32_t>(OS, Binary, support::little);
+  support::endian::write<uint32_t>(CB, Binary, llvm::endianness::little);
   ++MCNumEmitted; // Keep track of the # of mi's emitted.
 }
 
@@ -644,11 +793,9 @@ unsigned AArch64MCCodeEmitter::fixOneOperandFPComparison(
   return EncodedValue;
 }
 
-#define ENABLE_INSTR_PREDICATE_VERIFIER
 #include "AArch64GenMCCodeEmitter.inc"
 
 MCCodeEmitter *llvm::createAArch64MCCodeEmitter(const MCInstrInfo &MCII,
-                                                const MCRegisterInfo &MRI,
                                                 MCContext &Ctx) {
   return new AArch64MCCodeEmitter(MCII, Ctx);
 }

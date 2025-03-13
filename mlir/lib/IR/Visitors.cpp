@@ -11,80 +11,54 @@
 
 using namespace mlir;
 
-/// Walk all of the regions/blocks/operations nested under and including the
-/// given operation.
-void detail::walk(Operation *op, function_ref<void(Region *)> callback) {
-  for (auto &region : op->getRegions()) {
-    callback(&region);
-    for (auto &block : region) {
-      for (auto &nestedOp : block)
+WalkStage::WalkStage(Operation *op)
+    : numRegions(op->getNumRegions()), nextRegion(0) {}
+
+MutableArrayRef<Region> ForwardIterator::makeIterable(Operation &range) {
+  return range.getRegions();
+}
+
+void detail::walk(Operation *op,
+                  function_ref<void(Operation *, const WalkStage &)> callback) {
+  WalkStage stage(op);
+
+  for (Region &region : op->getRegions()) {
+    // Invoke callback on the parent op before visiting each child region.
+    callback(op, stage);
+    stage.advance();
+
+    for (Block &block : region) {
+      for (Operation &nestedOp : block)
         walk(&nestedOp, callback);
     }
   }
+
+  // Invoke callback after all regions have been visited.
+  callback(op, stage);
 }
 
-void detail::walk(Operation *op, function_ref<void(Block *)> callback) {
-  for (auto &region : op->getRegions()) {
-    for (auto &block : region) {
-      callback(&block);
-      for (auto &nestedOp : block)
-        walk(&nestedOp, callback);
-    }
-  }
-}
+WalkResult detail::walk(
+    Operation *op,
+    function_ref<WalkResult(Operation *, const WalkStage &)> callback) {
+  WalkStage stage(op);
 
-void detail::walk(Operation *op, function_ref<void(Operation *op)> callback) {
-  // TODO: This walk should be iterative over the operations.
-  for (auto &region : op->getRegions()) {
-    for (auto &block : region) {
-      // Early increment here in the case where the operation is erased.
-      for (auto &nestedOp : llvm::make_early_inc_range(block))
-        walk(&nestedOp, callback);
-    }
-  }
-  callback(op);
-}
+  for (Region &region : op->getRegions()) {
+    // Invoke callback on the parent op before visiting each child region.
+    WalkResult result = callback(op, stage);
 
-/// Walk all of the regions/blocks/operations nested under and including the
-/// given operation. These functions walk operations until an interrupt result
-/// is returned by the callback.
-WalkResult detail::walk(Operation *op,
-                        function_ref<WalkResult(Region *op)> callback) {
-  for (auto &region : op->getRegions()) {
-    if (callback(&region).wasInterrupted())
+    if (result.wasSkipped())
+      return WalkResult::advance();
+    if (result.wasInterrupted())
       return WalkResult::interrupt();
-    for (auto &block : region) {
-      for (auto &nestedOp : block)
-        walk(&nestedOp, callback);
-    }
-  }
-  return WalkResult::advance();
-}
 
-WalkResult detail::walk(Operation *op,
-                        function_ref<WalkResult(Block *op)> callback) {
-  for (auto &region : op->getRegions()) {
-    for (auto &block : region) {
-      if (callback(&block).wasInterrupted())
-        return WalkResult::interrupt();
-      for (auto &nestedOp : block)
-        walk(&nestedOp, callback);
-    }
-  }
-  return WalkResult::advance();
-}
+    stage.advance();
 
-WalkResult detail::walk(Operation *op,
-                        function_ref<WalkResult(Operation *op)> callback) {
-  // TODO: This walk should be iterative over the operations.
-  for (auto &region : op->getRegions()) {
-    for (auto &block : region) {
+    for (Block &block : region) {
       // Early increment here in the case where the operation is erased.
-      for (auto &nestedOp : llvm::make_early_inc_range(block)) {
+      for (Operation &nestedOp : llvm::make_early_inc_range(block))
         if (walk(&nestedOp, callback).wasInterrupted())
           return WalkResult::interrupt();
-      }
     }
   }
-  return callback(op);
+  return callback(op, stage);
 }

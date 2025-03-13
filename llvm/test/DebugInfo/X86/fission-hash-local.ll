@@ -13,8 +13,8 @@
 ;   int i = 7; // or 9
 ; }
 
-; H1: DW_AT_GNU_dwo_id  (0x03a55a70550ee09b)
-; H2: DW_AT_GNU_dwo_id  (0x826fcafbddebc96b)
+; H1: DW_AT_GNU_dwo_id  (0xb06b36aa6004befe)
+; H2: DW_AT_GNU_dwo_id  (0xc3e980cf3dfa79a2)
 
 ; Function Attrs: norecurse nounwind readnone uwtable
 define dso_local void @_Z2f1v() local_unnamed_addr !dbg !7 {

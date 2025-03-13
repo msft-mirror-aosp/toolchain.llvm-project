@@ -13,12 +13,10 @@
 using namespace lldb;
 using namespace lldb_private;
 
-OptionGroupPythonClassWithDict::OptionGroupPythonClassWithDict
-    (const char *class_use,
-     bool is_class,
-     int class_option,
-     int key_option, 
-     int value_option) : OptionGroup(), m_is_class(is_class) {
+OptionGroupPythonClassWithDict::OptionGroupPythonClassWithDict(
+    const char *class_use, bool is_class, int class_option, int key_option,
+    int value_option, uint16_t required_options)
+    : m_is_class(is_class), m_required_options(required_options) {
   m_key_usage_text.assign("The key for a key/value pair passed to the "
                           "implementation of a ");
   m_key_usage_text.append(class_use);
@@ -36,7 +34,7 @@ OptionGroupPythonClassWithDict::OptionGroupPythonClassWithDict
   m_class_usage_text.append(".");
   
   m_option_definition[0].usage_mask = LLDB_OPT_SET_1;
-  m_option_definition[0].required = true;
+  m_option_definition[0].required = m_required_options.Test(eScriptClass);
   m_option_definition[0].long_option = "script-class";
   m_option_definition[0].short_option = class_option;
   m_option_definition[0].validator = nullptr;
@@ -47,7 +45,7 @@ OptionGroupPythonClassWithDict::OptionGroupPythonClassWithDict
   m_option_definition[0].usage_text = m_class_usage_text.data();
 
   m_option_definition[1].usage_mask = LLDB_OPT_SET_2;
-  m_option_definition[1].required = false;
+  m_option_definition[1].required = m_required_options.Test(eDictKey);
   m_option_definition[1].long_option = "structured-data-key";
   m_option_definition[1].short_option = key_option;
   m_option_definition[1].validator = nullptr;
@@ -58,7 +56,7 @@ OptionGroupPythonClassWithDict::OptionGroupPythonClassWithDict
   m_option_definition[1].usage_text = m_key_usage_text.data();
 
   m_option_definition[2].usage_mask = LLDB_OPT_SET_2;
-  m_option_definition[2].required = false;
+  m_option_definition[2].required = m_required_options.Test(eDictValue);
   m_option_definition[2].long_option = "structured-data-value";
   m_option_definition[2].short_option = value_option;
   m_option_definition[2].validator = nullptr;
@@ -69,7 +67,7 @@ OptionGroupPythonClassWithDict::OptionGroupPythonClassWithDict
   m_option_definition[2].usage_text = m_value_usage_text.data();
   
   m_option_definition[3].usage_mask = LLDB_OPT_SET_3;
-  m_option_definition[3].required = true;
+  m_option_definition[3].required = m_required_options.Test(ePythonFunction);
   m_option_definition[3].long_option = "python-function";
   m_option_definition[3].short_option = class_option;
   m_option_definition[3].validator = nullptr;
@@ -78,10 +76,7 @@ OptionGroupPythonClassWithDict::OptionGroupPythonClassWithDict
   m_option_definition[3].completion_type = 0;
   m_option_definition[3].argument_type = eArgTypePythonFunction;
   m_option_definition[3].usage_text = m_class_usage_text.data();
-
 }
-
-OptionGroupPythonClassWithDict::~OptionGroupPythonClassWithDict() {}
 
 Status OptionGroupPythonClassWithDict::SetOptionValue(
     uint32_t option_idx,
@@ -99,20 +94,38 @@ Status OptionGroupPythonClassWithDict::SetOptionValue(
       if (m_current_key.empty())
         m_current_key.assign(std::string(option_arg));
       else
-        error.SetErrorStringWithFormat("Key: \"%s\" missing value.",
-                                        m_current_key.c_str());
-    
+        return Status::FromErrorStringWithFormatv("Key: \"{0}\" missing value.",
+                                                  m_current_key);
+
   } break;
   case 2: {
       if (!m_dict_sp)
         m_dict_sp = std::make_shared<StructuredData::Dictionary>();
       if (!m_current_key.empty()) {
-          m_dict_sp->AddStringItem(m_current_key, option_arg);
-          m_current_key.clear();
+        if (!option_arg.empty()) {
+          double d = 0;
+          std::string opt = option_arg.lower();
+
+          if (llvm::to_integer(option_arg, d)) {
+            if (opt[0] == '-')
+              m_dict_sp->AddIntegerItem(m_current_key, static_cast<int64_t>(d));
+            else
+              m_dict_sp->AddIntegerItem(m_current_key,
+                                        static_cast<uint64_t>(d));
+          } else if (llvm::to_float(option_arg, d)) {
+            m_dict_sp->AddFloatItem(m_current_key, d);
+          } else if (opt == "true" || opt == "false") {
+            m_dict_sp->AddBooleanItem(m_current_key, opt == "true");
+          } else {
+            m_dict_sp->AddStringItem(m_current_key, option_arg);
+          }
+        }
+
+        m_current_key.clear();
       }
       else
-        error.SetErrorStringWithFormat("Value: \"%s\" missing matching key.",
-                                       option_arg.str().c_str());
+        return Status::FromErrorStringWithFormatv(
+            "Value: \"{0}\" missing matching key.", option_arg);
   } break;
   default:
     llvm_unreachable("Unimplemented option");
@@ -136,8 +149,8 @@ Status OptionGroupPythonClassWithDict::OptionParsingFinished(
   // If we get here and there's contents in the m_current_key, somebody must
   // have provided a key but no value.
   if (!m_current_key.empty())
-      error.SetErrorStringWithFormat("Key: \"%s\" missing value.",
-                                     m_current_key.c_str());
+    error = Status::FromErrorStringWithFormat("Key: \"%s\" missing value.",
+                                              m_current_key.c_str());
   return error;
 }
 

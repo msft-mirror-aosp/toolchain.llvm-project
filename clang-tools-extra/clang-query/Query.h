@@ -12,7 +12,6 @@
 #include "QuerySession.h"
 #include "clang/ASTMatchers/Dynamic/VariantValue.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
-#include "llvm/ADT/Optional.h"
 #include <string>
 
 namespace clang {
@@ -31,7 +30,8 @@ enum QueryKind {
   QK_SetTraversalKind,
   QK_EnableOutputKind,
   QK_DisableOutputKind,
-  QK_Quit
+  QK_Quit,
+  QK_File
 };
 
 class QuerySession;
@@ -120,7 +120,7 @@ template <> struct SetQueryKind<OutputKind> {
   static const QueryKind value = QK_SetOutputKind;
 };
 
-template <> struct SetQueryKind<ast_type_traits::TraversalKind> {
+template <> struct SetQueryKind<TraversalKind> {
   static const QueryKind value = QK_SetTraversalKind;
 };
 
@@ -186,6 +186,21 @@ struct DisableOutputQuery : SetNonExclusiveOutputQuery {
   static bool classof(const Query *Q) {
     return Q->Kind == QK_DisableOutputKind;
   }
+};
+
+struct FileQuery : Query {
+  FileQuery(StringRef File, StringRef Prefix = StringRef())
+      : Query(QK_File), File(File),
+        Prefix(!Prefix.empty() ? std::optional<std::string>(Prefix)
+                               : std::nullopt) {}
+
+  bool run(llvm::raw_ostream &OS, QuerySession &QS) const override;
+
+  static bool classof(const Query *Q) { return Q->Kind == QK_File; }
+
+private:
+  std::string File;
+  std::optional<std::string> Prefix;
 };
 
 } // namespace query

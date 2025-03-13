@@ -64,7 +64,6 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
-#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -120,10 +119,10 @@ public:
   /// Construct a PBQP register allocator.
   RegAllocPBQP(char *cPassID = nullptr)
       : MachineFunctionPass(ID), customPassID(cPassID) {
-    initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
-    initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
-    initializeLiveStacksPass(*PassRegistry::getPassRegistry());
-    initializeVirtRegMapPass(*PassRegistry::getPassRegistry());
+    initializeSlotIndexesWrapperPassPass(*PassRegistry::getPassRegistry());
+    initializeLiveIntervalsWrapperPassPass(*PassRegistry::getPassRegistry());
+    initializeLiveStacksWrapperLegacyPass(*PassRegistry::getPassRegistry());
+    initializeVirtRegMapWrapperLegacyPass(*PassRegistry::getPassRegistry());
   }
 
   /// Return the pass name.
@@ -192,7 +191,7 @@ public:
   void apply(PBQPRAGraph &G) override {
     LiveIntervals &LIS = G.getMetadata().LIS;
 
-    // A minimum spill costs, so that register constraints can can be set
+    // A minimum spill costs, so that register constraints can be set
     // without normalization in the [0.0:MinSpillCost( interval.
     const PBQP::PBQPNum MinSpillCost = 10.0;
 
@@ -230,9 +229,9 @@ private:
       return false;
 
     if (NRegs < MRegs)
-      return D.count(IKey(NRegs, MRegs)) > 0;
+      return D.contains(IKey(NRegs, MRegs));
 
-    return D.count(IKey(MRegs, NRegs)) > 0;
+    return D.contains(IKey(MRegs, NRegs));
   }
 
   void setDisjointAllowedRegs(const PBQPRAGraph &G, PBQPRAGraph::NodeId NId,
@@ -544,23 +543,23 @@ void RegAllocPBQP::getAnalysisUsage(AnalysisUsage &au) const {
   au.setPreservesCFG();
   au.addRequired<AAResultsWrapperPass>();
   au.addPreserved<AAResultsWrapperPass>();
-  au.addRequired<SlotIndexes>();
-  au.addPreserved<SlotIndexes>();
-  au.addRequired<LiveIntervals>();
-  au.addPreserved<LiveIntervals>();
+  au.addRequired<SlotIndexesWrapperPass>();
+  au.addPreserved<SlotIndexesWrapperPass>();
+  au.addRequired<LiveIntervalsWrapperPass>();
+  au.addPreserved<LiveIntervalsWrapperPass>();
   //au.addRequiredID(SplitCriticalEdgesID);
   if (customPassID)
     au.addRequiredID(*customPassID);
-  au.addRequired<LiveStacks>();
-  au.addPreserved<LiveStacks>();
-  au.addRequired<MachineBlockFrequencyInfo>();
-  au.addPreserved<MachineBlockFrequencyInfo>();
-  au.addRequired<MachineLoopInfo>();
-  au.addPreserved<MachineLoopInfo>();
-  au.addRequired<MachineDominatorTree>();
-  au.addPreserved<MachineDominatorTree>();
-  au.addRequired<VirtRegMap>();
-  au.addPreserved<VirtRegMap>();
+  au.addRequired<LiveStacksWrapperLegacy>();
+  au.addPreserved<LiveStacksWrapperLegacy>();
+  au.addRequired<MachineBlockFrequencyInfoWrapperPass>();
+  au.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
+  au.addRequired<MachineLoopInfoWrapperPass>();
+  au.addPreserved<MachineLoopInfoWrapperPass>();
+  au.addRequired<MachineDominatorTreeWrapperPass>();
+  au.addPreserved<MachineDominatorTreeWrapperPass>();
+  au.addRequired<VirtRegMapWrapperLegacy>();
+  au.addPreserved<VirtRegMapWrapperLegacy>();
   MachineFunctionPass::getAnalysisUsage(au);
 }
 
@@ -623,8 +622,8 @@ void RegAllocPBQP::initializeGraph(PBQPRAGraph &G, VirtRegMap &VRM,
     // Compute an initial allowed set for the current vreg.
     std::vector<MCRegister> VRegAllowed;
     ArrayRef<MCPhysReg> RawPRegOrder = TRC->getRawAllocationOrder(MF);
-    for (unsigned I = 0; I != RawPRegOrder.size(); ++I) {
-      MCRegister PReg(RawPRegOrder[I]);
+    for (MCPhysReg R : RawPRegOrder) {
+      MCRegister PReg(R);
       if (MRI.isReserved(PReg))
         continue;
 
@@ -634,8 +633,8 @@ void RegAllocPBQP::initializeGraph(PBQPRAGraph &G, VirtRegMap &VRM,
 
       // vregLI overlaps fixed regunit interference.
       bool Interference = false;
-      for (MCRegUnitIterator Units(PReg, &TRI); Units.isValid(); ++Units) {
-        if (VRegLI.overlaps(LIS.getRegUnit(*Units))) {
+      for (MCRegUnit Unit : TRI.regunits(PReg)) {
+        if (VRegLI.overlaps(LIS.getRegUnit(Unit))) {
           Interference = true;
           break;
         }
@@ -652,7 +651,7 @@ void RegAllocPBQP::initializeGraph(PBQPRAGraph &G, VirtRegMap &VRM,
     if (VRegAllowed.empty()) {
       SmallVector<Register, 8> NewVRegs;
       spillVReg(VReg, NewVRegs, MF, LIS, VRM, VRegSpiller);
-      Worklist.insert(Worklist.end(), NewVRegs.begin(), NewVRegs.end());
+      llvm::append_range(Worklist, NewVRegs);
       continue;
     }
 
@@ -703,9 +702,8 @@ void RegAllocPBQP::spillVReg(Register VReg,
 
   // Copy any newly inserted live intervals into the list of regs to
   // allocate.
-  for (LiveRangeEdit::iterator I = LRE.begin(), E = LRE.end();
-       I != E; ++I) {
-    const LiveInterval &LI = LIS.getInterval(*I);
+  for (const Register &R : LRE) {
+    const LiveInterval &LI = LIS.getInterval(R);
     assert(!LI.empty() && "Empty spill range.");
     LLVM_DEBUG(dbgs() << printReg(LI.reg(), &TRI) << " ");
     VRegsToAlloc.insert(LI.reg());
@@ -759,10 +757,8 @@ void RegAllocPBQP::finalizeAlloc(MachineFunction &MF,
   MachineRegisterInfo &MRI = MF.getRegInfo();
 
   // First allocate registers for the empty intervals.
-  for (RegSet::const_iterator
-         I = EmptyIntervalVRegs.begin(), E = EmptyIntervalVRegs.end();
-         I != E; ++I) {
-    LiveInterval &LI = LIS.getInterval(*I);
+  for (const Register &R : EmptyIntervalVRegs) {
+    LiveInterval &LI = LIS.getInterval(R);
 
     Register PReg = MRI.getSimpleHint(LI.reg());
 
@@ -786,7 +782,7 @@ void RegAllocPBQP::finalizeAlloc(MachineFunction &MF,
 void RegAllocPBQP::postOptimization(Spiller &VRegSpiller, LiveIntervals &LIS) {
   VRegSpiller.postOptimization();
   /// Remove dead defs because of rematerialization.
-  for (auto DeadInst : DeadRemats) {
+  for (auto *DeadInst : DeadRemats) {
     LIS.RemoveMachineInstrFromMaps(*DeadInst);
     DeadInst->eraseFromParent();
   }
@@ -794,18 +790,29 @@ void RegAllocPBQP::postOptimization(Spiller &VRegSpiller, LiveIntervals &LIS) {
 }
 
 bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
-  LiveIntervals &LIS = getAnalysis<LiveIntervals>();
+  LiveIntervals &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
   MachineBlockFrequencyInfo &MBFI =
-    getAnalysis<MachineBlockFrequencyInfo>();
+      getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
 
-  VirtRegMap &VRM = getAnalysis<VirtRegMap>();
+  auto &LiveStks = getAnalysis<LiveStacksWrapperLegacy>().getLS();
+  auto &MDT = getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
 
-  PBQPVirtRegAuxInfo VRAI(MF, LIS, VRM, getAnalysis<MachineLoopInfo>(), MBFI);
+  VirtRegMap &VRM = getAnalysis<VirtRegMapWrapperLegacy>().getVRM();
+
+  PBQPVirtRegAuxInfo VRAI(
+      MF, LIS, VRM, getAnalysis<MachineLoopInfoWrapperPass>().getLI(), MBFI);
   VRAI.calculateSpillWeightsAndHints();
 
-  std::unique_ptr<Spiller> VRegSpiller(createInlineSpiller(*this, MF, VRM));
+  // FIXME: we create DefaultVRAI here to match existing behavior pre-passing
+  // the VRAI through the spiller to the live range editor. However, it probably
+  // makes more sense to pass the PBQP VRAI. The existing behavior had
+  // LiveRangeEdit make its own VirtRegAuxInfo object.
+  VirtRegAuxInfo DefaultVRAI(
+      MF, LIS, VRM, getAnalysis<MachineLoopInfoWrapperPass>().getLI(), MBFI);
+  std::unique_ptr<Spiller> VRegSpiller(
+      createInlineSpiller({LIS, LiveStks, MDT, MBFI}, MF, VRM, DefaultVRAI));
 
-  MF.getRegInfo().freezeReservedRegs(MF);
+  MF.getRegInfo().freezeReservedRegs();
 
   LLVM_DEBUG(dbgs() << "PBQP Register Allocating for " << MF.getName() << "\n");
 
@@ -843,6 +850,7 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
 
     while (!PBQPAllocComplete) {
       LLVM_DEBUG(dbgs() << "  PBQP Regalloc round " << Round << ":\n");
+      (void) Round;
 
       PBQPRAGraph G(PBQPRAGraph::GraphMetadata(MF, LIS, MBFI));
       initializeGraph(G, VRM, *VRegSpiller);
@@ -855,7 +863,7 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
         std::string GraphFileName = FullyQualifiedName + "." + RS.str() +
                                     ".pbqpgraph";
         std::error_code EC;
-        raw_fd_ostream OS(GraphFileName, EC, sys::fs::OF_Text);
+        raw_fd_ostream OS(GraphFileName, EC, sys::fs::OF_TextWithCRLF);
         LLVM_DEBUG(dbgs() << "Dumping graph for round " << Round << " to \""
                           << GraphFileName << "\"\n");
         G.dump(OS);

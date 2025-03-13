@@ -12,7 +12,7 @@
 #include "lldb/API/SBData.h"
 #include "lldb/API/SBDefines.h"
 
-#include <stdio.h>
+#include <cstdio>
 
 // There's a lot to be fixed here, but need to wait for underlying insn
 // implementation to be revised & settle down first.
@@ -43,6 +43,8 @@ public:
 
   const char *GetComment(lldb::SBTarget target);
 
+  lldb::InstructionControlFlowKind GetControlFlowKind(lldb::SBTarget target);
+
   lldb::SBData GetData(lldb::SBTarget target);
 
   size_t GetByteSize();
@@ -53,11 +55,13 @@ public:
 
   bool CanSetBreakpoint();
 
+#ifndef SWIG
   void Print(FILE *out);
+#endif
 
   void Print(SBFile out);
 
-  void Print(FileSP out);
+  void Print(FileSP BORROWED);
 
   bool GetDescription(lldb::SBStream &description);
 

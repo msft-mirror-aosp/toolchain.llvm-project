@@ -2,9 +2,9 @@
 # RUN: llvm-mc -filetype=obj -triple=aarch64-unknown-freebsd %p/Inputs/aarch64-tstbr14-reloc.s -o %t1
 # RUN: llvm-mc -filetype=obj -triple=aarch64-unknown-freebsd %s -o %t2
 # RUN: ld.lld %t1 %t2 -o %t
-# RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+# RUN: llvm-objdump --no-print-imm-hex -d --no-show-raw-insn %t | FileCheck %s
 # RUN: ld.lld -shared %t1 %t2 -o %t3
-# RUN: llvm-objdump -d --no-show-raw-insn %t3 | FileCheck --check-prefix=DSO %s
+# RUN: llvm-objdump --no-print-imm-hex -d --no-show-raw-insn %t3 | FileCheck --check-prefix=DSO %s
 # RUN: llvm-readobj -S -r %t3 | FileCheck -check-prefix=DSOREL %s
 
 # CHECK:      <_foo>:
@@ -66,7 +66,7 @@
 #DSO-EMPTY:
 #DSO-NEXT: <.plt>:
 #DSO-NEXT:  10330: stp x16, x30, [sp, #-16]!
-#DSO-NEXT:  10334: adrp x16, #131072
+#DSO-NEXT:  10334: adrp x16, 0x30000
 #DSO-NEXT:  10338: ldr x17, [x16, #1072]
 #DSO-NEXT:  1033c: add x16, x16, #1072
 #DSO-NEXT:  10340: br x17
@@ -75,13 +75,13 @@
 #DSO-NEXT:  1034c: nop
 #DSO-EMPTY:
 #DSO-NEXT:   <_foo@plt>:
-#DSO-NEXT:  10350: adrp x16, #131072
+#DSO-NEXT:  10350: adrp x16, 0x30000
 #DSO-NEXT:  10354: ldr x17, [x16, #1080]
 #DSO-NEXT:  10358: add x16, x16, #1080
 #DSO-NEXT:  1035c: br x17
 #DSO-EMPTY:
 #DSO-NEXT:   <_bar@plt>:
-#DSO-NEXT:  10360: adrp x16, #131072
+#DSO-NEXT:  10360: adrp x16, 0x30000
 #DSO-NEXT:  10364: ldr x17, [x16, #1088]
 #DSO-NEXT:  10368: add x16, x16, #1088
 #DSO-NEXT:  1036c: br x17

@@ -4,13 +4,12 @@
 // https://bugs.llvm.org/show_bug.cgi?id=37804
 // XFAIL: glibc-2.27
 
-// RUN: LSAN_BASE="report_objects=1:use_stacks=0:use_registers=0:use_ld_allocations=0"
 // RUN: %clangxx %s -DBUILD_DSO -fPIC -shared -o %t-so.so
 // RUN: %clangxx_lsan %s -o %t
-// RUN: %env_lsan_opts=$LSAN_BASE:"use_tls=0" not %run %t 2>&1 | FileCheck %s
-// RUN: %env_lsan_opts=$LSAN_BASE:"use_tls=1" %run %t 2>&1
+// RUN: %env_lsan_opts="report_objects=1:use_stacks=0:use_registers=0:use_ld_allocations=0:use_tls=0" not %run %t 2>&1 | FileCheck %s
+// RUN: %env_lsan_opts="report_objects=1:use_stacks=0:use_registers=0:use_ld_allocations=0:use_tls=1" %run %t 2>&1
 // RUN: %env_lsan_opts="" %run %t 2>&1
-// UNSUPPORTED: arm,powerpc,i386-linux && !android
+// UNSUPPORTED: target={{(arm|powerpc).*}},i386-linux && !android
 
 #ifndef BUILD_DSO
 #include <assert.h>
@@ -23,6 +22,11 @@
 int main(int argc, char *argv[]) {
   std::string path = std::string(argv[0]) + "-so.so";
 
+  // Clear any previous errors. On Android, the dynamic loader can have some
+  // left over dlerror() messages due to a missing symbol resolution for a
+  // deprecated malloc function.
+  dlerror();
+
   void *handle = dlopen(path.c_str(), RTLD_LAZY);
   assert(handle != 0);
   typedef void **(* store_t)(void *p);
@@ -31,10 +35,10 @@ int main(int argc, char *argv[]) {
   // Sometimes dlerror() occurs when we broke the interceptors.
   // Add the message here to make the error more obvious.
   const char *dlerror_msg = dlerror();
-  assert(dlerror_msg == nullptr);
   if (dlerror_msg != nullptr) {
     fprintf(stderr, "DLERROR: %s\n", dlerror_msg);
     fflush(stderr);
+    abort();
   }
   void *p = malloc(1337);
   // If we don't  know about dynamic TLS, we will return a false leak above.
@@ -46,7 +50,7 @@ int main(int argc, char *argv[]) {
 // CHECK: Test alloc: [[ADDR:0x[0-9,a-f]+]]
 // CHECK: LeakSanitizer: detected memory leaks
 // CHECK: [[ADDR]] (1337 bytes)
-// CHECK: SUMMARY: {{(Leak|Address)}}Sanitizer:
+// CHECK: SUMMARY: {{.*}}Sanitizer:
 
 #else  // BUILD_DSO
 // A loadable module with a large thread local section, which would require

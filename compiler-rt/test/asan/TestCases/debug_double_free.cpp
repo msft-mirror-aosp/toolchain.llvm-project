@@ -4,12 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// FIXME: Doesn't work with DLLs
-// XFAIL: win32-dynamic-asan
-
-// If we use %p with MSVC, it comes out all upper case. Use %08x to get
+// If we use %p with MS CRTs, it comes out all upper case. Use %08x to get
 // lowercase hex.
-#ifdef _MSC_VER
+#ifdef _WIN32
 # ifdef _WIN64
 #  define PTR_FMT "0x%08llx"
 # else
@@ -37,7 +34,12 @@ int main() {
   return 0;
 }
 
-void __asan_on_error() {
+// Required for dyld macOS 12.0+
+#if (__APPLE__)
+__attribute__((weak))
+#endif
+extern "C" void
+__asan_on_error() {
   int present = __asan_report_present();
   void *addr = __asan_get_report_address();
   const char *description = __asan_get_report_description();

@@ -1,8 +1,8 @@
 // RUN: %clang_cc1 -fsyntax-only -verify -std=c++1z %s
 
-template<typename T, T val> struct A {};
+template<typename T, T val> struct A {}; // expected-note 3{{template parameter is declared here}}
 
-template<typename T, typename U> constexpr bool is_same = false; // expected-note +{{here}}
+template<typename T, typename U> constexpr bool is_same = false;
 template<typename T> constexpr bool is_same<T, T> = true;
 
 namespace String {
@@ -43,7 +43,7 @@ namespace Function {
   typedef A<void (*)(), i> d;
   typedef A<void (*)(), &i> d;
   typedef A<void (*)(), i<>> d;
-  typedef A<void (*)(), i<int>> e; // expected-error {{is not implicitly convertible}}
+  typedef A<void (*)(), i<int>> e; // expected-error {{value of type '<overloaded function type>' is not implicitly convertible to 'void (*)()'}}
 
   typedef A<void (*)(), 0> x; // expected-error {{not allowed in a converted constant}}
   typedef A<void (*)(), nullptr> y;
@@ -84,34 +84,32 @@ namespace PtrMem {
   constexpr int B::*b = &B::b;
   constexpr int C::*cb = b;
   constexpr int D::*db = b;
-  constexpr int E::*ecb = cb; // expected-note +{{here}}
-  constexpr int E::*edb = db; // expected-note +{{here}}
+  constexpr int E::*ecb = cb;
+  constexpr int E::*edb = db;
 
   constexpr int E::*e = &E::e;
   constexpr int D::*de = (int D::*)e;
   constexpr int C::*ce = (int C::*)e;
-  constexpr int B::*bde = (int B::*)de; // expected-note +{{here}}
-  constexpr int B::*bce = (int B::*)ce; // expected-note +{{here}}
+  constexpr int B::*bde = (int B::*)de;
+  constexpr int B::*bce = (int B::*)ce;
 
-  // FIXME: This should all be accepted, but we don't yet have a representation
-  // nor mangling for this form of template argument.
   using Ab = A<int B::*, b>;
   using Ab = A<int B::*, &B::b>;
-  using Abce = A<int B::*, bce>; // expected-error {{not supported}}
-  using Abde = A<int B::*, bde>; // expected-error {{not supported}}
-  static_assert(!is_same<Ab, Abce>, ""); // expected-error {{undeclared}} expected-error {{must be a type}}
-  static_assert(!is_same<Ab, Abde>, ""); // expected-error {{undeclared}} expected-error {{must be a type}}
-  static_assert(!is_same<Abce, Abde>, ""); // expected-error 2{{undeclared}} expected-error {{must be a type}}
-  static_assert(is_same<Abce, A<int B::*, (int B::*)(int C::*)&E::e>>, ""); // expected-error {{undeclared}} expected-error {{not supported}}
+  using Abce = A<int B::*, bce>;
+  using Abde = A<int B::*, bde>;
+  static_assert(!is_same<Ab, Abce>, "");
+  static_assert(!is_same<Ab, Abde>, "");
+  static_assert(!is_same<Abce, Abde>, "");
+  static_assert(is_same<Abce, A<int B::*, (int B::*)(int C::*)&E::e>>, "");
 
   using Ae = A<int E::*, e>;
   using Ae = A<int E::*, &E::e>;
-  using Aecb = A<int E::*, ecb>; // expected-error {{not supported}}
-  using Aedb = A<int E::*, edb>; // expected-error {{not supported}}
-  static_assert(!is_same<Ae, Aecb>, ""); // expected-error {{undeclared}} expected-error {{must be a type}}
-  static_assert(!is_same<Ae, Aedb>, ""); // expected-error {{undeclared}} expected-error {{must be a type}}
-  static_assert(!is_same<Aecb, Aedb>, ""); // expected-error 2{{undeclared}} expected-error {{must be a type}}
-  static_assert(is_same<Aecb, A<int E::*, (int E::*)(int C::*)&B::b>>, ""); // expected-error {{undeclared}} expected-error {{not supported}}
+  using Aecb = A<int E::*, ecb>;
+  using Aedb = A<int E::*, edb>;
+  static_assert(!is_same<Ae, Aecb>, "");
+  static_assert(!is_same<Ae, Aedb>, "");
+  static_assert(!is_same<Aecb, Aedb>, "");
+  static_assert(is_same<Aecb, A<int E::*, (int E::*)(int C::*)&B::b>>, "");
 
   using An = A<int E::*, nullptr>;
   using A0 = A<int E::*, (int E::*)0>;
@@ -124,14 +122,14 @@ namespace DeduceDifferentType {
   int a_imp = a(A<3>()); // expected-error {{no matching function}}
   int a_exp = a<3>(A<3>());
 
-  template<decltype(nullptr)> struct B {};
+  template<decltype(nullptr)> struct B {}; // expected-note {{template parameter is declared here}}
   template<int *P> int b(B<P>); // expected-error {{value of type 'int *' is not implicitly convertible to 'decltype(nullptr)'}}
   int b_imp = b(B<nullptr>()); // expected-error {{no matching function}}
   int b_exp = b<nullptr>(B<nullptr>()); // expected-error {{no matching function}}
 
   struct X { constexpr operator int() { return 0; } } x;
-  template<X &> struct C {};
-  template<int N> int c(C<N>); // expected-error {{value of type 'int' is not implicitly convertible to 'DeduceDifferentType::X &'}}
+  template<X &> struct C {}; // expected-note {{template parameter is declared here}}
+  template<int N> int c(C<N>); // expected-error {{value of type 'int' is not implicitly convertible to 'X &'}}
   int c_imp = c(C<x>()); // expected-error {{no matching function}}
   int c_exp = c<x>(C<x>()); // expected-error {{no matching function}}
 
@@ -187,6 +185,11 @@ namespace Auto {
     int &r = f(B<&a>());
     float &s = f(B<&b>());
 
+    void type_affects_identity(B<&a>) {}
+    void type_affects_identity(B<(const int*)&a>) {}
+    void type_affects_identity(B<(void*)&a>) {}
+    void type_affects_identity(B<(const void*)&a>) {}
+
     // pointers to members
     template<typename T, auto *T::*p> struct B<p> {};
     template<typename T, auto **T::*p> struct B<p> {};
@@ -197,6 +200,12 @@ namespace Auto {
     auto t = f(B<&X::n>()); // expected-error {{no match}}
     char &u = f(B<&X::p>());
     short &v = f(B<&X::pp>());
+
+    struct Y : X {};
+    void type_affects_identity(B<&X::n>) {}
+    void type_affects_identity(B<(int Y::*)&X::n>) {}
+    void type_affects_identity(B<(const int X::*)&X::n>) {}
+    void type_affects_identity(B<(const int Y::*)&X::n>) {}
 
     // A case where we need to do auto-deduction, and check whether the
     // resulting dependent types match during partial ordering. These
@@ -439,7 +448,7 @@ namespace PR42108 {
   struct R {};
   struct S { constexpr S() {} constexpr S(R) {} };
   struct T { constexpr operator S() { return {}; } };
-  template <const S &> struct A {};
+  template <const S &> struct A {}; // expected-note {{template parameter is declared here}}
   void f() {
     A<R{}>(); // expected-error {{would bind reference to a temporary}}
     A<S{}>(); // expected-error {{reference to temporary object}}
@@ -457,3 +466,158 @@ namespace PR46637 {
   X<f> y;
   int n = y.call(); // expected-error {{cannot initialize a variable of type 'int' with an rvalue of type 'void *'}}
 }
+
+namespace PR48517 {
+  template<const int *P> struct A { static constexpr const int *p = P; };
+  template<typename T> auto make_nonconst() {
+    static int n;
+    return A<&n>();
+  };
+  using T = decltype(make_nonconst<int>()); // expected-note {{previous}}
+  using U = decltype(make_nonconst<float>());
+  static_assert(T::p != U::p);
+  using T = U; // expected-error {{different types}}
+
+  template<typename T> auto make_const() {
+    static constexpr int n = 42;
+    return A<&n>();
+  };
+  using V = decltype(make_const<int>()); // expected-note {{previous}}
+  using W = decltype(make_const<float>());
+  static_assert(*V::p == *W::p);
+  static_assert(V::p != W::p);
+  using V = W; // expected-error {{different types}}
+
+  template<auto V> struct Q {
+    using X = int;
+    static_assert(V == "primary template should not be instantiated");
+  };
+  template<typename T> struct R {
+    int n;
+    constexpr int f() {
+      return Q<&R::n>::X;
+    }
+  };
+  template<> struct Q<&R<int>::n> { static constexpr int X = 1; };
+  static_assert(R<int>().f() == 1);
+}
+
+namespace dependent_reference {
+  template<int &r> struct S { int *q = &r; };
+  template<int> auto f() { static int n; return S<n>(); }
+  auto v = f<0>();
+  auto w = f<1>();
+  static_assert(!is_same<decltype(v), decltype(w)>);
+  // Ensure that we can instantiate the definition of S<...>.
+  int n = *v.q + *w.q;
+}
+
+namespace decay {
+  template<typename T, typename C, const char *const A[(int)T::count]> struct X {
+    template<typename CC> void f(const X<T, CC, A> &v) {}
+  };
+  struct A {
+    static constexpr const char *arr[] = {"hello", "world"};
+    static constexpr int count = 2;
+  };
+  void f() {
+    X<A, int, A::arr> x1;
+    X<A, float, A::arr> x2;
+    x1.f(x2);
+  }
+}
+
+namespace TypeSuffix {
+  template <auto N> struct A {};
+  template <> struct A<1> { using type = int; }; // expected-note {{'A<1>::type' declared here}}
+  A<1L>::type a;                                 // expected-error {{no type named 'type' in 'TypeSuffix::A<1L>'; did you mean 'A<1>::type'?}}
+
+  template <auto N> struct B {};
+  template <> struct B<1> { using type = int; }; // expected-note {{'B<1>::type' declared here}}
+  B<2>::type b;                                  // expected-error {{no type named 'type' in 'TypeSuffix::B<2>'; did you mean 'B<1>::type'?}}
+
+  template <auto N> struct C {};
+  template <> struct C<'a'> { using type = signed char; }; // expected-note {{'C<'a'>::type' declared here}}
+  C<(signed char)'a'>::type c;                             // expected-error {{no type named 'type' in 'TypeSuffix::C<(signed char)'a'>'; did you mean 'C<'a'>::type'?}}
+
+  template <auto N> struct D {};
+  template <> struct D<'a'> { using type = signed char; }; // expected-note {{'D<'a'>::type' declared here}}
+  D<'b'>::type d;                                          // expected-error {{no type named 'type' in 'TypeSuffix::D<'b'>'; did you mean 'D<'a'>::type'?}}
+
+  template <auto N> struct E {};
+  template <> struct E<'a'> { using type = unsigned char; }; // expected-note {{'E<'a'>::type' declared here}}
+  E<(unsigned char)'a'>::type e;                             // expected-error {{no type named 'type' in 'TypeSuffix::E<(unsigned char)'a'>'; did you mean 'E<'a'>::type'?}}
+
+  template <auto N> struct F {};
+  template <> struct F<'a'> { using type = unsigned char; }; // expected-note {{'F<'a'>::type' declared here}}
+  F<'b'>::type f;                                            // expected-error {{no type named 'type' in 'TypeSuffix::F<'b'>'; did you mean 'F<'a'>::type'?}}
+
+  template <auto... N> struct X {};
+  X<1, 1u>::type y; // expected-error {{no type named 'type' in 'TypeSuffix::X<1, 1U>'}}
+  X<1, 1>::type z; // expected-error {{no type named 'type' in 'TypeSuffix::X<1, 1>'}}
+}
+
+namespace no_crash {
+template <class T>
+class Base {
+public:
+  template <class> class EntryPointSpec {};
+  template <auto Method>
+  using EntryPoint = EntryPointSpec<T>;
+};
+
+class Derived : Base<Derived>{
+  template <class...> class Spec {};
+
+  void Invalid(Undefined) const; // expected-error {{unknown type name 'Undefined'}}
+  void crash() {
+    return Spec{
+        EntryPoint<&Invalid>()
+    };
+  }
+};
+} // no_crash
+
+namespace PR47792 {
+  using I = int;
+
+  template<decltype(auto)> int a;
+  const int n = 0;
+  const I n2 = 0;
+  static_assert(&a<n> == &a<0>, "both should have type 'int'");
+  static_assert(&a<n2> == &a<0>, "both should have type 'int'");
+
+  int m;
+  const int &r1 = m;
+  int &r2 = m;
+  static_assert(&a<r1> != &a<r2>, "should have different types");
+
+  const I &r3 = m;
+  static_assert(&a<r1> == &a<r3>, "should have different types");
+  static_assert(&a<r2> != &a<r3>, "should have different types");
+
+  void foo();
+  template <void () = foo> void bar() {}
+  template void bar<>();    // expected-note {{previous explicit instantiation is here}}
+  template void bar<foo>(); // expected-error {{duplicate explicit instantiation of 'bar<&PR47792::foo>'}}
+}
+
+namespace GH68024 {
+template<auto>
+struct s {};
+
+struct {
+  void operator()(int);
+} f;
+
+template<typename T>
+using a = s<f(T::x)>;
+}
+
+namespace GH73460 {
+  template <class T, T, T> struct A;
+  template <class T, T n> struct A<T, n, n> {};
+
+  int j;
+  template struct A<int&, j, j>;
+} // namespace GH73460

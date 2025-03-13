@@ -8,10 +8,8 @@
 
 #include "PPCTargetObjectFile.h"
 #include "llvm/IR/GlobalVariable.h"
-#include "llvm/IR/Mangler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCSectionELF.h"
 
 using namespace llvm;
 
@@ -40,7 +38,8 @@ MCSection *PPC64LinuxTargetObjectFile::SelectSectionForGlobal(
   if (Kind.isReadOnly()) {
     const auto *GVar = dyn_cast<GlobalVariable>(GO);
 
-    if (GVar && GVar->isConstant() && GVar->getInitializer()->needsRelocation())
+    if (GVar && GVar->isConstant() &&
+        GVar->getInitializer()->needsDynamicRelocation())
       Kind = SectionKind::getReadOnlyWithRel();
   }
 

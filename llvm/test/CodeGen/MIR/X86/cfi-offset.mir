@@ -1,4 +1,4 @@
-# RUN: llc -march=x86-64 -run-pass none -o - %s | FileCheck %s
+# RUN: llc -mtriple=x86_64 -run-pass none -o - %s | FileCheck %s
 # This test ensures that the MIR parser parses the cfi offset operands
 # correctly.
 
@@ -42,6 +42,6 @@ body: |
     CALL64pcrel32 @foo, csr_64, implicit $rsp, implicit $edi, implicit-def $rsp
     $eax = LEA64_32r killed $rbx, 1, $rbx, 0, _
     $rbx = POP64r implicit-def $rsp, implicit $rsp
-    RETQ $eax
+    RET64 $eax
 ...
 

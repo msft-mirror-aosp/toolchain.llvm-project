@@ -2,48 +2,48 @@
 ; RUN: llc -mtriple=x86_64-windows-msvc < %s -mattr=-sse | FileCheck %s
 ; RUN: llc -mtriple=x86_64-windows-gnu < %s -mattr=-sse | FileCheck %s
 
-define void @recv_double(double %v, double* %p) {
+define void @recv_double(double %v, ptr %p) {
 ; CHECK-LABEL: recv_double:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    movq %rcx, (%rdx)
 ; CHECK-NEXT:    retq
-  store double %v, double* %p
+  store double %v, ptr %p
   ret void
 }
 
-define void @recv_float(float %v, float* %p) {
+define void @recv_float(float %v, ptr %p) {
 ; CHECK-LABEL: recv_float:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    movl %ecx, (%rdx)
 ; CHECK-NEXT:    retq
-  store float %v, float* %p
+  store float %v, ptr %p
   ret void
 }
 
-define dso_local double @ret_double(double* %p) {
+define dso_local double @ret_double(ptr %p) {
 ; CHECK-LABEL: ret_double:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    movq (%rcx), %rax
 ; CHECK-NEXT:    retq
 entry:
-  %v = load double, double* %p
+  %v = load double, ptr %p
   ret double %v
 }
 
-define dso_local float @ret_float(float* %p) {
+define dso_local float @ret_float(ptr %p) {
 ; CHECK-LABEL: ret_float:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    movl (%rcx), %eax
 ; CHECK-NEXT:    retq
 entry:
-  %v = load float, float* %p
+  %v = load float, ptr %p
   ret float %v
 }
 
 declare void @take_double(double)
 declare void @take_float(float)
 
-define void @pass_double(double* %p) {
+define void @pass_double(ptr %p) {
 ; CHECK-LABEL: pass_double:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    subq $40, %rsp
@@ -52,15 +52,17 @@ define void @pass_double(double* %p) {
 ; CHECK-NEXT:    movq (%rcx), %rcx
 ; CHECK-NEXT:    callq take_double
 ; CHECK-NEXT:    nop
+; CHECK-NEXT:    .seh_startepilogue
 ; CHECK-NEXT:    addq $40, %rsp
+; CHECK-NEXT:    .seh_endepilogue
 ; CHECK-NEXT:    retq
 ; CHECK-NEXT:    .seh_endproc
-  %v = load double, double* %p
+  %v = load double, ptr %p
   call void @take_double(double %v)
   ret void
 }
 
-define void @pass_float(float* %p) {
+define void @pass_float(ptr %p) {
 ; CHECK-LABEL: pass_float:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    subq $40, %rsp
@@ -69,10 +71,12 @@ define void @pass_float(float* %p) {
 ; CHECK-NEXT:    movl (%rcx), %ecx
 ; CHECK-NEXT:    callq take_float
 ; CHECK-NEXT:    nop
+; CHECK-NEXT:    .seh_startepilogue
 ; CHECK-NEXT:    addq $40, %rsp
+; CHECK-NEXT:    .seh_endepilogue
 ; CHECK-NEXT:    retq
 ; CHECK-NEXT:    .seh_endproc
-  %v = load float, float* %p
+  %v = load float, ptr %p
   call void @take_float(float %v)
   ret void
 }
@@ -80,7 +84,7 @@ define void @pass_float(float* %p) {
 declare double @produce_double()
 declare float @produce_float()
 
-define void @call_double(double* %p) {
+define void @call_double(ptr %p) {
 ; CHECK-LABEL: call_double:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    pushq %rsi
@@ -91,16 +95,18 @@ define void @call_double(double* %p) {
 ; CHECK-NEXT:    movq %rcx, %rsi
 ; CHECK-NEXT:    callq produce_double
 ; CHECK-NEXT:    movq %rax, (%rsi)
+; CHECK-NEXT:    .seh_startepilogue
 ; CHECK-NEXT:    addq $32, %rsp
 ; CHECK-NEXT:    popq %rsi
+; CHECK-NEXT:    .seh_endepilogue
 ; CHECK-NEXT:    retq
 ; CHECK-NEXT:    .seh_endproc
   %v = call double @produce_double()
-  store double %v, double* %p
+  store double %v, ptr %p
   ret void
 }
 
-define void @call_float(float* %p) {
+define void @call_float(ptr %p) {
 ; CHECK-LABEL: call_float:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    pushq %rsi
@@ -111,11 +117,13 @@ define void @call_float(float* %p) {
 ; CHECK-NEXT:    movq %rcx, %rsi
 ; CHECK-NEXT:    callq produce_float
 ; CHECK-NEXT:    movl %eax, (%rsi)
+; CHECK-NEXT:    .seh_startepilogue
 ; CHECK-NEXT:    addq $32, %rsp
 ; CHECK-NEXT:    popq %rsi
+; CHECK-NEXT:    .seh_endepilogue
 ; CHECK-NEXT:    retq
 ; CHECK-NEXT:    .seh_endproc
   %v = call float @produce_float()
-  store float %v, float* %p
+  store float %v, ptr %p
   ret void
 }

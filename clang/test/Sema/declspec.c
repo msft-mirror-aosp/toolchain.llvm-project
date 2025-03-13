@@ -5,7 +5,7 @@ T foo(int n, int m) {  }  // expected-error {{cannot return array type}}
 
 void foof(const char *, ...) __attribute__((__format__(__printf__, 1, 2))), barf (void);
 
-int typedef validTypeDecl() { } // expected-error {{function definition declared 'typedef'}}
+int typedef validTypeDecl(void) { } // expected-error {{function definition declared 'typedef'}}
 
 struct _zend_module_entry { }    // expected-error {{expected ';' after struct}}
 int gv1;
@@ -16,9 +16,9 @@ int gv2;
 static void buggy(int *x) { }
 
 // Type qualifiers.
-typedef int f(void); 
+typedef int f(void);
 typedef f* fptr;
-const f* v1;         // expected-warning {{qualifier on function type 'f' (aka 'int (void)') has unspecified behavior}}
+const f* v1;         // expected-warning {{'const' qualifier on function type 'f' (aka 'int (void)') has no effect and is a Clang extension}}
 __restrict__ f* v2;  // expected-error {{restrict requires a pointer or reference ('f' (aka 'int (void)') is invalid)}}
 __restrict__ fptr v3; // expected-error {{pointer to function type 'f' (aka 'int (void)') may not be 'restrict' qualified}}
 f *__restrict__ v4;   // expected-error {{pointer to function type 'f' (aka 'int (void)') may not be 'restrict' qualified}}
@@ -29,7 +29,7 @@ restrict struct hallo; // expected-error {{restrict requires a pointer or refere
 struct test1 {
 } // expected-error {{expected ';' after struct}}
 
-void test2() {}
+void test2(void) {}
 
 
 // PR6423
@@ -43,9 +43,9 @@ volatile volatile int pr8264_2;  // expected-warning {{duplicate 'volatile' decl
 char * restrict restrict pr8264_3;  // expected-warning {{duplicate 'restrict' declaration specifier}}
 
 extern extern int pr8264_4;  // expected-warning {{duplicate 'extern' declaration specifier}}
-void pr8264_5() {
+void pr8264_5(void) {
   register register int x;  // expected-warning {{duplicate 'register' declaration specifier}}
 }
 
-inline inline void pr8264_6() {}  // expected-warning {{duplicate 'inline' declaration specifier}}
-_Noreturn _Noreturn void pr8264_7();  // expected-warning {{duplicate '_Noreturn' declaration specifier}}
+inline inline void pr8264_6(void) {}  // expected-warning {{duplicate 'inline' declaration specifier}}
+_Noreturn _Noreturn void pr8264_7(void);  // expected-warning {{duplicate '_Noreturn' declaration specifier}}

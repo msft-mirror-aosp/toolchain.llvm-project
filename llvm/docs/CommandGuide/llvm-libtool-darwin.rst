@@ -26,10 +26,6 @@ OPTIONS
   Build a static library only for the specified `<architecture>` and ignore all
   other architectures in the files.
 
-.. option:: -color
-
-  Use colors in output.
-
 .. option:: -D
 
   Use zero for timestamps and UIDs/GIDs. This is set by default.
@@ -45,11 +41,6 @@ OPTIONS
 
   Show help and usage for this command.
 
-.. option:: -help-list
-
-  Show help and usage for this command without grouping the options
-  into categories.
-
 .. option:: -l <x>
 
   Searches for the library libx.a in the library search path. If the string `<x>`
@@ -63,6 +54,14 @@ OPTIONS
   directories are searched in the order in which they are specified with
   :option:`-L` and before the default search path. The default search path
   includes directories `/lib`, `/usr/lib` and `/usr/local/lib`.
+
+.. option:: -no_warning_for_no_symbols
+
+   Do not warn about files that have no symbols.
+
+.. option:: -warnings_as_errors
+
+  Produce a non-zero exit status if any warnings are emitted.
 
 .. option:: -o <filename>
 
@@ -93,7 +92,7 @@ Otherwise, it exits with code 0.
 BUGS
 ----
 
-To report bugs, please visit <https://bugs.llvm.org/>.
+To report bugs, please visit <https://github.com/llvm/llvm-project/issues/>.
 
 SEE ALSO
 --------

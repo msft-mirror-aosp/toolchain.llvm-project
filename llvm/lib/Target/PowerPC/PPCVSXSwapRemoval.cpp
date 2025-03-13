@@ -42,7 +42,6 @@
 //===---------------------------------------------------------------------===//
 
 #include "PPC.h"
-#include "PPCInstrBuilder.h"
 #include "PPCInstrInfo.h"
 #include "PPCTargetMachine.h"
 #include "llvm/ADT/DenseMap.h"
@@ -254,10 +253,11 @@ bool PPCVSXSwapRemoval::gatherVectorInstructions() {
         if (!MO.isReg())
           continue;
         Register Reg = MO.getReg();
-        if (isAnyVecReg(Reg, Partial)) {
+        // All operands need to be checked because there are instructions that
+        // operate on a partial register and produce a full register (such as
+        // XXPERMDIs).
+        if (isAnyVecReg(Reg, Partial))
           RelevantInstr = true;
-          break;
-        }
       }
 
       if (!RelevantInstr)
@@ -518,6 +518,8 @@ bool PPCVSXSwapRemoval::gatherVectorInstructions() {
       case PPC::XXSLDWI:
       case PPC::XSCVDPSPN:
       case PPC::XSCVSPDPN:
+      case PPC::MTVSCR:
+      case PPC::MFVSCR:
         break;
       }
     }
@@ -605,7 +607,7 @@ void PPCVSXSwapRemoval::formWebs() {
       if (!isVecReg(Reg) && !isScalarVecReg(Reg))
         continue;
 
-      if (!Register::isVirtualRegister(Reg)) {
+      if (!Reg.isVirtual()) {
         if (!(MI->isCopy() && isScalarVecReg(Reg)))
           SwapVector[EntryIdx].MentionsPhysVR = 1;
         continue;
@@ -615,7 +617,7 @@ void PPCVSXSwapRemoval::formWebs() {
         continue;
 
       MachineInstr* DefMI = MRI->getVRegDef(Reg);
-      assert(SwapMap.find(DefMI) != SwapMap.end() &&
+      assert(SwapMap.contains(DefMI) &&
              "Inconsistency: def of vector reg not found in swap map!");
       int DefIdx = SwapMap[DefMI];
       (void)EC->unionSets(SwapVector[DefIdx].VSEId,

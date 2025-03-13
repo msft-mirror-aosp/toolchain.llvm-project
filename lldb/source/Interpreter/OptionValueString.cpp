@@ -52,7 +52,7 @@ Status OptionValueString::SetValueFromString(llvm::StringRef value,
     case '"':
     case '\'': {
       if (value.size() <= 1 || value.back() != value.front()) {
-        error.SetErrorString("mismatched quotes");
+        error = Status::FromErrorString("mismatched quotes");
         return error;
       }
       value = value.drop_front().drop_back();
@@ -115,10 +115,6 @@ Status OptionValueString::SetValueFromString(llvm::StringRef value,
     break;
   }
   return error;
-}
-
-lldb::OptionValueSP OptionValueString::DeepCopy() const {
-  return OptionValueSP(new OptionValueString(*this));
 }
 
 Status OptionValueString::SetCurrentValue(llvm::StringRef value) {

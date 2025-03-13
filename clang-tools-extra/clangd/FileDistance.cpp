@@ -31,8 +31,11 @@
 //===-------------------------------------------------------------------------//
 
 #include "FileDistance.h"
+#include "URI.h"
 #include "support/Logger.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Path.h"
 #include <queue>
 
 namespace clang {
@@ -58,8 +61,7 @@ const llvm::hash_code FileDistance::RootHash =
 FileDistance::FileDistance(llvm::StringMap<SourceParams> Sources,
                            const FileDistanceOptions &Opts)
     : Opts(Opts) {
-  llvm::DenseMap<llvm::hash_code, llvm::SmallVector<llvm::hash_code, 4>>
-      DownEdges;
+  llvm::DenseMap<llvm::hash_code, llvm::SmallVector<llvm::hash_code>> DownEdges;
   // Compute the best distance following only up edges.
   // Keep track of down edges, in case we can use them to improve on this.
   for (const auto &S : Sources) {
@@ -77,7 +79,7 @@ FileDistance::FileDistance(llvm::StringMap<SourceParams> Sources,
         Down.push_back(Hash);
       // We can't just break after MaxUpTraversals, must still set DownEdges.
       if (I > S.getValue().MaxUpTraversals) {
-        if (Cache.find(Hash) != Cache.end())
+        if (Cache.contains(Hash))
           break;
       } else {
         unsigned Cost = S.getValue().Cost + I * Opts.UpCost;
@@ -118,7 +120,7 @@ FileDistance::FileDistance(llvm::StringMap<SourceParams> Sources,
 unsigned FileDistance::distance(llvm::StringRef Path) {
   auto Canonical = canonicalize(Path);
   unsigned Cost = Unreachable;
-  llvm::SmallVector<llvm::hash_code, 16> Ancestors;
+  llvm::SmallVector<llvm::hash_code> Ancestors;
   // Walk up ancestors until we find a path we know the distance for.
   for (llvm::StringRef Rest = Canonical; !Rest.empty();
        Rest = parent_path(Rest, llvm::sys::path::Style::posix)) {
@@ -177,7 +179,7 @@ FileDistance &URIDistance::forScheme(llvm::StringRef Scheme) {
 }
 
 static std::pair<std::string, int> scopeToPath(llvm::StringRef Scope) {
-  llvm::SmallVector<llvm::StringRef, 4> Split;
+  llvm::SmallVector<llvm::StringRef> Split;
   Scope.split(Split, "::", /*MaxSplit=*/-1, /*KeepEmpty=*/false);
   return {"/" + llvm::join(Split, "/"), Split.size()};
 }
@@ -199,7 +201,7 @@ createScopeFileDistance(llvm::ArrayRef<std::string> QueryScopes) {
     // place of enclosing namespaces (e.g. in implementation files).
     if (S == Preferred)
       Param.Cost = S == "" ? 4 : 0;
-    else if (Preferred.startswith(S) && !S.empty())
+    else if (Preferred.starts_with(S) && !S.empty())
       continue; // just rely on up-traversals.
     else
       Param.Cost = S == "" ? 6 : 2;

@@ -34,7 +34,7 @@ LineTable::LineTable(CompileUnit *comp_unit,
 }
 
 // Destructor
-LineTable::~LineTable() {}
+LineTable::~LineTable() = default;
 
 void LineTable::InsertLineEntry(lldb::addr_t file_addr, uint32_t line,
                                 uint16_t column, uint16_t file_idx,
@@ -58,7 +58,7 @@ void LineTable::InsertLineEntry(lldb::addr_t file_addr, uint32_t line,
   //  Dump (&s, Address::DumpStyleFileAddress);
 }
 
-LineSequence::LineSequence() {}
+LineSequence::LineSequence() = default;
 
 void LineTable::LineSequenceImpl::Clear() { m_entries.clear(); }
 
@@ -89,7 +89,7 @@ void LineTable::AppendLineEntryToSequence(
   if (!entries.empty() && entries.back().file_addr == file_addr) {
     // GCC don't use the is_prologue_end flag to mark the first instruction
     // after the prologue.
-    // Instead of it it is issuing a line table entry for the first instruction
+    // Instead of it is issuing a line table entry for the first instruction
     // of the prologue and one for the first instruction after the prologue. If
     // the size of the prologue is 0 instruction then the 2 line entry will
     // have the same file address. Removing it will remove our ability to
@@ -288,10 +288,10 @@ bool LineTable::ConvertEntryAtIndexToLineEntry(uint32_t idx,
   else
     line_entry.range.SetByteSize(0);
 
-  line_entry.file =
-      m_comp_unit->GetSupportFiles().GetFileSpecAtIndex(entry.file_idx);
-  line_entry.original_file =
-      m_comp_unit->GetSupportFiles().GetFileSpecAtIndex(entry.file_idx);
+  line_entry.file_sp =
+      m_comp_unit->GetSupportFiles().GetSupportFileAtIndex(entry.file_idx);
+  line_entry.original_file_sp =
+      m_comp_unit->GetSupportFiles().GetSupportFileAtIndex(entry.file_idx);
   line_entry.line = entry.line;
   line_entry.column = entry.column;
   line_entry.is_start_of_statement = entry.is_start_of_statement;
@@ -303,94 +303,29 @@ bool LineTable::ConvertEntryAtIndexToLineEntry(uint32_t idx,
 }
 
 uint32_t LineTable::FindLineEntryIndexByFileIndex(
-    uint32_t start_idx, const std::vector<uint32_t> &file_indexes,
-    uint32_t line, bool exact, LineEntry *line_entry_ptr) {
+    uint32_t start_idx, uint32_t file_idx,
+    const SourceLocationSpec &src_location_spec, LineEntry *line_entry_ptr) {
+  auto file_idx_matcher = [](uint32_t file_index, uint16_t entry_file_idx) {
+    return file_index == entry_file_idx;
+  };
+  return FindLineEntryIndexByFileIndexImpl<uint32_t>(
 
-  const size_t count = m_entries.size();
-  size_t best_match = UINT32_MAX;
-
-  for (size_t idx = start_idx; idx < count; ++idx) {
-    // Skip line table rows that terminate the previous row (is_terminal_entry
-    // is non-zero)
-    if (m_entries[idx].is_terminal_entry)
-      continue;
-
-    if (!llvm::is_contained(file_indexes, m_entries[idx].file_idx))
-      continue;
-
-    // Exact match always wins.  Otherwise try to find the closest line > the
-    // desired line.
-    // FIXME: Maybe want to find the line closest before and the line closest
-    // after and
-    // if they're not in the same function, don't return a match.
-
-    if (m_entries[idx].line < line) {
-      continue;
-    } else if (m_entries[idx].line == line) {
-      if (line_entry_ptr)
-        ConvertEntryAtIndexToLineEntry(idx, *line_entry_ptr);
-      return idx;
-    } else if (!exact) {
-      if (best_match == UINT32_MAX)
-        best_match = idx;
-      else if (m_entries[idx].line < m_entries[best_match].line)
-        best_match = idx;
-    }
-  }
-
-  if (best_match != UINT32_MAX) {
-    if (line_entry_ptr)
-      ConvertEntryAtIndexToLineEntry(best_match, *line_entry_ptr);
-    return best_match;
-  }
-  return UINT32_MAX;
+      start_idx, file_idx, src_location_spec, line_entry_ptr, file_idx_matcher);
 }
 
-uint32_t LineTable::FindLineEntryIndexByFileIndex(uint32_t start_idx,
-                                                  uint32_t file_idx,
-                                                  uint32_t line, bool exact,
-                                                  LineEntry *line_entry_ptr) {
-  const size_t count = m_entries.size();
-  size_t best_match = UINT32_MAX;
+uint32_t LineTable::FindLineEntryIndexByFileIndex(
+    uint32_t start_idx, const std::vector<uint32_t> &file_idx,
+    const SourceLocationSpec &src_location_spec, LineEntry *line_entry_ptr) {
+  auto file_idx_matcher = [](const std::vector<uint32_t> &file_indexes,
+                             uint16_t entry_file_idx) {
+    return llvm::is_contained(file_indexes, entry_file_idx);
+  };
 
-  for (size_t idx = start_idx; idx < count; ++idx) {
-    // Skip line table rows that terminate the previous row (is_terminal_entry
-    // is non-zero)
-    if (m_entries[idx].is_terminal_entry)
-      continue;
-
-    if (m_entries[idx].file_idx != file_idx)
-      continue;
-
-    // Exact match always wins.  Otherwise try to find the closest line > the
-    // desired line.
-    // FIXME: Maybe want to find the line closest before and the line closest
-    // after and
-    // if they're not in the same function, don't return a match.
-
-    if (m_entries[idx].line < line) {
-      continue;
-    } else if (m_entries[idx].line == line) {
-      if (line_entry_ptr)
-        ConvertEntryAtIndexToLineEntry(idx, *line_entry_ptr);
-      return idx;
-    } else if (!exact) {
-      if (best_match == UINT32_MAX)
-        best_match = idx;
-      else if (m_entries[idx].line < m_entries[best_match].line)
-        best_match = idx;
-    }
-  }
-
-  if (best_match != UINT32_MAX) {
-    if (line_entry_ptr)
-      ConvertEntryAtIndexToLineEntry(best_match, *line_entry_ptr);
-    return best_match;
-  }
-  return UINT32_MAX;
+  return FindLineEntryIndexByFileIndexImpl<std::vector<uint32_t>>(
+      start_idx, file_idx, src_location_spec, line_entry_ptr, file_idx_matcher);
 }
 
-size_t LineTable::FineLineEntriesForFileIndex(uint32_t file_idx, bool append,
+size_t LineTable::FindLineEntriesForFileIndex(uint32_t file_idx, bool append,
                                               SymbolContextList &sc_list) {
 
   if (!append)
@@ -422,13 +357,13 @@ void LineTable::Dump(Stream *s, Target *target, Address::DumpStyle style,
                      Address::DumpStyle fallback_style, bool show_line_ranges) {
   const size_t count = m_entries.size();
   LineEntry line_entry;
-  FileSpec prev_file;
+  SupportFileSP prev_file;
   for (size_t idx = 0; idx < count; ++idx) {
     ConvertEntryAtIndexToLineEntry(idx, line_entry);
-    line_entry.Dump(s, target, prev_file != line_entry.original_file, style,
-                    fallback_style, show_line_ranges);
+    line_entry.Dump(s, target, !prev_file->Equal(*line_entry.original_file_sp),
+                    style, fallback_style, show_line_ranges);
     s->EOL();
-    prev_file = line_entry.original_file;
+    prev_file = line_entry.original_file_sp;
   }
 }
 

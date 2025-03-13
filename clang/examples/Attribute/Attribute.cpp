@@ -9,6 +9,8 @@
 // Example clang plugin which adds an an annotation to file-scope declarations
 // with the 'example' attribute.
 //
+// This plugin is used by clang/test/Frontend/plugin-attribute tests.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/ASTContext.h"
@@ -23,12 +25,14 @@ namespace {
 
 struct ExampleAttrInfo : public ParsedAttrInfo {
   ExampleAttrInfo() {
-    // Can take an optional string argument (the check that the argument
-    // actually is a string happens in handleDeclAttribute).
-    OptArgs = 1;
-    // GNU-style __attribute__(("example")) and C++-style [[example]] and
+    // Can take up to 15 optional arguments, to emulate accepting a variadic
+    // number of arguments. This just illustrates how many arguments a
+    // `ParsedAttrInfo` can hold, we will not use that much in this example.
+    OptArgs = 15;
+    // GNU-style __attribute__(("example")) and C++/C23-style [[example]] and
     // [[plugin::example]] supported.
     static constexpr Spelling S[] = {{ParsedAttr::AS_GNU, "example"},
+                                     {ParsedAttr::AS_C23, "example"},
                                      {ParsedAttr::AS_CXX11, "example"},
                                      {ParsedAttr::AS_CXX11, "plugin::example"}};
     Spellings = S;
@@ -38,8 +42,8 @@ struct ExampleAttrInfo : public ParsedAttrInfo {
                             const Decl *D) const override {
     // This attribute appertains to functions only.
     if (!isa<FunctionDecl>(D)) {
-      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type_str)
-        << Attr << "functions";
+      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
+          << Attr << Attr.isRegularKeywordAttribute() << ExpectedFunction;
       return false;
     }
     return true;
@@ -55,23 +59,88 @@ struct ExampleAttrInfo : public ParsedAttrInfo {
       S.Diag(Attr.getLoc(), ID);
       return AttributeNotApplied;
     }
-    // Check if we have an optional string argument.
-    StringRef Str = "";
+    // We make some rules here:
+    // 1. Only accept at most 3 arguments here.
+    // 2. The first argument must be a string literal if it exists.
+    if (Attr.getNumArgs() > 3) {
+      unsigned ID = S.getDiagnostics().getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "'example' attribute only accepts at most three arguments");
+      S.Diag(Attr.getLoc(), ID);
+      return AttributeNotApplied;
+    }
+    // If there are arguments, the first argument should be a string literal.
     if (Attr.getNumArgs() > 0) {
-      Expr *ArgExpr = Attr.getArgAsExpr(0);
+      auto *Arg0 = Attr.getArgAsExpr(0);
       StringLiteral *Literal =
-          dyn_cast<StringLiteral>(ArgExpr->IgnoreParenCasts());
-      if (Literal) {
-        Str = Literal->getString();
-      } else {
-        S.Diag(ArgExpr->getExprLoc(), diag::err_attribute_argument_type)
-            << Attr.getAttrName() << AANT_ArgumentString;
+          dyn_cast<StringLiteral>(Arg0->IgnoreParenCasts());
+      if (!Literal) {
+        unsigned ID = S.getDiagnostics().getCustomDiagID(
+            DiagnosticsEngine::Error, "first argument to the 'example' "
+                                      "attribute must be a string literal");
+        S.Diag(Attr.getLoc(), ID);
         return AttributeNotApplied;
       }
+      SmallVector<Expr *, 16> ArgsBuf;
+      for (unsigned i = 0; i < Attr.getNumArgs(); i++) {
+        ArgsBuf.push_back(Attr.getArgAsExpr(i));
+      }
+      D->addAttr(AnnotateAttr::Create(S.Context, "example", ArgsBuf.data(),
+                                      ArgsBuf.size(), Attr.getRange()));
+    } else {
+      // Attach an annotate attribute to the Decl.
+      D->addAttr(AnnotateAttr::Create(S.Context, "example", nullptr, 0,
+                                      Attr.getRange()));
     }
-    // Attach an annotate attribute to the Decl.
-    D->addAttr(AnnotateAttr::Create(S.Context, "example(" + Str.str() + ")",
-                                    Attr.getRange()));
+    return AttributeApplied;
+  }
+
+  bool diagAppertainsToStmt(Sema &S, const ParsedAttr &Attr,
+                            const Stmt *St) const override {
+    // This attribute appertains to for loop statements only.
+    if (!isa<ForStmt>(St)) {
+      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
+          << Attr << Attr.isRegularKeywordAttribute()
+          << ExpectedForLoopStatement;
+      return false;
+    }
+    return true;
+  }
+
+  AttrHandling handleStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &Attr,
+                                   class Attr *&Result) const override {
+    // We make some rules here:
+    // 1. Only accept at most 3 arguments here.
+    // 2. The first argument must be a string literal if it exists.
+    if (Attr.getNumArgs() > 3) {
+      unsigned ID = S.getDiagnostics().getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "'example' attribute only accepts at most three arguments");
+      S.Diag(Attr.getLoc(), ID);
+      return AttributeNotApplied;
+    }
+    // If there are arguments, the first argument should be a string literal.
+    if (Attr.getNumArgs() > 0) {
+      auto *Arg0 = Attr.getArgAsExpr(0);
+      StringLiteral *Literal =
+          dyn_cast<StringLiteral>(Arg0->IgnoreParenCasts());
+      if (!Literal) {
+        unsigned ID = S.getDiagnostics().getCustomDiagID(
+            DiagnosticsEngine::Error, "first argument to the 'example' "
+                                      "attribute must be a string literal");
+        S.Diag(Attr.getLoc(), ID);
+        return AttributeNotApplied;
+      }
+      SmallVector<Expr *, 16> ArgsBuf;
+      for (unsigned i = 0; i < Attr.getNumArgs(); i++) {
+        ArgsBuf.push_back(Attr.getArgAsExpr(i));
+      }
+      Result = AnnotateAttr::Create(S.Context, "example", ArgsBuf.data(),
+                                    ArgsBuf.size(), Attr.getRange());
+    } else {
+      Result = AnnotateAttr::Create(S.Context, "example", nullptr, 0,
+                                    Attr.getRange());
+    }
     return AttributeApplied;
   }
 };

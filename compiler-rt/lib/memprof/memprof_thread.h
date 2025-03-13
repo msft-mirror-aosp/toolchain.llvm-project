@@ -27,9 +27,6 @@ struct DTLS;
 
 namespace __memprof {
 
-const u32 kInvalidTid = 0xffffff;          // Must fit into 24 bits.
-const u32 kMaxNumberOfThreads = (1 << 22); // 4M
-
 class MemprofThread;
 
 // These objects are created for every thread and are never deleted,
@@ -37,20 +34,14 @@ class MemprofThread;
 struct MemprofThreadContext final : public ThreadContextBase {
   explicit MemprofThreadContext(int tid)
       : ThreadContextBase(tid), announced(false),
-        destructor_iterations(GetPthreadDestructorIterations()), stack_id(0),
+        destructor_iterations(GetPthreadDestructorIterations()),
         thread(nullptr) {}
   bool announced;
   u8 destructor_iterations;
-  u32 stack_id;
   MemprofThread *thread;
 
   void OnCreated(void *arg) override;
   void OnFinished() override;
-
-  struct CreateThreadContextArgs {
-    MemprofThread *thread;
-    StackTrace *stack;
-  };
 };
 
 // MemprofThreadContext objects are never freed, so we need many of them.

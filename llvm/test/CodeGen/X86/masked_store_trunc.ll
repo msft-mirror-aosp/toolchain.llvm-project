@@ -8,19 +8,17 @@
 ; RUN: llc < %s -mtriple=x86_64-unknown-unknown -mattr=avx512bw | FileCheck %s --check-prefix=AVX512BW
 ; RUN: llc < %s -mtriple=x86_64-unknown-unknown -mattr=avx512vl,avx512bw | FileCheck %s --check-prefixes=AVX512VL,AVX512BWVL
 
-define void @truncstore_v8i64_v8i32(<8 x i64> %x, <8 x i32>* %p, <8 x i32> %mask) {
+define void @truncstore_v8i64_v8i32(<8 x i64> %x, ptr %p, <8 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v8i64_v8i32:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm6, %xmm6
 ; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[0,2],xmm1[0,2]
 ; SSE2-NEXT:    pcmpeqd %xmm6, %xmm5
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm1, %xmm5
 ; SSE2-NEXT:    pcmpeqd %xmm6, %xmm4
-; SSE2-NEXT:    pxor %xmm1, %xmm4
 ; SSE2-NEXT:    packssdw %xmm5, %xmm4
 ; SSE2-NEXT:    packsswb %xmm4, %xmm4
 ; SSE2-NEXT:    pmovmskb %xmm4, %eax
+; SSE2-NEXT:    notl %eax
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    jne .LBB0_1
 ; SSE2-NEXT:  # %bb.2: # %else
@@ -89,13 +87,11 @@ define void @truncstore_v8i64_v8i32(<8 x i64> %x, <8 x i32>* %p, <8 x i32> %mask
 ; SSE4-NEXT:    pxor %xmm6, %xmm6
 ; SSE4-NEXT:    shufps {{.*#+}} xmm0 = xmm0[0,2],xmm1[0,2]
 ; SSE4-NEXT:    pcmpeqd %xmm6, %xmm5
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm1, %xmm5
 ; SSE4-NEXT:    pcmpeqd %xmm6, %xmm4
-; SSE4-NEXT:    pxor %xmm1, %xmm4
 ; SSE4-NEXT:    packssdw %xmm5, %xmm4
 ; SSE4-NEXT:    packsswb %xmm4, %xmm4
 ; SSE4-NEXT:    pmovmskb %xmm4, %eax
+; SSE4-NEXT:    notl %eax
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB0_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -207,33 +203,27 @@ define void @truncstore_v8i64_v8i32(<8 x i64> %x, <8 x i32>* %p, <8 x i32> %mask
 ; AVX512BW-NEXT:    retq
   %a = icmp ne <8 x i32> %mask, zeroinitializer
   %b = trunc <8 x i64> %x to <8 x i32>
-  call void @llvm.masked.store.v8i32.p0v8i32(<8 x i32> %b, <8 x i32>* %p, i32 1, <8 x i1> %a)
+  call void @llvm.masked.store.v8i32.p0(<8 x i32> %b, ptr %p, i32 1, <8 x i1> %a)
   ret void
 }
 
-define void @truncstore_v8i64_v8i16(<8 x i64> %x, <8 x i16>* %p, <8 x i32> %mask) {
+define void @truncstore_v8i64_v8i16(<8 x i64> %x, ptr %p, <8 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v8i64_v8i16:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm6, %xmm6
-; SSE2-NEXT:    pshufd {{.*#+}} xmm1 = xmm1[0,2,2,3]
-; SSE2-NEXT:    pshuflw {{.*#+}} xmm1 = xmm1[0,2,2,3,4,5,6,7]
-; SSE2-NEXT:    pshufd {{.*#+}} xmm0 = xmm0[0,2,2,3]
-; SSE2-NEXT:    pshuflw {{.*#+}} xmm7 = xmm0[0,2,2,3,4,5,6,7]
-; SSE2-NEXT:    punpckldq {{.*#+}} xmm7 = xmm7[0],xmm1[0],xmm7[1],xmm1[1]
-; SSE2-NEXT:    pshufd {{.*#+}} xmm0 = xmm3[0,2,2,3]
-; SSE2-NEXT:    pshuflw {{.*#+}} xmm1 = xmm0[0,1,0,2,4,5,6,7]
-; SSE2-NEXT:    pshufd {{.*#+}} xmm0 = xmm2[0,2,2,3]
-; SSE2-NEXT:    pshuflw {{.*#+}} xmm0 = xmm0[0,1,0,2,4,5,6,7]
-; SSE2-NEXT:    punpckldq {{.*#+}} xmm0 = xmm0[0],xmm1[0],xmm0[1],xmm1[1]
-; SSE2-NEXT:    movsd {{.*#+}} xmm0 = xmm7[0],xmm0[1]
+; SSE2-NEXT:    shufps {{.*#+}} xmm2 = xmm2[0,2],xmm3[0,2]
+; SSE2-NEXT:    pslld $16, %xmm2
+; SSE2-NEXT:    psrad $16, %xmm2
+; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[0,2],xmm1[0,2]
+; SSE2-NEXT:    pslld $16, %xmm0
+; SSE2-NEXT:    psrad $16, %xmm0
+; SSE2-NEXT:    packssdw %xmm2, %xmm0
 ; SSE2-NEXT:    pcmpeqd %xmm6, %xmm5
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm1, %xmm5
 ; SSE2-NEXT:    pcmpeqd %xmm6, %xmm4
-; SSE2-NEXT:    pxor %xmm1, %xmm4
 ; SSE2-NEXT:    packssdw %xmm5, %xmm4
 ; SSE2-NEXT:    packsswb %xmm4, %xmm4
 ; SSE2-NEXT:    pmovmskb %xmm4, %eax
+; SSE2-NEXT:    notl %eax
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    jne .LBB1_1
 ; SSE2-NEXT:  # %bb.2: # %else
@@ -310,13 +300,11 @@ define void @truncstore_v8i64_v8i16(<8 x i64> %x, <8 x i16>* %p, <8 x i32> %mask
 ; SSE4-NEXT:    packusdw %xmm1, %xmm0
 ; SSE4-NEXT:    packusdw %xmm2, %xmm0
 ; SSE4-NEXT:    pcmpeqd %xmm6, %xmm5
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm1, %xmm5
 ; SSE4-NEXT:    pcmpeqd %xmm6, %xmm4
-; SSE4-NEXT:    pxor %xmm1, %xmm4
 ; SSE4-NEXT:    packssdw %xmm5, %xmm4
 ; SSE4-NEXT:    packsswb %xmm4, %xmm4
 ; SSE4-NEXT:    pmovmskb %xmm4, %eax
+; SSE4-NEXT:    notl %eax
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB1_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -376,7 +364,7 @@ define void @truncstore_v8i64_v8i16(<8 x i64> %x, <8 x i16>* %p, <8 x i32> %mask
 ;
 ; AVX1-LABEL: truncstore_v8i64_v8i16:
 ; AVX1:       # %bb.0:
-; AVX1-NEXT:    vmovaps {{.*#+}} ymm3 = [65535,65535,65535,65535]
+; AVX1-NEXT:    vbroadcastsd {{.*#+}} ymm3 = [65535,65535,65535,65535]
 ; AVX1-NEXT:    vandps %ymm3, %ymm1, %ymm1
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm4
 ; AVX1-NEXT:    vpackusdw %xmm4, %xmm1, %xmm1
@@ -453,11 +441,12 @@ define void @truncstore_v8i64_v8i16(<8 x i64> %x, <8 x i16>* %p, <8 x i32> %mask
 ; AVX2-LABEL: truncstore_v8i64_v8i16:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm3, %xmm3, %xmm3
-; AVX2-NEXT:    vperm2f128 {{.*#+}} ymm4 = ymm0[2,3],ymm1[2,3]
-; AVX2-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX2-NEXT:    vshufps {{.*#+}} ymm0 = ymm0[0,2],ymm4[0,2],ymm0[4,6],ymm4[4,6]
-; AVX2-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[0,1,4,5,8,9,12,13,u,u,u,u,u,u,u,u,16,17,20,21,24,25,28,29,u,u,u,u,u,u,u,u]
-; AVX2-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,2,2,3]
+; AVX2-NEXT:    vpblendw {{.*#+}} ymm1 = ymm1[0],ymm3[1,2,3],ymm1[4],ymm3[5,6,7],ymm1[8],ymm3[9,10,11],ymm1[12],ymm3[13,14,15]
+; AVX2-NEXT:    vpblendw {{.*#+}} ymm0 = ymm0[0],ymm3[1,2,3],ymm0[4],ymm3[5,6,7],ymm0[8],ymm3[9,10,11],ymm0[12],ymm3[13,14,15]
+; AVX2-NEXT:    vpackusdw %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm1
+; AVX2-NEXT:    vpackusdw %xmm1, %xmm0, %xmm0
+; AVX2-NEXT:    vpshufd {{.*#+}} xmm0 = xmm0[0,2,1,3]
 ; AVX2-NEXT:    vpcmpeqd %ymm3, %ymm2, %ymm1
 ; AVX2-NEXT:    vmovmskps %ymm1, %eax
 ; AVX2-NEXT:    notl %eax
@@ -601,11 +590,11 @@ define void @truncstore_v8i64_v8i16(<8 x i64> %x, <8 x i16>* %p, <8 x i32> %mask
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <8 x i32> %mask, zeroinitializer
   %b = trunc <8 x i64> %x to <8 x i16>
-  call void @llvm.masked.store.v8i16.p0v8i16(<8 x i16> %b, <8 x i16>* %p, i32 1, <8 x i1> %a)
+  call void @llvm.masked.store.v8i16.p0(<8 x i16> %b, ptr %p, i32 1, <8 x i1> %a)
   ret void
 }
 
-define void @truncstore_v8i64_v8i8(<8 x i64> %x, <8 x i8>* %p, <8 x i32> %mask) {
+define void @truncstore_v8i64_v8i8(<8 x i64> %x, ptr %p, <8 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v8i64_v8i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm6, %xmm6
@@ -619,13 +608,11 @@ define void @truncstore_v8i64_v8i8(<8 x i64> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; SSE2-NEXT:    packuswb %xmm2, %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
 ; SSE2-NEXT:    pcmpeqd %xmm6, %xmm5
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm1, %xmm5
 ; SSE2-NEXT:    pcmpeqd %xmm6, %xmm4
-; SSE2-NEXT:    pxor %xmm1, %xmm4
 ; SSE2-NEXT:    packssdw %xmm5, %xmm4
 ; SSE2-NEXT:    packsswb %xmm4, %xmm4
 ; SSE2-NEXT:    pmovmskb %xmm4, %eax
+; SSE2-NEXT:    notl %eax
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    movd %xmm0, %ecx
 ; SSE2-NEXT:    jne .LBB2_1
@@ -687,7 +674,7 @@ define void @truncstore_v8i64_v8i8(<8 x i64> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; SSE4-LABEL: truncstore_v8i64_v8i8:
 ; SSE4:       # %bb.0:
 ; SSE4-NEXT:    pxor %xmm6, %xmm6
-; SSE4-NEXT:    movdqa {{.*#+}} xmm7 = [255,0,0,0,0,0,0,0,255,0,0,0,0,0,0,0]
+; SSE4-NEXT:    pmovzxbq {{.*#+}} xmm7 = [255,255]
 ; SSE4-NEXT:    pand %xmm7, %xmm3
 ; SSE4-NEXT:    pand %xmm7, %xmm2
 ; SSE4-NEXT:    packusdw %xmm3, %xmm2
@@ -697,13 +684,11 @@ define void @truncstore_v8i64_v8i8(<8 x i64> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; SSE4-NEXT:    packusdw %xmm2, %xmm0
 ; SSE4-NEXT:    packuswb %xmm0, %xmm0
 ; SSE4-NEXT:    pcmpeqd %xmm6, %xmm5
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm1, %xmm5
 ; SSE4-NEXT:    pcmpeqd %xmm6, %xmm4
-; SSE4-NEXT:    pxor %xmm1, %xmm4
 ; SSE4-NEXT:    packssdw %xmm5, %xmm4
 ; SSE4-NEXT:    packsswb %xmm4, %xmm4
 ; SSE4-NEXT:    pmovmskb %xmm4, %eax
+; SSE4-NEXT:    notl %eax
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB2_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -763,7 +748,7 @@ define void @truncstore_v8i64_v8i8(<8 x i64> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ;
 ; AVX1-LABEL: truncstore_v8i64_v8i8:
 ; AVX1:       # %bb.0:
-; AVX1-NEXT:    vmovaps {{.*#+}} ymm3 = [255,255,255,255]
+; AVX1-NEXT:    vbroadcastsd {{.*#+}} ymm3 = [255,255,255,255]
 ; AVX1-NEXT:    vandps %ymm3, %ymm1, %ymm1
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm4
 ; AVX1-NEXT:    vpackusdw %xmm4, %xmm1, %xmm1
@@ -841,17 +826,14 @@ define void @truncstore_v8i64_v8i8(<8 x i64> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; AVX2-LABEL: truncstore_v8i64_v8i8:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm3, %xmm3, %xmm3
-; AVX2-NEXT:    vextracti128 $1, %ymm1, %xmm4
-; AVX2-NEXT:    vmovdqa {{.*#+}} xmm5 = <u,u,0,8,u,u,u,u,u,u,u,u,u,u,u,u>
-; AVX2-NEXT:    vpshufb %xmm5, %xmm4, %xmm4
-; AVX2-NEXT:    vpshufb %xmm5, %xmm1, %xmm1
-; AVX2-NEXT:    vpunpcklwd {{.*#+}} xmm1 = xmm1[0],xmm4[0],xmm1[1],xmm4[1],xmm1[2],xmm4[2],xmm1[3],xmm4[3]
-; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm4
-; AVX2-NEXT:    vmovdqa {{.*#+}} xmm5 = <0,8,u,u,u,u,u,u,u,u,u,u,u,u,u,u>
-; AVX2-NEXT:    vpshufb %xmm5, %xmm4, %xmm4
-; AVX2-NEXT:    vpshufb %xmm5, %xmm0, %xmm0
-; AVX2-NEXT:    vpunpcklwd {{.*#+}} xmm0 = xmm0[0],xmm4[0],xmm0[1],xmm4[1],xmm0[2],xmm4[2],xmm0[3],xmm4[3]
-; AVX2-NEXT:    vpblendd {{.*#+}} xmm0 = xmm0[0],xmm1[1],xmm0[2,3]
+; AVX2-NEXT:    vpbroadcastq {{.*#+}} ymm4 = [255,0,0,0,0,0,0,0,255,0,0,0,0,0,0,0,255,0,0,0,0,0,0,0,255,0,0,0,0,0,0,0]
+; AVX2-NEXT:    vpand %ymm4, %ymm1, %ymm1
+; AVX2-NEXT:    vpand %ymm4, %ymm0, %ymm0
+; AVX2-NEXT:    vpackusdw %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm1
+; AVX2-NEXT:    vpackusdw %xmm1, %xmm0, %xmm0
+; AVX2-NEXT:    vpshufd {{.*#+}} xmm0 = xmm0[0,2,1,3]
+; AVX2-NEXT:    vpackuswb %xmm0, %xmm0, %xmm0
 ; AVX2-NEXT:    vpcmpeqd %ymm3, %ymm2, %ymm1
 ; AVX2-NEXT:    vmovmskps %ymm1, %eax
 ; AVX2-NEXT:    notl %eax
@@ -995,11 +977,11 @@ define void @truncstore_v8i64_v8i8(<8 x i64> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <8 x i32> %mask, zeroinitializer
   %b = trunc <8 x i64> %x to <8 x i8>
-  call void @llvm.masked.store.v8i8.p0v8i8(<8 x i8> %b, <8 x i8>* %p, i32 1, <8 x i1> %a)
+  call void @llvm.masked.store.v8i8.p0(<8 x i8> %b, ptr %p, i32 1, <8 x i1> %a)
   ret void
 }
 
-define void @truncstore_v4i64_v4i32(<4 x i64> %x, <4 x i32>* %p, <4 x i32> %mask) {
+define void @truncstore_v4i64_v4i32(<4 x i64> %x, ptr %p, <4 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v4i64_v4i32:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm3, %xmm3
@@ -1131,21 +1113,20 @@ define void @truncstore_v4i64_v4i32(<4 x i64> %x, <4 x i32>* %p, <4 x i32> %mask
 ; AVX512BW-NEXT:    retq
   %a = icmp ne <4 x i32> %mask, zeroinitializer
   %b = trunc <4 x i64> %x to <4 x i32>
-  call void @llvm.masked.store.v4i32.p0v4i32(<4 x i32> %b, <4 x i32>* %p, i32 1, <4 x i1> %a)
+  call void @llvm.masked.store.v4i32.p0(<4 x i32> %b, ptr %p, i32 1, <4 x i1> %a)
   ret void
 }
 
-define void @truncstore_v4i64_v4i16(<4 x i64> %x, <4 x i16>* %p, <4 x i32> %mask) {
+define void @truncstore_v4i64_v4i16(<4 x i64> %x, ptr %p, <4 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v4i64_v4i16:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm3, %xmm3
-; SSE2-NEXT:    pshufd {{.*#+}} xmm1 = xmm1[0,2,2,3]
-; SSE2-NEXT:    pshuflw {{.*#+}} xmm1 = xmm1[0,2,2,3,4,5,6,7]
-; SSE2-NEXT:    pshufd {{.*#+}} xmm0 = xmm0[0,2,2,3]
-; SSE2-NEXT:    pshuflw {{.*#+}} xmm0 = xmm0[0,2,2,3,4,5,6,7]
-; SSE2-NEXT:    punpckldq {{.*#+}} xmm0 = xmm0[0],xmm1[0],xmm0[1],xmm1[1]
-; SSE2-NEXT:    pcmpeqd %xmm2, %xmm3
-; SSE2-NEXT:    movmskps %xmm3, %eax
+; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[0,2],xmm1[0,2]
+; SSE2-NEXT:    pslld $16, %xmm0
+; SSE2-NEXT:    psrad $16, %xmm0
+; SSE2-NEXT:    packssdw %xmm3, %xmm0
+; SSE2-NEXT:    pcmpeqd %xmm3, %xmm2
+; SSE2-NEXT:    movmskps %xmm2, %eax
 ; SSE2-NEXT:    xorl $15, %eax
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    jne .LBB4_1
@@ -1186,7 +1167,7 @@ define void @truncstore_v4i64_v4i16(<4 x i64> %x, <4 x i16>* %p, <4 x i32> %mask
 ; SSE4-NEXT:    pblendw {{.*#+}} xmm1 = xmm1[0],xmm3[1,2,3],xmm1[4],xmm3[5,6,7]
 ; SSE4-NEXT:    pblendw {{.*#+}} xmm0 = xmm0[0],xmm3[1,2,3],xmm0[4],xmm3[5,6,7]
 ; SSE4-NEXT:    packusdw %xmm1, %xmm0
-; SSE4-NEXT:    packusdw %xmm0, %xmm0
+; SSE4-NEXT:    packusdw %xmm3, %xmm0
 ; SSE4-NEXT:    pcmpeqd %xmm3, %xmm2
 ; SSE4-NEXT:    movmskps %xmm2, %eax
 ; SSE4-NEXT:    xorl $15, %eax
@@ -1264,9 +1245,9 @@ define void @truncstore_v4i64_v4i16(<4 x i64> %x, <4 x i16>* %p, <4 x i32> %mask
 ; AVX2-LABEL: truncstore_v4i64_v4i16:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm2, %xmm2, %xmm2
+; AVX2-NEXT:    vpxor %xmm3, %xmm3, %xmm3
+; AVX2-NEXT:    vpblendw {{.*#+}} ymm0 = ymm0[0],ymm3[1,2,3],ymm0[4],ymm3[5,6,7],ymm0[8],ymm3[9,10,11],ymm0[12],ymm3[13,14,15]
 ; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm3
-; AVX2-NEXT:    vpblendw {{.*#+}} xmm3 = xmm3[0],xmm2[1,2,3],xmm3[4],xmm2[5,6,7]
-; AVX2-NEXT:    vpblendw {{.*#+}} xmm0 = xmm0[0],xmm2[1,2,3],xmm0[4],xmm2[5,6,7]
 ; AVX2-NEXT:    vpackusdw %xmm3, %xmm0, %xmm0
 ; AVX2-NEXT:    vpackusdw %xmm0, %xmm0, %xmm0
 ; AVX2-NEXT:    vpcmpeqd %xmm2, %xmm1, %xmm1
@@ -1361,22 +1342,22 @@ define void @truncstore_v4i64_v4i16(<4 x i64> %x, <4 x i16>* %p, <4 x i32> %mask
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <4 x i32> %mask, zeroinitializer
   %b = trunc <4 x i64> %x to <4 x i16>
-  call void @llvm.masked.store.v4i16.p0v4i16(<4 x i16> %b, <4 x i16>* %p, i32 1, <4 x i1> %a)
+  call void @llvm.masked.store.v4i16.p0(<4 x i16> %b, ptr %p, i32 1, <4 x i1> %a)
   ret void
 }
 
-define void @truncstore_v4i64_v4i8(<4 x i64> %x, <4 x i8>* %p, <4 x i32> %mask) {
+define void @truncstore_v4i64_v4i8(<4 x i64> %x, ptr %p, <4 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v4i64_v4i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm3, %xmm3
-; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [255,0,0,0,255,0,0,0]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [255,0,0,0,0,0,0,0,255,0,0,0,0,0,0,0]
 ; SSE2-NEXT:    pand %xmm4, %xmm1
 ; SSE2-NEXT:    pand %xmm4, %xmm0
 ; SSE2-NEXT:    packuswb %xmm1, %xmm0
-; SSE2-NEXT:    packuswb %xmm0, %xmm0
-; SSE2-NEXT:    packuswb %xmm0, %xmm0
-; SSE2-NEXT:    pcmpeqd %xmm2, %xmm3
-; SSE2-NEXT:    movmskps %xmm3, %ecx
+; SSE2-NEXT:    packuswb %xmm3, %xmm0
+; SSE2-NEXT:    packuswb %xmm3, %xmm0
+; SSE2-NEXT:    pcmpeqd %xmm3, %xmm2
+; SSE2-NEXT:    movmskps %xmm2, %ecx
 ; SSE2-NEXT:    xorl $15, %ecx
 ; SSE2-NEXT:    testb $1, %cl
 ; SSE2-NEXT:    movd %xmm0, %eax
@@ -1414,7 +1395,7 @@ define void @truncstore_v4i64_v4i8(<4 x i64> %x, <4 x i8>* %p, <4 x i32> %mask) 
 ; SSE4-LABEL: truncstore_v4i64_v4i8:
 ; SSE4:       # %bb.0:
 ; SSE4-NEXT:    pxor %xmm3, %xmm3
-; SSE4-NEXT:    movdqa {{.*#+}} xmm4 = <0,8,u,u,u,u,u,u,u,u,u,u,u,u,u,u>
+; SSE4-NEXT:    movd {{.*#+}} xmm4 = [0,8,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
 ; SSE4-NEXT:    pshufb %xmm4, %xmm1
 ; SSE4-NEXT:    pshufb %xmm4, %xmm0
 ; SSE4-NEXT:    punpcklwd {{.*#+}} xmm0 = xmm0[0],xmm1[0],xmm0[1],xmm1[1],xmm0[2],xmm1[2],xmm0[3],xmm1[3]
@@ -1454,7 +1435,7 @@ define void @truncstore_v4i64_v4i8(<4 x i64> %x, <4 x i8>* %p, <4 x i32> %mask) 
 ; AVX1:       # %bb.0:
 ; AVX1-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm3
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm4 = <0,8,u,u,u,u,u,u,u,u,u,u,u,u,u,u>
+; AVX1-NEXT:    vmovd {{.*#+}} xmm4 = [0,8,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
 ; AVX1-NEXT:    vpshufb %xmm4, %xmm3, %xmm3
 ; AVX1-NEXT:    vpshufb %xmm4, %xmm0, %xmm0
 ; AVX1-NEXT:    vpunpcklwd {{.*#+}} xmm0 = xmm0[0],xmm3[0],xmm0[1],xmm3[1],xmm0[2],xmm3[2],xmm0[3],xmm3[3]
@@ -1496,7 +1477,7 @@ define void @truncstore_v4i64_v4i8(<4 x i64> %x, <4 x i8>* %p, <4 x i32> %mask) 
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm3
-; AVX2-NEXT:    vmovdqa {{.*#+}} xmm4 = <0,8,u,u,u,u,u,u,u,u,u,u,u,u,u,u>
+; AVX2-NEXT:    vpbroadcastw {{.*#+}} xmm4 = [0,8,0,8,0,8,0,8,0,8,0,8,0,8,0,8]
 ; AVX2-NEXT:    vpshufb %xmm4, %xmm3, %xmm3
 ; AVX2-NEXT:    vpshufb %xmm4, %xmm0, %xmm0
 ; AVX2-NEXT:    vpunpcklwd {{.*#+}} xmm0 = xmm0[0],xmm3[0],xmm0[1],xmm3[1],xmm0[2],xmm3[2],xmm0[3],xmm3[3]
@@ -1592,11 +1573,11 @@ define void @truncstore_v4i64_v4i8(<4 x i64> %x, <4 x i8>* %p, <4 x i32> %mask) 
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <4 x i32> %mask, zeroinitializer
   %b = trunc <4 x i64> %x to <4 x i8>
-  call void @llvm.masked.store.v4i8.p0v4i8(<4 x i8> %b, <4 x i8>* %p, i32 1, <4 x i1> %a)
+  call void @llvm.masked.store.v4i8.p0(<4 x i8> %b, ptr %p, i32 1, <4 x i1> %a)
   ret void
 }
 
-define void @truncstore_v2i64_v2i32(<2 x i64> %x, <2 x i32>* %p, <2 x i64> %mask) {
+define void @truncstore_v2i64_v2i32(<2 x i64> %x, ptr %p, <2 x i64> %mask) {
 ; SSE2-LABEL: truncstore_v2i64_v2i32:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm2, %xmm2
@@ -1651,7 +1632,7 @@ define void @truncstore_v2i64_v2i32(<2 x i64> %x, <2 x i32>* %p, <2 x i64> %mask
 ; AVX1-NEXT:    vpcmpeqd %xmm2, %xmm2, %xmm2
 ; AVX1-NEXT:    vpxor %xmm2, %xmm1, %xmm1
 ; AVX1-NEXT:    vinsertps {{.*#+}} xmm1 = xmm1[0,2],zero,zero
-; AVX1-NEXT:    vpermilps {{.*#+}} xmm0 = xmm0[0,2,2,3]
+; AVX1-NEXT:    vshufps {{.*#+}} xmm0 = xmm0[0,2,2,3]
 ; AVX1-NEXT:    vmaskmovps %xmm0, %xmm1, (%rdi)
 ; AVX1-NEXT:    retq
 ;
@@ -1695,11 +1676,11 @@ define void @truncstore_v2i64_v2i32(<2 x i64> %x, <2 x i32>* %p, <2 x i64> %mask
 ; AVX512BW-NEXT:    retq
   %a = icmp ne <2 x i64> %mask, zeroinitializer
   %b = trunc <2 x i64> %x to <2 x i32>
-  call void @llvm.masked.store.v2i32.p0v2i32(<2 x i32> %b, <2 x i32>* %p, i32 1, <2 x i1> %a)
+  call void @llvm.masked.store.v2i32.p0(<2 x i32> %b, ptr %p, i32 1, <2 x i1> %a)
   ret void
 }
 
-define void @truncstore_v2i64_v2i16(<2 x i64> %x, <2 x i16>* %p, <2 x i64> %mask) {
+define void @truncstore_v2i64_v2i16(<2 x i64> %x, ptr %p, <2 x i64> %mask) {
 ; SSE2-LABEL: truncstore_v2i64_v2i16:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm2, %xmm2
@@ -1816,15 +1797,15 @@ define void @truncstore_v2i64_v2i16(<2 x i64> %x, <2 x i16>* %p, <2 x i64> %mask
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <2 x i64> %mask, zeroinitializer
   %b = trunc <2 x i64> %x to <2 x i16>
-  call void @llvm.masked.store.v2i16.p0v2i16(<2 x i16> %b, <2 x i16>* %p, i32 1, <2 x i1> %a)
+  call void @llvm.masked.store.v2i16.p0(<2 x i16> %b, ptr %p, i32 1, <2 x i1> %a)
   ret void
 }
 
-define void @truncstore_v2i64_v2i8(<2 x i64> %x, <2 x i8>* %p, <2 x i64> %mask) {
+define void @truncstore_v2i64_v2i8(<2 x i64> %x, ptr %p, <2 x i64> %mask) {
 ; SSE2-LABEL: truncstore_v2i64_v2i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm2, %xmm2
-; SSE2-NEXT:    pand {{.*}}(%rip), %xmm0
+; SSE2-NEXT:    pand {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
@@ -1934,11 +1915,11 @@ define void @truncstore_v2i64_v2i8(<2 x i64> %x, <2 x i8>* %p, <2 x i64> %mask) 
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <2 x i64> %mask, zeroinitializer
   %b = trunc <2 x i64> %x to <2 x i8>
-  call void @llvm.masked.store.v2i8.p0v2i8(<2 x i8> %b, <2 x i8>* %p, i32 1, <2 x i1> %a)
+  call void @llvm.masked.store.v2i8.p0(<2 x i8> %b, ptr %p, i32 1, <2 x i1> %a)
   ret void
 }
 
-define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> %mask) {
+define void @truncstore_v16i32_v16i16(<16 x i32> %x, ptr %p, <16 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v16i32_v16i16:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm8, %xmm8
@@ -1948,18 +1929,14 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; SSE2-NEXT:    psrad $16, %xmm0
 ; SSE2-NEXT:    packssdw %xmm1, %xmm0
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm7
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm1, %xmm7
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm6
-; SSE2-NEXT:    pxor %xmm1, %xmm6
 ; SSE2-NEXT:    packssdw %xmm7, %xmm6
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm5
-; SSE2-NEXT:    pxor %xmm1, %xmm5
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm4
-; SSE2-NEXT:    pxor %xmm1, %xmm4
 ; SSE2-NEXT:    packssdw %xmm5, %xmm4
 ; SSE2-NEXT:    packsswb %xmm6, %xmm4
 ; SSE2-NEXT:    pmovmskb %xmm4, %eax
+; SSE2-NEXT:    xorl $65535, %eax # imm = 0xFFFF
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    jne .LBB9_1
 ; SSE2-NEXT:  # %bb.2: # %else
@@ -1991,8 +1968,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; SSE2-NEXT:  .LBB9_14: # %else12
 ; SSE2-NEXT:    psrad $16, %xmm3
 ; SSE2-NEXT:    psrad $16, %xmm2
-; SSE2-NEXT:    testb $-128, %al
-; SSE2-NEXT:    je .LBB9_16
+; SSE2-NEXT:    testb %al, %al
+; SSE2-NEXT:    jns .LBB9_16
 ; SSE2-NEXT:  # %bb.15: # %cond.store13
 ; SSE2-NEXT:    pextrw $7, %xmm0, %ecx
 ; SSE2-NEXT:    movw %cx, 14(%rdi)
@@ -2096,18 +2073,14 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; SSE4-NEXT:    pblendw {{.*#+}} xmm0 = xmm0[0],xmm8[1],xmm0[2],xmm8[3],xmm0[4],xmm8[5],xmm0[6],xmm8[7]
 ; SSE4-NEXT:    packusdw %xmm1, %xmm0
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm7
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm1, %xmm7
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm6
-; SSE4-NEXT:    pxor %xmm1, %xmm6
 ; SSE4-NEXT:    packssdw %xmm7, %xmm6
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm5
-; SSE4-NEXT:    pxor %xmm1, %xmm5
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm4
-; SSE4-NEXT:    pxor %xmm1, %xmm4
 ; SSE4-NEXT:    packssdw %xmm5, %xmm4
 ; SSE4-NEXT:    packsswb %xmm6, %xmm4
 ; SSE4-NEXT:    pmovmskb %xmm4, %eax
+; SSE4-NEXT:    xorl $65535, %eax # imm = 0xFFFF
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB9_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -2133,8 +2106,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; SSE4-NEXT:  .LBB9_14: # %else12
 ; SSE4-NEXT:    pblendw {{.*#+}} xmm3 = xmm3[0],xmm8[1],xmm3[2],xmm8[3],xmm3[4],xmm8[5],xmm3[6],xmm8[7]
 ; SSE4-NEXT:    pblendw {{.*#+}} xmm2 = xmm2[0],xmm8[1],xmm2[2],xmm8[3],xmm2[4],xmm8[5],xmm2[6],xmm8[7]
-; SSE4-NEXT:    testb $-128, %al
-; SSE4-NEXT:    je .LBB9_16
+; SSE4-NEXT:    testb %al, %al
+; SSE4-NEXT:    jns .LBB9_16
 ; SSE4-NEXT:  # %bb.15: # %cond.store13
 ; SSE4-NEXT:    pextrw $7, %xmm0, 14(%rdi)
 ; SSE4-NEXT:  .LBB9_16: # %else14
@@ -2223,7 +2196,7 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ;
 ; AVX1-LABEL: truncstore_v16i32_v16i16:
 ; AVX1:       # %bb.0:
-; AVX1-NEXT:    vmovaps {{.*#+}} ymm4 = [65535,65535,65535,65535,65535,65535,65535,65535]
+; AVX1-NEXT:    vbroadcastss {{.*#+}} ymm4 = [65535,65535,65535,65535,65535,65535,65535,65535]
 ; AVX1-NEXT:    vandps %ymm4, %ymm1, %ymm1
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm5
 ; AVX1-NEXT:    vpackusdw %xmm5, %xmm1, %xmm1
@@ -2234,19 +2207,15 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX1-NEXT:    vextractf128 $1, %ymm3, %xmm1
 ; AVX1-NEXT:    vpxor %xmm4, %xmm4, %xmm4
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm1, %xmm1
-; AVX1-NEXT:    vpcmpeqd %xmm5, %xmm5, %xmm5
-; AVX1-NEXT:    vpxor %xmm5, %xmm1, %xmm1
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm3, %xmm3
-; AVX1-NEXT:    vpxor %xmm5, %xmm3, %xmm3
 ; AVX1-NEXT:    vpackssdw %xmm1, %xmm3, %xmm1
 ; AVX1-NEXT:    vextractf128 $1, %ymm2, %xmm3
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm3, %xmm3
-; AVX1-NEXT:    vpxor %xmm5, %xmm3, %xmm3
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm2, %xmm2
-; AVX1-NEXT:    vpxor %xmm5, %xmm2, %xmm2
 ; AVX1-NEXT:    vpackssdw %xmm3, %xmm2, %xmm2
 ; AVX1-NEXT:    vpacksswb %xmm1, %xmm2, %xmm1
 ; AVX1-NEXT:    vpmovmskb %xmm1, %eax
+; AVX1-NEXT:    xorl $65535, %eax # imm = 0xFFFF
 ; AVX1-NEXT:    testb $1, %al
 ; AVX1-NEXT:    jne .LBB9_1
 ; AVX1-NEXT:  # %bb.2: # %else
@@ -2268,8 +2237,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX1-NEXT:    testb $64, %al
 ; AVX1-NEXT:    jne .LBB9_13
 ; AVX1-NEXT:  .LBB9_14: # %else12
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    je .LBB9_16
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    jns .LBB9_16
 ; AVX1-NEXT:  .LBB9_15: # %cond.store13
 ; AVX1-NEXT:    vpextrw $7, %xmm0, 14(%rdi)
 ; AVX1-NEXT:  .LBB9_16: # %else14
@@ -2326,8 +2295,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX1-NEXT:    je .LBB9_14
 ; AVX1-NEXT:  .LBB9_13: # %cond.store11
 ; AVX1-NEXT:    vpextrw $6, %xmm0, 12(%rdi)
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    jne .LBB9_15
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    js .LBB9_15
 ; AVX1-NEXT:    jmp .LBB9_16
 ; AVX1-NEXT:  .LBB9_17: # %cond.store15
 ; AVX1-NEXT:    vpextrw $0, %xmm0, 16(%rdi)
@@ -2365,18 +2334,15 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX2-LABEL: truncstore_v16i32_v16i16:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm4, %xmm4, %xmm4
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm5 = [0,1,4,5,8,9,12,13,8,9,12,13,12,13,14,15,16,17,20,21,24,25,28,29,24,25,28,29,28,29,30,31]
-; AVX2-NEXT:    vpshufb %ymm5, %ymm0, %ymm0
-; AVX2-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,2,2,3]
-; AVX2-NEXT:    vpshufb %ymm5, %ymm1, %ymm1
-; AVX2-NEXT:    vpermq {{.*#+}} ymm1 = ymm1[0,2,2,3]
-; AVX2-NEXT:    vinserti128 $1, %xmm1, %ymm0, %ymm0
+; AVX2-NEXT:    vpblendw {{.*#+}} ymm1 = ymm1[0],ymm4[1],ymm1[2],ymm4[3],ymm1[4],ymm4[5],ymm1[6],ymm4[7],ymm1[8],ymm4[9],ymm1[10],ymm4[11],ymm1[12],ymm4[13],ymm1[14],ymm4[15]
+; AVX2-NEXT:    vpblendw {{.*#+}} ymm0 = ymm0[0],ymm4[1],ymm0[2],ymm4[3],ymm0[4],ymm4[5],ymm0[6],ymm4[7],ymm0[8],ymm4[9],ymm0[10],ymm4[11],ymm0[12],ymm4[13],ymm0[14],ymm4[15]
+; AVX2-NEXT:    vpackusdw %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,2,1,3]
 ; AVX2-NEXT:    vpcmpeqd %ymm4, %ymm3, %ymm1
-; AVX2-NEXT:    vpcmpeqd %ymm3, %ymm3, %ymm3
-; AVX2-NEXT:    vpxor %ymm3, %ymm1, %ymm1
 ; AVX2-NEXT:    vpcmpeqd %ymm4, %ymm2, %ymm2
-; AVX2-NEXT:    vpxor %ymm3, %ymm2, %ymm2
 ; AVX2-NEXT:    vpackssdw %ymm1, %ymm2, %ymm1
+; AVX2-NEXT:    vpcmpeqd %ymm2, %ymm2, %ymm2
+; AVX2-NEXT:    vpxor %ymm2, %ymm1, %ymm1
 ; AVX2-NEXT:    vextracti128 $1, %ymm1, %xmm2
 ; AVX2-NEXT:    vpacksswb %xmm2, %xmm1, %xmm1
 ; AVX2-NEXT:    vpshufd {{.*#+}} xmm1 = xmm1[0,2,1,3]
@@ -2402,8 +2368,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX2-NEXT:    testb $64, %al
 ; AVX2-NEXT:    jne .LBB9_13
 ; AVX2-NEXT:  .LBB9_14: # %else12
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    je .LBB9_16
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    jns .LBB9_16
 ; AVX2-NEXT:  .LBB9_15: # %cond.store13
 ; AVX2-NEXT:    vpextrw $7, %xmm0, 14(%rdi)
 ; AVX2-NEXT:  .LBB9_16: # %else14
@@ -2460,8 +2426,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX2-NEXT:    je .LBB9_14
 ; AVX2-NEXT:  .LBB9_13: # %cond.store11
 ; AVX2-NEXT:    vpextrw $6, %xmm0, 12(%rdi)
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    jne .LBB9_15
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    js .LBB9_15
 ; AVX2-NEXT:    jmp .LBB9_16
 ; AVX2-NEXT:  .LBB9_17: # %cond.store15
 ; AVX2-NEXT:    vpextrw $0, %xmm0, 16(%rdi)
@@ -2522,8 +2488,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX512F-NEXT:    testb $64, %al
 ; AVX512F-NEXT:    jne .LBB9_13
 ; AVX512F-NEXT:  .LBB9_14: # %else12
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    je .LBB9_16
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    jns .LBB9_16
 ; AVX512F-NEXT:  .LBB9_15: # %cond.store13
 ; AVX512F-NEXT:    vpextrw $7, %xmm0, 14(%rdi)
 ; AVX512F-NEXT:  .LBB9_16: # %else14
@@ -2580,8 +2546,8 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX512F-NEXT:    je .LBB9_14
 ; AVX512F-NEXT:  .LBB9_13: # %cond.store11
 ; AVX512F-NEXT:    vpextrw $6, %xmm0, 12(%rdi)
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    jne .LBB9_15
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    js .LBB9_15
 ; AVX512F-NEXT:    jmp .LBB9_16
 ; AVX512F-NEXT:  .LBB9_17: # %cond.store15
 ; AVX512F-NEXT:    vpextrw $0, %xmm0, 16(%rdi)
@@ -2631,11 +2597,11 @@ define void @truncstore_v16i32_v16i16(<16 x i32> %x, <16 x i16>* %p, <16 x i32> 
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <16 x i32> %mask, zeroinitializer
   %b = trunc <16 x i32> %x to <16 x i16>
-  call void @llvm.masked.store.v16i16.p0v16i16(<16 x i16> %b, <16 x i16>* %p, i32 1, <16 x i1> %a)
+  call void @llvm.masked.store.v16i16.p0(<16 x i16> %b, ptr %p, i32 1, <16 x i1> %a)
   ret void
 }
 
-define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %mask) {
+define void @truncstore_v16i32_v16i8(<16 x i32> %x, ptr %p, <16 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v16i32_v16i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm8, %xmm8
@@ -2648,18 +2614,14 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; SSE2-NEXT:    packuswb %xmm1, %xmm0
 ; SSE2-NEXT:    packuswb %xmm2, %xmm0
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm7
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm1, %xmm7
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm6
-; SSE2-NEXT:    pxor %xmm1, %xmm6
 ; SSE2-NEXT:    packssdw %xmm7, %xmm6
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm5
-; SSE2-NEXT:    pxor %xmm1, %xmm5
 ; SSE2-NEXT:    pcmpeqd %xmm8, %xmm4
-; SSE2-NEXT:    pxor %xmm1, %xmm4
 ; SSE2-NEXT:    packssdw %xmm5, %xmm4
 ; SSE2-NEXT:    packsswb %xmm6, %xmm4
 ; SSE2-NEXT:    pmovmskb %xmm4, %eax
+; SSE2-NEXT:    xorl $65535, %eax # imm = 0xFFFF
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    movd %xmm0, %ecx
 ; SSE2-NEXT:    jne .LBB10_1
@@ -2693,8 +2655,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; SSE2-NEXT:  # %bb.13: # %cond.store11
 ; SSE2-NEXT:    movb %cl, 6(%rdi)
 ; SSE2-NEXT:  .LBB10_14: # %else12
-; SSE2-NEXT:    testb $-128, %al
-; SSE2-NEXT:    je .LBB10_16
+; SSE2-NEXT:    testb %al, %al
+; SSE2-NEXT:    jns .LBB10_16
 ; SSE2-NEXT:  # %bb.15: # %cond.store13
 ; SSE2-NEXT:    movb %ch, 7(%rdi)
 ; SSE2-NEXT:  .LBB10_16: # %else14
@@ -2765,7 +2727,7 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; SSE4-LABEL: truncstore_v16i32_v16i8:
 ; SSE4:       # %bb.0:
 ; SSE4-NEXT:    pxor %xmm8, %xmm8
-; SSE4-NEXT:    movdqa {{.*#+}} xmm9 = [255,0,0,0,255,0,0,0,255,0,0,0,255,0,0,0]
+; SSE4-NEXT:    pmovzxbd {{.*#+}} xmm9 = [255,255,255,255]
 ; SSE4-NEXT:    pand %xmm9, %xmm3
 ; SSE4-NEXT:    pand %xmm9, %xmm2
 ; SSE4-NEXT:    packusdw %xmm3, %xmm2
@@ -2774,18 +2736,14 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; SSE4-NEXT:    packusdw %xmm1, %xmm0
 ; SSE4-NEXT:    packuswb %xmm2, %xmm0
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm7
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm1, %xmm7
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm6
-; SSE4-NEXT:    pxor %xmm1, %xmm6
 ; SSE4-NEXT:    packssdw %xmm7, %xmm6
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm5
-; SSE4-NEXT:    pxor %xmm1, %xmm5
 ; SSE4-NEXT:    pcmpeqd %xmm8, %xmm4
-; SSE4-NEXT:    pxor %xmm1, %xmm4
 ; SSE4-NEXT:    packssdw %xmm5, %xmm4
 ; SSE4-NEXT:    packsswb %xmm6, %xmm4
 ; SSE4-NEXT:    pmovmskb %xmm4, %eax
+; SSE4-NEXT:    xorl $65535, %eax # imm = 0xFFFF
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB10_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -2807,8 +2765,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; SSE4-NEXT:    testb $64, %al
 ; SSE4-NEXT:    jne .LBB10_13
 ; SSE4-NEXT:  .LBB10_14: # %else12
-; SSE4-NEXT:    testb $-128, %al
-; SSE4-NEXT:    jne .LBB10_15
+; SSE4-NEXT:    testb %al, %al
+; SSE4-NEXT:    js .LBB10_15
 ; SSE4-NEXT:  .LBB10_16: # %else14
 ; SSE4-NEXT:    testl $256, %eax # imm = 0x100
 ; SSE4-NEXT:    jne .LBB10_17
@@ -2861,8 +2819,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; SSE4-NEXT:    je .LBB10_14
 ; SSE4-NEXT:  .LBB10_13: # %cond.store11
 ; SSE4-NEXT:    pextrb $6, %xmm0, 6(%rdi)
-; SSE4-NEXT:    testb $-128, %al
-; SSE4-NEXT:    je .LBB10_16
+; SSE4-NEXT:    testb %al, %al
+; SSE4-NEXT:    jns .LBB10_16
 ; SSE4-NEXT:  .LBB10_15: # %cond.store13
 ; SSE4-NEXT:    pextrb $7, %xmm0, 7(%rdi)
 ; SSE4-NEXT:    testl $256, %eax # imm = 0x100
@@ -2901,7 +2859,7 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ;
 ; AVX1-LABEL: truncstore_v16i32_v16i8:
 ; AVX1:       # %bb.0:
-; AVX1-NEXT:    vmovaps {{.*#+}} ymm4 = [255,255,255,255,255,255,255,255]
+; AVX1-NEXT:    vbroadcastss {{.*#+}} ymm4 = [255,255,255,255,255,255,255,255]
 ; AVX1-NEXT:    vandps %ymm4, %ymm1, %ymm1
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm5
 ; AVX1-NEXT:    vpackusdw %xmm5, %xmm1, %xmm1
@@ -2912,19 +2870,15 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX1-NEXT:    vextractf128 $1, %ymm3, %xmm1
 ; AVX1-NEXT:    vpxor %xmm4, %xmm4, %xmm4
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm1, %xmm1
-; AVX1-NEXT:    vpcmpeqd %xmm5, %xmm5, %xmm5
-; AVX1-NEXT:    vpxor %xmm5, %xmm1, %xmm1
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm3, %xmm3
-; AVX1-NEXT:    vpxor %xmm5, %xmm3, %xmm3
 ; AVX1-NEXT:    vpackssdw %xmm1, %xmm3, %xmm1
 ; AVX1-NEXT:    vextractf128 $1, %ymm2, %xmm3
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm3, %xmm3
-; AVX1-NEXT:    vpxor %xmm5, %xmm3, %xmm3
 ; AVX1-NEXT:    vpcmpeqd %xmm4, %xmm2, %xmm2
-; AVX1-NEXT:    vpxor %xmm5, %xmm2, %xmm2
 ; AVX1-NEXT:    vpackssdw %xmm3, %xmm2, %xmm2
 ; AVX1-NEXT:    vpacksswb %xmm1, %xmm2, %xmm1
 ; AVX1-NEXT:    vpmovmskb %xmm1, %eax
+; AVX1-NEXT:    xorl $65535, %eax # imm = 0xFFFF
 ; AVX1-NEXT:    testb $1, %al
 ; AVX1-NEXT:    jne .LBB10_1
 ; AVX1-NEXT:  # %bb.2: # %else
@@ -2946,8 +2900,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX1-NEXT:    testb $64, %al
 ; AVX1-NEXT:    jne .LBB10_13
 ; AVX1-NEXT:  .LBB10_14: # %else12
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    jne .LBB10_15
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    js .LBB10_15
 ; AVX1-NEXT:  .LBB10_16: # %else14
 ; AVX1-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX1-NEXT:    jne .LBB10_17
@@ -3001,8 +2955,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX1-NEXT:    je .LBB10_14
 ; AVX1-NEXT:  .LBB10_13: # %cond.store11
 ; AVX1-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    je .LBB10_16
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    jns .LBB10_16
 ; AVX1-NEXT:  .LBB10_15: # %cond.store13
 ; AVX1-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX1-NEXT:    testl $256, %eax # imm = 0x100
@@ -3043,21 +2997,18 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX2-LABEL: truncstore_v16i32_v16i8:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm4, %xmm4, %xmm4
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm5 = [0,1,4,5,8,9,12,13,8,9,12,13,12,13,14,15,16,17,20,21,24,25,28,29,24,25,28,29,28,29,30,31]
-; AVX2-NEXT:    vpshufb %ymm5, %ymm1, %ymm1
-; AVX2-NEXT:    vpermq {{.*#+}} ymm1 = ymm1[0,2,2,3]
-; AVX2-NEXT:    vmovdqa {{.*#+}} xmm6 = [255,255,255,255,255,255,255,255]
-; AVX2-NEXT:    vpand %xmm6, %xmm1, %xmm1
-; AVX2-NEXT:    vpshufb %ymm5, %ymm0, %ymm0
-; AVX2-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,2,2,3]
-; AVX2-NEXT:    vpand %xmm6, %xmm0, %xmm0
+; AVX2-NEXT:    vpbroadcastd {{.*#+}} ymm5 = [255,0,0,0,255,0,0,0,255,0,0,0,255,0,0,0,255,0,0,0,255,0,0,0,255,0,0,0,255,0,0,0]
+; AVX2-NEXT:    vpand %ymm5, %ymm1, %ymm1
+; AVX2-NEXT:    vpand %ymm5, %ymm0, %ymm0
+; AVX2-NEXT:    vpackusdw %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm1
 ; AVX2-NEXT:    vpackuswb %xmm1, %xmm0, %xmm0
+; AVX2-NEXT:    vpshufd {{.*#+}} xmm0 = xmm0[0,2,1,3]
 ; AVX2-NEXT:    vpcmpeqd %ymm4, %ymm3, %ymm1
-; AVX2-NEXT:    vpcmpeqd %ymm3, %ymm3, %ymm3
-; AVX2-NEXT:    vpxor %ymm3, %ymm1, %ymm1
 ; AVX2-NEXT:    vpcmpeqd %ymm4, %ymm2, %ymm2
-; AVX2-NEXT:    vpxor %ymm3, %ymm2, %ymm2
 ; AVX2-NEXT:    vpackssdw %ymm1, %ymm2, %ymm1
+; AVX2-NEXT:    vpcmpeqd %ymm2, %ymm2, %ymm2
+; AVX2-NEXT:    vpxor %ymm2, %ymm1, %ymm1
 ; AVX2-NEXT:    vextracti128 $1, %ymm1, %xmm2
 ; AVX2-NEXT:    vpacksswb %xmm2, %xmm1, %xmm1
 ; AVX2-NEXT:    vpshufd {{.*#+}} xmm1 = xmm1[0,2,1,3]
@@ -3083,8 +3034,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX2-NEXT:    testb $64, %al
 ; AVX2-NEXT:    jne .LBB10_13
 ; AVX2-NEXT:  .LBB10_14: # %else12
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    jne .LBB10_15
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    js .LBB10_15
 ; AVX2-NEXT:  .LBB10_16: # %else14
 ; AVX2-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX2-NEXT:    jne .LBB10_17
@@ -3138,8 +3089,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX2-NEXT:    je .LBB10_14
 ; AVX2-NEXT:  .LBB10_13: # %cond.store11
 ; AVX2-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    je .LBB10_16
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    jns .LBB10_16
 ; AVX2-NEXT:  .LBB10_15: # %cond.store13
 ; AVX2-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX2-NEXT:    testl $256, %eax # imm = 0x100
@@ -3203,8 +3154,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX512F-NEXT:    testb $64, %al
 ; AVX512F-NEXT:    jne .LBB10_13
 ; AVX512F-NEXT:  .LBB10_14: # %else12
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    jne .LBB10_15
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    js .LBB10_15
 ; AVX512F-NEXT:  .LBB10_16: # %else14
 ; AVX512F-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX512F-NEXT:    jne .LBB10_17
@@ -3258,8 +3209,8 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX512F-NEXT:    je .LBB10_14
 ; AVX512F-NEXT:  .LBB10_13: # %cond.store11
 ; AVX512F-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    je .LBB10_16
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    jns .LBB10_16
 ; AVX512F-NEXT:  .LBB10_15: # %cond.store13
 ; AVX512F-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX512F-NEXT:    testl $256, %eax # imm = 0x100
@@ -3312,11 +3263,11 @@ define void @truncstore_v16i32_v16i8(<16 x i32> %x, <16 x i8>* %p, <16 x i32> %m
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <16 x i32> %mask, zeroinitializer
   %b = trunc <16 x i32> %x to <16 x i8>
-  call void @llvm.masked.store.v16i8.p0v16i8(<16 x i8> %b, <16 x i8>* %p, i32 1, <16 x i1> %a)
+  call void @llvm.masked.store.v16i8.p0(<16 x i8> %b, ptr %p, i32 1, <16 x i1> %a)
   ret void
 }
 
-define void @truncstore_v8i32_v8i16(<8 x i32> %x, <8 x i16>* %p, <8 x i32> %mask) {
+define void @truncstore_v8i32_v8i16(<8 x i32> %x, ptr %p, <8 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v8i32_v8i16:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm4, %xmm4
@@ -3326,13 +3277,11 @@ define void @truncstore_v8i32_v8i16(<8 x i32> %x, <8 x i16>* %p, <8 x i32> %mask
 ; SSE2-NEXT:    psrad $16, %xmm0
 ; SSE2-NEXT:    packssdw %xmm1, %xmm0
 ; SSE2-NEXT:    pcmpeqd %xmm4, %xmm3
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm1, %xmm3
 ; SSE2-NEXT:    pcmpeqd %xmm4, %xmm2
-; SSE2-NEXT:    pxor %xmm1, %xmm2
 ; SSE2-NEXT:    packssdw %xmm3, %xmm2
 ; SSE2-NEXT:    packsswb %xmm2, %xmm2
 ; SSE2-NEXT:    pmovmskb %xmm2, %eax
+; SSE2-NEXT:    notl %eax
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    jne .LBB11_1
 ; SSE2-NEXT:  # %bb.2: # %else
@@ -3405,13 +3354,11 @@ define void @truncstore_v8i32_v8i16(<8 x i32> %x, <8 x i16>* %p, <8 x i32> %mask
 ; SSE4-NEXT:    pblendw {{.*#+}} xmm0 = xmm0[0],xmm4[1],xmm0[2],xmm4[3],xmm0[4],xmm4[5],xmm0[6],xmm4[7]
 ; SSE4-NEXT:    packusdw %xmm1, %xmm0
 ; SSE4-NEXT:    pcmpeqd %xmm4, %xmm3
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm1, %xmm3
 ; SSE4-NEXT:    pcmpeqd %xmm4, %xmm2
-; SSE4-NEXT:    pxor %xmm1, %xmm2
 ; SSE4-NEXT:    packssdw %xmm3, %xmm2
 ; SSE4-NEXT:    packsswb %xmm2, %xmm2
 ; SSE4-NEXT:    pmovmskb %xmm2, %eax
+; SSE4-NEXT:    notl %eax
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB11_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -3471,11 +3418,9 @@ define void @truncstore_v8i32_v8i16(<8 x i32> %x, <8 x i16>* %p, <8 x i32> %mask
 ;
 ; AVX1-LABEL: truncstore_v8i32_v8i16:
 ; AVX1:       # %bb.0:
+; AVX1-NEXT:    vandps {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %ymm0, %ymm0
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm2
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm3 = <0,1,4,5,8,9,12,13,u,u,u,u,u,u,u,u>
-; AVX1-NEXT:    vpshufb %xmm3, %xmm2, %xmm2
-; AVX1-NEXT:    vpshufb %xmm3, %xmm0, %xmm0
-; AVX1-NEXT:    vpunpcklqdq {{.*#+}} xmm0 = xmm0[0],xmm2[0]
+; AVX1-NEXT:    vpackusdw %xmm2, %xmm0, %xmm0
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm2
 ; AVX1-NEXT:    vpxor %xmm3, %xmm3, %xmm3
 ; AVX1-NEXT:    vpcmpeqd %xmm3, %xmm2, %xmm2
@@ -3695,11 +3640,11 @@ define void @truncstore_v8i32_v8i16(<8 x i32> %x, <8 x i16>* %p, <8 x i32> %mask
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <8 x i32> %mask, zeroinitializer
   %b = trunc <8 x i32> %x to <8 x i16>
-  call void @llvm.masked.store.v8i16.p0v8i16(<8 x i16> %b, <8 x i16>* %p, i32 1, <8 x i1> %a)
+  call void @llvm.masked.store.v8i16.p0(<8 x i16> %b, ptr %p, i32 1, <8 x i1> %a)
   ret void
 }
 
-define void @truncstore_v8i32_v8i8(<8 x i32> %x, <8 x i8>* %p, <8 x i32> %mask) {
+define void @truncstore_v8i32_v8i8(<8 x i32> %x, ptr %p, <8 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v8i32_v8i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm4, %xmm4
@@ -3709,13 +3654,11 @@ define void @truncstore_v8i32_v8i8(<8 x i32> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; SSE2-NEXT:    packuswb %xmm1, %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
 ; SSE2-NEXT:    pcmpeqd %xmm4, %xmm3
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm1, %xmm3
 ; SSE2-NEXT:    pcmpeqd %xmm4, %xmm2
-; SSE2-NEXT:    pxor %xmm1, %xmm2
 ; SSE2-NEXT:    packssdw %xmm3, %xmm2
 ; SSE2-NEXT:    packsswb %xmm2, %xmm2
 ; SSE2-NEXT:    pmovmskb %xmm2, %eax
+; SSE2-NEXT:    notl %eax
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    movd %xmm0, %ecx
 ; SSE2-NEXT:    jne .LBB12_1
@@ -3777,18 +3720,17 @@ define void @truncstore_v8i32_v8i8(<8 x i32> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; SSE4-LABEL: truncstore_v8i32_v8i8:
 ; SSE4:       # %bb.0:
 ; SSE4-NEXT:    pxor %xmm4, %xmm4
-; SSE4-NEXT:    movdqa {{.*#+}} xmm5 = <0,4,8,12,u,u,u,u,u,u,u,u,u,u,u,u>
-; SSE4-NEXT:    pshufb %xmm5, %xmm1
-; SSE4-NEXT:    pshufb %xmm5, %xmm0
-; SSE4-NEXT:    punpckldq {{.*#+}} xmm0 = xmm0[0],xmm1[0],xmm0[1],xmm1[1]
+; SSE4-NEXT:    pmovzxbd {{.*#+}} xmm5 = [255,255,255,255]
+; SSE4-NEXT:    pand %xmm5, %xmm1
+; SSE4-NEXT:    pand %xmm5, %xmm0
+; SSE4-NEXT:    packusdw %xmm1, %xmm0
+; SSE4-NEXT:    packuswb %xmm4, %xmm0
 ; SSE4-NEXT:    pcmpeqd %xmm4, %xmm3
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm1, %xmm3
 ; SSE4-NEXT:    pcmpeqd %xmm4, %xmm2
-; SSE4-NEXT:    pxor %xmm1, %xmm2
 ; SSE4-NEXT:    packssdw %xmm3, %xmm2
 ; SSE4-NEXT:    packsswb %xmm2, %xmm2
 ; SSE4-NEXT:    pmovmskb %xmm2, %eax
+; SSE4-NEXT:    notl %eax
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB12_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -3849,7 +3791,7 @@ define void @truncstore_v8i32_v8i8(<8 x i32> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; AVX1-LABEL: truncstore_v8i32_v8i8:
 ; AVX1:       # %bb.0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm2
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm3 = <0,4,8,12,u,u,u,u,u,u,u,u,u,u,u,u>
+; AVX1-NEXT:    vmovd {{.*#+}} xmm3 = [0,4,8,12,0,0,0,0,0,0,0,0,0,0,0,0]
 ; AVX1-NEXT:    vpshufb %xmm3, %xmm2, %xmm2
 ; AVX1-NEXT:    vpshufb %xmm3, %xmm0, %xmm0
 ; AVX1-NEXT:    vpunpckldq {{.*#+}} xmm0 = xmm0[0],xmm2[0],xmm0[1],xmm2[1]
@@ -3923,7 +3865,7 @@ define void @truncstore_v8i32_v8i8(<8 x i32> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm3
-; AVX2-NEXT:    vmovdqa {{.*#+}} xmm4 = <0,4,8,12,u,u,u,u,u,u,u,u,u,u,u,u>
+; AVX2-NEXT:    vmovd {{.*#+}} xmm4 = [0,4,8,12,0,0,0,0,0,0,0,0,0,0,0,0]
 ; AVX2-NEXT:    vpshufb %xmm4, %xmm3, %xmm3
 ; AVX2-NEXT:    vpshufb %xmm4, %xmm0, %xmm0
 ; AVX2-NEXT:    vpunpckldq {{.*#+}} xmm0 = xmm0[0],xmm3[0],xmm0[1],xmm3[1]
@@ -4075,11 +4017,11 @@ define void @truncstore_v8i32_v8i8(<8 x i32> %x, <8 x i8>* %p, <8 x i32> %mask) 
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <8 x i32> %mask, zeroinitializer
   %b = trunc <8 x i32> %x to <8 x i8>
-  call void @llvm.masked.store.v8i8.p0v8i8(<8 x i8> %b, <8 x i8>* %p, i32 1, <8 x i1> %a)
+  call void @llvm.masked.store.v8i8.p0(<8 x i8> %b, ptr %p, i32 1, <8 x i1> %a)
   ret void
 }
 
-define void @truncstore_v4i32_v4i16(<4 x i32> %x, <4 x i16>* %p, <4 x i32> %mask) {
+define void @truncstore_v4i32_v4i16(<4 x i32> %x, ptr %p, <4 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v4i32_v4i16:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm2, %xmm2
@@ -4249,15 +4191,15 @@ define void @truncstore_v4i32_v4i16(<4 x i32> %x, <4 x i16>* %p, <4 x i32> %mask
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <4 x i32> %mask, zeroinitializer
   %b = trunc <4 x i32> %x to <4 x i16>
-  call void @llvm.masked.store.v4i16.p0v4i16(<4 x i16> %b, <4 x i16>* %p, i32 1, <4 x i1> %a)
+  call void @llvm.masked.store.v4i16.p0(<4 x i16> %b, ptr %p, i32 1, <4 x i1> %a)
   ret void
 }
 
-define void @truncstore_v4i32_v4i8(<4 x i32> %x, <4 x i8>* %p, <4 x i32> %mask) {
+define void @truncstore_v4i32_v4i8(<4 x i32> %x, ptr %p, <4 x i32> %mask) {
 ; SSE2-LABEL: truncstore_v4i32_v4i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm2, %xmm2
-; SSE2-NEXT:    pand {{.*}}(%rip), %xmm0
+; SSE2-NEXT:    pand {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
 ; SSE2-NEXT:    pcmpeqd %xmm1, %xmm2
@@ -4423,11 +4365,11 @@ define void @truncstore_v4i32_v4i8(<4 x i32> %x, <4 x i8>* %p, <4 x i32> %mask) 
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <4 x i32> %mask, zeroinitializer
   %b = trunc <4 x i32> %x to <4 x i8>
-  call void @llvm.masked.store.v4i8.p0v4i8(<4 x i8> %b, <4 x i8>* %p, i32 1, <4 x i1> %a)
+  call void @llvm.masked.store.v4i8.p0(<4 x i8> %b, ptr %p, i32 1, <4 x i1> %a)
   ret void
 }
 
-define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %mask) {
+define void @truncstore_v32i16_v32i8(<32 x i16> %x, ptr %p, <32 x i8> %mask) {
 ; SSE2-LABEL: truncstore_v32i16_v32i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm7, %xmm7
@@ -4476,8 +4418,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; SSE2-NEXT:  # %bb.13: # %cond.store11
 ; SSE2-NEXT:    movb %cl, 6(%rdi)
 ; SSE2-NEXT:  .LBB15_14: # %else12
-; SSE2-NEXT:    testb $-128, %al
-; SSE2-NEXT:    je .LBB15_16
+; SSE2-NEXT:    testb %al, %al
+; SSE2-NEXT:    jns .LBB15_16
 ; SSE2-NEXT:  # %bb.15: # %cond.store13
 ; SSE2-NEXT:    movb %ch, 7(%rdi)
 ; SSE2-NEXT:  .LBB15_16: # %else14
@@ -4523,8 +4465,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; SSE2-NEXT:    movb %cl, 14(%rdi)
 ; SSE2-NEXT:  .LBB15_30: # %else28
 ; SSE2-NEXT:    packuswb %xmm3, %xmm2
-; SSE2-NEXT:    testl $32768, %eax # imm = 0x8000
-; SSE2-NEXT:    je .LBB15_32
+; SSE2-NEXT:    testw %ax, %ax
+; SSE2-NEXT:    jns .LBB15_32
 ; SSE2-NEXT:  # %bb.31: # %cond.store29
 ; SSE2-NEXT:    movb %ch, 15(%rdi)
 ; SSE2-NEXT:  .LBB15_32: # %else30
@@ -4648,7 +4590,7 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; SSE4-LABEL: truncstore_v32i16_v32i8:
 ; SSE4:       # %bb.0:
 ; SSE4-NEXT:    pxor %xmm7, %xmm7
-; SSE4-NEXT:    movdqa {{.*#+}} xmm6 = [255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0]
+; SSE4-NEXT:    pmovzxbw {{.*#+}} xmm6 = [255,255,255,255,255,255,255,255]
 ; SSE4-NEXT:    pand %xmm6, %xmm1
 ; SSE4-NEXT:    pand %xmm6, %xmm0
 ; SSE4-NEXT:    packuswb %xmm1, %xmm0
@@ -4681,8 +4623,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; SSE4-NEXT:    testb $64, %al
 ; SSE4-NEXT:    jne .LBB15_13
 ; SSE4-NEXT:  .LBB15_14: # %else12
-; SSE4-NEXT:    testb $-128, %al
-; SSE4-NEXT:    jne .LBB15_15
+; SSE4-NEXT:    testb %al, %al
+; SSE4-NEXT:    js .LBB15_15
 ; SSE4-NEXT:  .LBB15_16: # %else14
 ; SSE4-NEXT:    testl $256, %eax # imm = 0x100
 ; SSE4-NEXT:    jne .LBB15_17
@@ -4709,8 +4651,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; SSE4-NEXT:  .LBB15_30: # %else28
 ; SSE4-NEXT:    pand %xmm6, %xmm3
 ; SSE4-NEXT:    pand %xmm6, %xmm2
-; SSE4-NEXT:    testl $32768, %eax # imm = 0x8000
-; SSE4-NEXT:    je .LBB15_32
+; SSE4-NEXT:    testw %ax, %ax
+; SSE4-NEXT:    jns .LBB15_32
 ; SSE4-NEXT:  # %bb.31: # %cond.store29
 ; SSE4-NEXT:    pextrb $15, %xmm0, 15(%rdi)
 ; SSE4-NEXT:  .LBB15_32: # %else30
@@ -4790,8 +4732,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; SSE4-NEXT:    je .LBB15_14
 ; SSE4-NEXT:  .LBB15_13: # %cond.store11
 ; SSE4-NEXT:    pextrb $6, %xmm0, 6(%rdi)
-; SSE4-NEXT:    testb $-128, %al
-; SSE4-NEXT:    je .LBB15_16
+; SSE4-NEXT:    testb %al, %al
+; SSE4-NEXT:    jns .LBB15_16
 ; SSE4-NEXT:  .LBB15_15: # %cond.store13
 ; SSE4-NEXT:    pextrb $7, %xmm0, 7(%rdi)
 ; SSE4-NEXT:    testl $256, %eax # imm = 0x100
@@ -4887,7 +4829,7 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ;
 ; AVX1-LABEL: truncstore_v32i16_v32i8:
 ; AVX1:       # %bb.0:
-; AVX1-NEXT:    vmovaps {{.*#+}} ymm3 = [255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255]
+; AVX1-NEXT:    vbroadcastss {{.*#+}} ymm3 = [255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255]
 ; AVX1-NEXT:    vandps %ymm3, %ymm1, %ymm1
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm4
 ; AVX1-NEXT:    vpackuswb %xmm4, %xmm1, %xmm1
@@ -4926,8 +4868,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX1-NEXT:    testb $64, %al
 ; AVX1-NEXT:    jne .LBB15_13
 ; AVX1-NEXT:  .LBB15_14: # %else12
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    jne .LBB15_15
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    js .LBB15_15
 ; AVX1-NEXT:  .LBB15_16: # %else14
 ; AVX1-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX1-NEXT:    jne .LBB15_17
@@ -4950,8 +4892,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX1-NEXT:    testl $16384, %eax # imm = 0x4000
 ; AVX1-NEXT:    jne .LBB15_29
 ; AVX1-NEXT:  .LBB15_30: # %else28
-; AVX1-NEXT:    testl $32768, %eax # imm = 0x8000
-; AVX1-NEXT:    je .LBB15_32
+; AVX1-NEXT:    testw %ax, %ax
+; AVX1-NEXT:    jns .LBB15_32
 ; AVX1-NEXT:  .LBB15_31: # %cond.store29
 ; AVX1-NEXT:    vpextrb $15, %xmm0, 15(%rdi)
 ; AVX1-NEXT:  .LBB15_32: # %else30
@@ -5032,8 +4974,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX1-NEXT:    je .LBB15_14
 ; AVX1-NEXT:  .LBB15_13: # %cond.store11
 ; AVX1-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    je .LBB15_16
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    jns .LBB15_16
 ; AVX1-NEXT:  .LBB15_15: # %cond.store13
 ; AVX1-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX1-NEXT:    testl $256, %eax # imm = 0x100
@@ -5064,8 +5006,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX1-NEXT:    je .LBB15_30
 ; AVX1-NEXT:  .LBB15_29: # %cond.store27
 ; AVX1-NEXT:    vpextrb $14, %xmm0, 14(%rdi)
-; AVX1-NEXT:    testl $32768, %eax # imm = 0x8000
-; AVX1-NEXT:    jne .LBB15_31
+; AVX1-NEXT:    testw %ax, %ax
+; AVX1-NEXT:    js .LBB15_31
 ; AVX1-NEXT:    jmp .LBB15_32
 ; AVX1-NEXT:  .LBB15_33: # %cond.store31
 ; AVX1-NEXT:    vpextrb $0, %xmm0, 16(%rdi)
@@ -5135,12 +5077,11 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX2-LABEL: truncstore_v32i16_v32i8:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm3, %xmm3, %xmm3
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm4 = [255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255]
+; AVX2-NEXT:    vpbroadcastw {{.*#+}} ymm4 = [255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0]
 ; AVX2-NEXT:    vpand %ymm4, %ymm1, %ymm1
 ; AVX2-NEXT:    vpand %ymm4, %ymm0, %ymm0
-; AVX2-NEXT:    vperm2i128 {{.*#+}} ymm4 = ymm0[2,3],ymm1[2,3]
-; AVX2-NEXT:    vinserti128 $1, %xmm1, %ymm0, %ymm0
-; AVX2-NEXT:    vpackuswb %ymm4, %ymm0, %ymm0
+; AVX2-NEXT:    vpackuswb %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,2,1,3]
 ; AVX2-NEXT:    vpcmpeqb %ymm3, %ymm2, %ymm1
 ; AVX2-NEXT:    vpmovmskb %ymm1, %eax
 ; AVX2-NEXT:    notl %eax
@@ -5165,8 +5106,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX2-NEXT:    testb $64, %al
 ; AVX2-NEXT:    jne .LBB15_13
 ; AVX2-NEXT:  .LBB15_14: # %else12
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    jne .LBB15_15
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    js .LBB15_15
 ; AVX2-NEXT:  .LBB15_16: # %else14
 ; AVX2-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX2-NEXT:    jne .LBB15_17
@@ -5189,8 +5130,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX2-NEXT:    testl $16384, %eax # imm = 0x4000
 ; AVX2-NEXT:    jne .LBB15_29
 ; AVX2-NEXT:  .LBB15_30: # %else28
-; AVX2-NEXT:    testl $32768, %eax # imm = 0x8000
-; AVX2-NEXT:    je .LBB15_32
+; AVX2-NEXT:    testw %ax, %ax
+; AVX2-NEXT:    jns .LBB15_32
 ; AVX2-NEXT:  .LBB15_31: # %cond.store29
 ; AVX2-NEXT:    vpextrb $15, %xmm0, 15(%rdi)
 ; AVX2-NEXT:  .LBB15_32: # %else30
@@ -5271,8 +5212,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX2-NEXT:    je .LBB15_14
 ; AVX2-NEXT:  .LBB15_13: # %cond.store11
 ; AVX2-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    je .LBB15_16
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    jns .LBB15_16
 ; AVX2-NEXT:  .LBB15_15: # %cond.store13
 ; AVX2-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX2-NEXT:    testl $256, %eax # imm = 0x100
@@ -5303,8 +5244,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX2-NEXT:    je .LBB15_30
 ; AVX2-NEXT:  .LBB15_29: # %cond.store27
 ; AVX2-NEXT:    vpextrb $14, %xmm0, 14(%rdi)
-; AVX2-NEXT:    testl $32768, %eax # imm = 0x8000
-; AVX2-NEXT:    jne .LBB15_31
+; AVX2-NEXT:    testw %ax, %ax
+; AVX2-NEXT:    js .LBB15_31
 ; AVX2-NEXT:    jmp .LBB15_32
 ; AVX2-NEXT:  .LBB15_33: # %cond.store31
 ; AVX2-NEXT:    vpextrb $0, %xmm0, 16(%rdi)
@@ -5404,8 +5345,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX512F-NEXT:    testb $64, %al
 ; AVX512F-NEXT:    jne .LBB15_13
 ; AVX512F-NEXT:  .LBB15_14: # %else12
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    jne .LBB15_15
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    js .LBB15_15
 ; AVX512F-NEXT:  .LBB15_16: # %else14
 ; AVX512F-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX512F-NEXT:    jne .LBB15_17
@@ -5428,8 +5369,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX512F-NEXT:    testl $16384, %eax # imm = 0x4000
 ; AVX512F-NEXT:    jne .LBB15_29
 ; AVX512F-NEXT:  .LBB15_30: # %else28
-; AVX512F-NEXT:    testl $32768, %eax # imm = 0x8000
-; AVX512F-NEXT:    je .LBB15_32
+; AVX512F-NEXT:    testw %ax, %ax
+; AVX512F-NEXT:    jns .LBB15_32
 ; AVX512F-NEXT:  .LBB15_31: # %cond.store29
 ; AVX512F-NEXT:    vpextrb $15, %xmm0, 15(%rdi)
 ; AVX512F-NEXT:  .LBB15_32: # %else30
@@ -5510,8 +5451,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX512F-NEXT:    je .LBB15_14
 ; AVX512F-NEXT:  .LBB15_13: # %cond.store11
 ; AVX512F-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    je .LBB15_16
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    jns .LBB15_16
 ; AVX512F-NEXT:  .LBB15_15: # %cond.store13
 ; AVX512F-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX512F-NEXT:    testl $256, %eax # imm = 0x100
@@ -5542,8 +5483,8 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX512F-NEXT:    je .LBB15_30
 ; AVX512F-NEXT:  .LBB15_29: # %cond.store27
 ; AVX512F-NEXT:    vpextrb $14, %xmm0, 14(%rdi)
-; AVX512F-NEXT:    testl $32768, %eax # imm = 0x8000
-; AVX512F-NEXT:    jne .LBB15_31
+; AVX512F-NEXT:    testw %ax, %ax
+; AVX512F-NEXT:    js .LBB15_31
 ; AVX512F-NEXT:    jmp .LBB15_32
 ; AVX512F-NEXT:  .LBB15_33: # %cond.store31
 ; AVX512F-NEXT:    vpextrb $0, %xmm0, 16(%rdi)
@@ -5626,11 +5567,11 @@ define void @truncstore_v32i16_v32i8(<32 x i16> %x, <32 x i8>* %p, <32 x i8> %ma
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <32 x i8> %mask, zeroinitializer
   %b = trunc <32 x i16> %x to <32 x i8>
-  call void @llvm.masked.store.v32i8.p0v32i8(<32 x i8> %b, <32 x i8>* %p, i32 1, <32 x i1> %a)
+  call void @llvm.masked.store.v32i8.p0(<32 x i8> %b, ptr %p, i32 1, <32 x i1> %a)
   ret void
 }
 
-define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %mask) {
+define void @truncstore_v16i16_v16i8(<16 x i16> %x, ptr %p, <16 x i8> %mask) {
 ; SSE2-LABEL: truncstore_v16i16_v16i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm3, %xmm3
@@ -5674,8 +5615,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; SSE2-NEXT:  # %bb.13: # %cond.store11
 ; SSE2-NEXT:    movb %cl, 6(%rdi)
 ; SSE2-NEXT:  .LBB16_14: # %else12
-; SSE2-NEXT:    testb $-128, %al
-; SSE2-NEXT:    je .LBB16_16
+; SSE2-NEXT:    testb %al, %al
+; SSE2-NEXT:    jns .LBB16_16
 ; SSE2-NEXT:  # %bb.15: # %cond.store13
 ; SSE2-NEXT:    movb %ch, 7(%rdi)
 ; SSE2-NEXT:  .LBB16_16: # %else14
@@ -5746,7 +5687,7 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; SSE4-LABEL: truncstore_v16i16_v16i8:
 ; SSE4:       # %bb.0:
 ; SSE4-NEXT:    pxor %xmm3, %xmm3
-; SSE4-NEXT:    movdqa {{.*#+}} xmm4 = [255,0,255,0,255,0,255,0,255,0,255,0,255,0,255,0]
+; SSE4-NEXT:    pmovzxbw {{.*#+}} xmm4 = [255,255,255,255,255,255,255,255]
 ; SSE4-NEXT:    pand %xmm4, %xmm1
 ; SSE4-NEXT:    pand %xmm4, %xmm0
 ; SSE4-NEXT:    packuswb %xmm1, %xmm0
@@ -5774,8 +5715,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; SSE4-NEXT:    testb $64, %al
 ; SSE4-NEXT:    jne .LBB16_13
 ; SSE4-NEXT:  .LBB16_14: # %else12
-; SSE4-NEXT:    testb $-128, %al
-; SSE4-NEXT:    jne .LBB16_15
+; SSE4-NEXT:    testb %al, %al
+; SSE4-NEXT:    js .LBB16_15
 ; SSE4-NEXT:  .LBB16_16: # %else14
 ; SSE4-NEXT:    testl $256, %eax # imm = 0x100
 ; SSE4-NEXT:    jne .LBB16_17
@@ -5828,8 +5769,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; SSE4-NEXT:    je .LBB16_14
 ; SSE4-NEXT:  .LBB16_13: # %cond.store11
 ; SSE4-NEXT:    pextrb $6, %xmm0, 6(%rdi)
-; SSE4-NEXT:    testb $-128, %al
-; SSE4-NEXT:    je .LBB16_16
+; SSE4-NEXT:    testb %al, %al
+; SSE4-NEXT:    jns .LBB16_16
 ; SSE4-NEXT:  .LBB16_15: # %cond.store13
 ; SSE4-NEXT:    pextrb $7, %xmm0, 7(%rdi)
 ; SSE4-NEXT:    testl $256, %eax # imm = 0x100
@@ -5869,7 +5810,7 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX1-LABEL: truncstore_v16i16_v16i8:
 ; AVX1:       # %bb.0:
 ; AVX1-NEXT:    vpxor %xmm2, %xmm2, %xmm2
-; AVX1-NEXT:    vandps {{.*}}(%rip), %ymm0, %ymm0
+; AVX1-NEXT:    vandps {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %ymm0, %ymm0
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm3
 ; AVX1-NEXT:    vpackuswb %xmm3, %xmm0, %xmm0
 ; AVX1-NEXT:    vpcmpeqb %xmm2, %xmm1, %xmm1
@@ -5896,8 +5837,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX1-NEXT:    testb $64, %al
 ; AVX1-NEXT:    jne .LBB16_13
 ; AVX1-NEXT:  .LBB16_14: # %else12
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    jne .LBB16_15
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    js .LBB16_15
 ; AVX1-NEXT:  .LBB16_16: # %else14
 ; AVX1-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX1-NEXT:    jne .LBB16_17
@@ -5951,8 +5892,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX1-NEXT:    je .LBB16_14
 ; AVX1-NEXT:  .LBB16_13: # %cond.store11
 ; AVX1-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX1-NEXT:    testb $-128, %al
-; AVX1-NEXT:    je .LBB16_16
+; AVX1-NEXT:    testb %al, %al
+; AVX1-NEXT:    jns .LBB16_16
 ; AVX1-NEXT:  .LBB16_15: # %cond.store13
 ; AVX1-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX1-NEXT:    testl $256, %eax # imm = 0x100
@@ -5993,7 +5934,7 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX2-LABEL: truncstore_v16i16_v16i8:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpxor %xmm2, %xmm2, %xmm2
-; AVX2-NEXT:    vpand {{.*}}(%rip), %ymm0, %ymm0
+; AVX2-NEXT:    vpand {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %ymm0, %ymm0
 ; AVX2-NEXT:    vextracti128 $1, %ymm0, %xmm3
 ; AVX2-NEXT:    vpackuswb %xmm3, %xmm0, %xmm0
 ; AVX2-NEXT:    vpcmpeqb %xmm2, %xmm1, %xmm1
@@ -6020,8 +5961,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX2-NEXT:    testb $64, %al
 ; AVX2-NEXT:    jne .LBB16_13
 ; AVX2-NEXT:  .LBB16_14: # %else12
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    jne .LBB16_15
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    js .LBB16_15
 ; AVX2-NEXT:  .LBB16_16: # %else14
 ; AVX2-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX2-NEXT:    jne .LBB16_17
@@ -6075,8 +6016,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX2-NEXT:    je .LBB16_14
 ; AVX2-NEXT:  .LBB16_13: # %cond.store11
 ; AVX2-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX2-NEXT:    testb $-128, %al
-; AVX2-NEXT:    je .LBB16_16
+; AVX2-NEXT:    testb %al, %al
+; AVX2-NEXT:    jns .LBB16_16
 ; AVX2-NEXT:  .LBB16_15: # %cond.store13
 ; AVX2-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX2-NEXT:    testl $256, %eax # imm = 0x100
@@ -6143,8 +6084,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX512F-NEXT:    testb $64, %al
 ; AVX512F-NEXT:    jne .LBB16_13
 ; AVX512F-NEXT:  .LBB16_14: # %else12
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    jne .LBB16_15
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    js .LBB16_15
 ; AVX512F-NEXT:  .LBB16_16: # %else14
 ; AVX512F-NEXT:    testl $256, %eax # imm = 0x100
 ; AVX512F-NEXT:    jne .LBB16_17
@@ -6198,8 +6139,8 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX512F-NEXT:    je .LBB16_14
 ; AVX512F-NEXT:  .LBB16_13: # %cond.store11
 ; AVX512F-NEXT:    vpextrb $6, %xmm0, 6(%rdi)
-; AVX512F-NEXT:    testb $-128, %al
-; AVX512F-NEXT:    je .LBB16_16
+; AVX512F-NEXT:    testb %al, %al
+; AVX512F-NEXT:    jns .LBB16_16
 ; AVX512F-NEXT:  .LBB16_15: # %cond.store13
 ; AVX512F-NEXT:    vpextrb $7, %xmm0, 7(%rdi)
 ; AVX512F-NEXT:    testl $256, %eax # imm = 0x100
@@ -6256,21 +6197,20 @@ define void @truncstore_v16i16_v16i8(<16 x i16> %x, <16 x i8>* %p, <16 x i8> %ma
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <16 x i8> %mask, zeroinitializer
   %b = trunc <16 x i16> %x to <16 x i8>
-  call void @llvm.masked.store.v16i8.p0v16i8(<16 x i8> %b, <16 x i8>* %p, i32 1, <16 x i1> %a)
+  call void @llvm.masked.store.v16i8.p0(<16 x i8> %b, ptr %p, i32 1, <16 x i1> %a)
   ret void
 }
 
-define void @truncstore_v8i16_v8i8(<8 x i16> %x, <8 x i8>* %p, <8 x i16> %mask) {
+define void @truncstore_v8i16_v8i8(<8 x i16> %x, ptr %p, <8 x i16> %mask) {
 ; SSE2-LABEL: truncstore_v8i16_v8i8:
 ; SSE2:       # %bb.0:
 ; SSE2-NEXT:    pxor %xmm2, %xmm2
-; SSE2-NEXT:    pand {{.*}}(%rip), %xmm0
+; SSE2-NEXT:    pand {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %xmm0
 ; SSE2-NEXT:    packuswb %xmm0, %xmm0
 ; SSE2-NEXT:    pcmpeqw %xmm1, %xmm2
-; SSE2-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE2-NEXT:    pxor %xmm2, %xmm1
-; SSE2-NEXT:    packsswb %xmm1, %xmm1
-; SSE2-NEXT:    pmovmskb %xmm1, %eax
+; SSE2-NEXT:    packsswb %xmm2, %xmm2
+; SSE2-NEXT:    pmovmskb %xmm2, %eax
+; SSE2-NEXT:    notl %eax
 ; SSE2-NEXT:    testb $1, %al
 ; SSE2-NEXT:    movd %xmm0, %ecx
 ; SSE2-NEXT:    jne .LBB17_1
@@ -6334,10 +6274,9 @@ define void @truncstore_v8i16_v8i8(<8 x i16> %x, <8 x i8>* %p, <8 x i16> %mask) 
 ; SSE4-NEXT:    pxor %xmm2, %xmm2
 ; SSE4-NEXT:    pshufb {{.*#+}} xmm0 = xmm0[0,2,4,6,8,10,12,14,u,u,u,u,u,u,u,u]
 ; SSE4-NEXT:    pcmpeqw %xmm1, %xmm2
-; SSE4-NEXT:    pcmpeqd %xmm1, %xmm1
-; SSE4-NEXT:    pxor %xmm2, %xmm1
-; SSE4-NEXT:    packsswb %xmm1, %xmm1
-; SSE4-NEXT:    pmovmskb %xmm1, %eax
+; SSE4-NEXT:    packsswb %xmm2, %xmm2
+; SSE4-NEXT:    pmovmskb %xmm2, %eax
+; SSE4-NEXT:    notl %eax
 ; SSE4-NEXT:    testb $1, %al
 ; SSE4-NEXT:    jne .LBB17_1
 ; SSE4-NEXT:  # %bb.2: # %else
@@ -6400,10 +6339,9 @@ define void @truncstore_v8i16_v8i8(<8 x i16> %x, <8 x i8>* %p, <8 x i16> %mask) 
 ; AVX-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; AVX-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[0,2,4,6,8,10,12,14,u,u,u,u,u,u,u,u]
 ; AVX-NEXT:    vpcmpeqw %xmm2, %xmm1, %xmm1
-; AVX-NEXT:    vpcmpeqd %xmm2, %xmm2, %xmm2
-; AVX-NEXT:    vpxor %xmm2, %xmm1, %xmm1
 ; AVX-NEXT:    vpacksswb %xmm1, %xmm1, %xmm1
 ; AVX-NEXT:    vpmovmskb %xmm1, %eax
+; AVX-NEXT:    notl %eax
 ; AVX-NEXT:    testb $1, %al
 ; AVX-NEXT:    jne .LBB17_1
 ; AVX-NEXT:  # %bb.2: # %else
@@ -6465,7 +6403,7 @@ define void @truncstore_v8i16_v8i8(<8 x i16> %x, <8 x i8>* %p, <8 x i16> %mask) 
 ; AVX512F:       # %bb.0:
 ; AVX512F-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; AVX512F-NEXT:    vpcmpeqw %xmm2, %xmm1, %xmm1
-; AVX512F-NEXT:    vpternlogq $15, %zmm1, %zmm1, %zmm1
+; AVX512F-NEXT:    vpternlogq {{.*#+}} zmm1 = ~zmm1
 ; AVX512F-NEXT:    vpmovsxwq %xmm1, %zmm1
 ; AVX512F-NEXT:    vptestmq %zmm1, %zmm1, %k0
 ; AVX512F-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[0,2,4,6,8,10,12,14,u,u,u,u,u,u,u,u]
@@ -6547,19 +6485,19 @@ define void @truncstore_v8i16_v8i8(<8 x i16> %x, <8 x i8>* %p, <8 x i16> %mask) 
 ; AVX512BWVL-NEXT:    retq
   %a = icmp ne <8 x i16> %mask, zeroinitializer
   %b = trunc <8 x i16> %x to <8 x i8>
-  call void @llvm.masked.store.v8i8.p0v8i8(<8 x i8> %b, <8 x i8>* %p, i32 1, <8 x i1> %a)
+  call void @llvm.masked.store.v8i8.p0(<8 x i8> %b, ptr %p, i32 1, <8 x i1> %a)
   ret void
 }
 
-declare void @llvm.masked.store.v8i32.p0v8i32(<8 x i32>, <8 x i32>*, i32, <8 x i1>)
-declare void @llvm.masked.store.v8i16.p0v8i16(<8 x i16>, <8 x i16>*, i32, <8 x i1>)
-declare void @llvm.masked.store.v8i8.p0v8i8(<8 x i8>, <8 x i8>*, i32, <8 x i1>)
-declare void @llvm.masked.store.v4i32.p0v4i32(<4 x i32>, <4 x i32>*, i32, <4 x i1>)
-declare void @llvm.masked.store.v4i16.p0v4i16(<4 x i16>, <4 x i16>*, i32, <4 x i1>)
-declare void @llvm.masked.store.v4i8.p0v4i8(<4 x i8>, <4 x i8>*, i32, <4 x i1>)
-declare void @llvm.masked.store.v2i32.p0v2i32(<2 x i32>, <2 x i32>*, i32, <2 x i1>)
-declare void @llvm.masked.store.v2i16.p0v2i16(<2 x i16>, <2 x i16>*, i32, <2 x i1>)
-declare void @llvm.masked.store.v2i8.p0v2i8(<2 x i8>, <2 x i8>*, i32, <2 x i1>)
-declare void @llvm.masked.store.v16i16.p0v16i16(<16 x i16>, <16 x i16>*, i32, <16 x i1>)
-declare void @llvm.masked.store.v16i8.p0v16i8(<16 x i8>, <16 x i8>*, i32, <16 x i1>)
-declare void @llvm.masked.store.v32i8.p0v32i8(<32 x i8>, <32 x i8>*, i32, <32 x i1>)
+declare void @llvm.masked.store.v8i32.p0(<8 x i32>, ptr, i32, <8 x i1>)
+declare void @llvm.masked.store.v8i16.p0(<8 x i16>, ptr, i32, <8 x i1>)
+declare void @llvm.masked.store.v8i8.p0(<8 x i8>, ptr, i32, <8 x i1>)
+declare void @llvm.masked.store.v4i32.p0(<4 x i32>, ptr, i32, <4 x i1>)
+declare void @llvm.masked.store.v4i16.p0(<4 x i16>, ptr, i32, <4 x i1>)
+declare void @llvm.masked.store.v4i8.p0(<4 x i8>, ptr, i32, <4 x i1>)
+declare void @llvm.masked.store.v2i32.p0(<2 x i32>, ptr, i32, <2 x i1>)
+declare void @llvm.masked.store.v2i16.p0(<2 x i16>, ptr, i32, <2 x i1>)
+declare void @llvm.masked.store.v2i8.p0(<2 x i8>, ptr, i32, <2 x i1>)
+declare void @llvm.masked.store.v16i16.p0(<16 x i16>, ptr, i32, <16 x i1>)
+declare void @llvm.masked.store.v16i8.p0(<16 x i8>, ptr, i32, <16 x i1>)
+declare void @llvm.masked.store.v32i8.p0(<32 x i8>, ptr, i32, <32 x i1>)

@@ -13,6 +13,7 @@
 
 #include "llvm/ProfileData/GCOV.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/Support/Debug.h"
@@ -22,8 +23,8 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <optional>
 #include <system_error>
-#include <unordered_map>
 
 using namespace llvm;
 
@@ -101,48 +102,48 @@ private:
 bool GCOVFile::readGCNO(GCOVBuffer &buf) {
   if (!buf.readGCNOFormat())
     return false;
-  if (!buf.readGCOVVersion(Version))
+  if (!buf.readGCOVVersion(version))
     return false;
 
-  Checksum = buf.getWord();
-  if (Version >= GCOV::V900)
-    cwd = buf.getString();
-  if (Version >= GCOV::V800)
+  checksum = buf.getWord();
+  if (version >= GCOV::V900 && !buf.readString(cwd))
+    return false;
+  if (version >= GCOV::V800)
     buf.getWord(); // hasUnexecutedBlocks
 
   uint32_t tag, length;
-  GCOVFunction *fn;
+  GCOVFunction *fn = nullptr;
   while ((tag = buf.getWord())) {
     if (!buf.readInt(length))
       return false;
+    uint32_t pos = buf.cursor.tell();
     if (tag == GCOV_TAG_FUNCTION) {
       functions.push_back(std::make_unique<GCOVFunction>(*this));
       fn = functions.back().get();
       fn->ident = buf.getWord();
       fn->linenoChecksum = buf.getWord();
-      if (Version >= GCOV::V407)
+      if (version >= GCOV::V407)
         fn->cfgChecksum = buf.getWord();
       buf.readString(fn->Name);
       StringRef filename;
-      if (Version < GCOV::V800) {
-        filename = buf.getString();
+      if (version < GCOV::V800) {
+        if (!buf.readString(filename))
+          return false;
         fn->startLine = buf.getWord();
       } else {
         fn->artificial = buf.getWord();
-        filename = buf.getString();
+        if (!buf.readString(filename))
+          return false;
         fn->startLine = buf.getWord();
         fn->startColumn = buf.getWord();
         fn->endLine = buf.getWord();
-        if (Version >= GCOV::V900)
+        if (version >= GCOV::V900)
           fn->endColumn = buf.getWord();
       }
-      auto r = filenameToIdx.try_emplace(filename, filenameToIdx.size());
-      if (r.second)
-        filenames.emplace_back(filename);
-      fn->srcIdx = r.first->second;
-      IdentToFunction[fn->ident] = fn;
+      fn->srcIdx = addNormalizedPathToMap(filename);
+      identToFunction[fn->ident] = fn;
     } else if (tag == GCOV_TAG_BLOCKS && fn) {
-      if (Version < GCOV::V800) {
+      if (version < GCOV::V800) {
         for (uint32_t i = 0; i != length; ++i) {
           buf.getWord(); // Ignored block flags
           fn->blocks.push_back(std::make_unique<GCOVBlock>(i));
@@ -160,7 +161,9 @@ bool GCOVFile::readGCNO(GCOVBuffer &buf) {
         return false;
       }
       GCOVBlock *src = fn->blocks[srcNo].get();
-      for (uint32_t i = 0, e = (length - 1) / 2; i != e; ++i) {
+      const uint32_t e =
+          version >= GCOV::V1200 ? (length / 4 - 1) / 2 : (length - 1) / 2;
+      for (uint32_t i = 0; i != e; ++i) {
         uint32_t dstNo = buf.getWord(), flags = buf.getWord();
         GCOVBlock *dst = fn->blocks[dstNo].get();
         auto arc = std::make_unique<GCOVArc>(*src, *dst, flags);
@@ -184,13 +187,18 @@ bool GCOVFile::readGCNO(GCOVBuffer &buf) {
         if (line)
           Block.addLine(line);
         else {
-          StringRef filename = buf.getString();
+          StringRef filename;
+          buf.readString(filename);
           if (filename.empty())
             break;
           // TODO Unhandled
         }
       }
     }
+    pos += version >= GCOV::V1200 ? length : 4 * length;
+    if (pos < buf.cursor.tell())
+      return false;
+    buf.de.skip(buf.cursor, pos - buf.cursor.tell());
   }
 
   GCNOInitialized = true;
@@ -206,7 +214,7 @@ bool GCOVFile::readGCDA(GCOVBuffer &buf) {
   GCOV::GCOVVersion GCDAVersion;
   if (!buf.readGCOVVersion(GCDAVersion))
     return false;
-  if (Version != GCDAVersion) {
+  if (version != GCDAVersion) {
     errs() << "GCOV versions do not match.\n";
     return false;
   }
@@ -214,9 +222,9 @@ bool GCOVFile::readGCDA(GCOVBuffer &buf) {
   uint32_t GCDAChecksum;
   if (!buf.readInt(GCDAChecksum))
     return false;
-  if (Checksum != GCDAChecksum) {
-    errs() << "File checksums do not match: " << Checksum
-           << " != " << GCDAChecksum << ".\n";
+  if (checksum != GCDAChecksum) {
+    errs() << "file checksums do not match: " << checksum
+           << " != " << GCDAChecksum << "\n";
     return false;
   }
   uint32_t dummy, tag, length;
@@ -227,33 +235,24 @@ bool GCOVFile::readGCDA(GCOVBuffer &buf) {
       return false;
     uint32_t pos = buf.cursor.tell();
     if (tag == GCOV_TAG_OBJECT_SUMMARY) {
-      buf.readInt(RunCount);
+      buf.readInt(runCount);
       buf.readInt(dummy);
-      // clang<11 uses a fake 4.2 format which sets length to 9.
-      if (length == 9)
-        buf.readInt(RunCount);
     } else if (tag == GCOV_TAG_PROGRAM_SUMMARY) {
-      // clang<11 uses a fake 4.2 format which sets length to 0.
-      if (length > 0) {
-        buf.readInt(dummy);
-        buf.readInt(dummy);
-        buf.readInt(RunCount);
-      }
-      ++ProgramCount;
+      buf.readInt(dummy);
+      buf.readInt(dummy);
+      buf.readInt(runCount);
+      ++programCount;
     } else if (tag == GCOV_TAG_FUNCTION) {
       if (length == 0) // Placeholder
         continue;
-      // As of GCC 10, GCOV_TAG_FUNCTION_LENGTH has never been larger than 3.
-      // However, clang<11 uses a fake 4.2 format which may set length larger
-      // than 3.
       if (length < 2 || !buf.readInt(ident))
         return false;
-      auto It = IdentToFunction.find(ident);
+      auto It = identToFunction.find(ident);
       uint32_t linenoChecksum, cfgChecksum = 0;
       buf.readInt(linenoChecksum);
-      if (Version >= GCOV::V407)
+      if (version >= GCOV::V407)
         buf.readInt(cfgChecksum);
-      if (It != IdentToFunction.end()) {
+      if (It != identToFunction.end()) {
         fn = It->second;
         if (linenoChecksum != fn->linenoChecksum ||
             cfgChecksum != fn->cfgChecksum) {
@@ -265,11 +264,14 @@ bool GCOVFile::readGCDA(GCOVBuffer &buf) {
         }
       }
     } else if (tag == GCOV_TAG_COUNTER_ARCS && fn) {
-      if (length != 2 * fn->arcs.size()) {
+      uint32_t expected = 2 * fn->arcs.size();
+      if (version >= GCOV::V1200)
+        expected *= 4;
+      if (length != expected) {
         errs() << fn->Name
                << format(
                       ": GCOV_TAG_COUNTER_ARCS mismatch, got %u, expected %u\n",
-                      length, unsigned(2 * fn->arcs.size()));
+                      length, expected);
         return false;
       }
       for (std::unique_ptr<GCOVArc> &arc : fn->arcs) {
@@ -281,7 +283,7 @@ bool GCOVFile::readGCDA(GCOVBuffer &buf) {
       if (fn->blocks.size() >= 2) {
         GCOVBlock &src = *fn->blocks[0];
         GCOVBlock &sink =
-            Version < GCOV::V408 ? *fn->blocks.back() : *fn->blocks[1];
+            version < GCOV::V408 ? *fn->blocks.back() : *fn->blocks[1];
         auto arc = std::make_unique<GCOVArc>(sink, src, GCOV_ARC_ON_TREE);
         sink.addDstEdge(arc.get());
         src.addSrcEdge(arc.get());
@@ -293,7 +295,7 @@ bool GCOVFile::readGCDA(GCOVBuffer &buf) {
           fn->treeArcs[i - 1]->src.count += fn->treeArcs[i - 1]->count;
       }
     }
-    pos += 4 * length;
+    pos += version >= GCOV::V1200 ? length : 4 * length;
     if (pos < buf.cursor.tell())
       return false;
     buf.de.skip(buf.cursor, pos - buf.cursor.tell());
@@ -312,6 +314,19 @@ void GCOVFile::print(raw_ostream &OS) const {
 LLVM_DUMP_METHOD void GCOVFile::dump() const { print(dbgs()); }
 #endif
 
+unsigned GCOVFile::addNormalizedPathToMap(StringRef filename) {
+  // unify filename, as the same path can have different form
+  SmallString<256> P(filename);
+  sys::path::remove_dots(P, true);
+  filename = P.str();
+
+  auto r = filenameToIdx.try_emplace(filename, filenameToIdx.size());
+  if (r.second)
+    filenames.emplace_back(filename);
+
+  return r.first->second;
+}
+
 bool GCOVArc::onTree() const { return flags & GCOV_ARC_ON_TREE; }
 
 //===----------------------------------------------------------------------===//
@@ -322,18 +337,16 @@ StringRef GCOVFunction::getName(bool demangle) const {
     return Name;
   if (demangled.empty()) {
     do {
-      if (Name.startswith("_Z")) {
-        int status = 0;
+      if (Name.starts_with("_Z")) {
         // Name is guaranteed to be NUL-terminated.
-        char *res = itaniumDemangle(Name.data(), nullptr, nullptr, &status);
-        if (status == 0) {
+        if (char *res = itaniumDemangle(Name.data())) {
           demangled = res;
           free(res);
           break;
         }
       }
       demangled = Name;
-    } while (0);
+    } while (false);
   }
   return demangled;
 }
@@ -352,25 +365,60 @@ GCOVBlock &GCOVFunction::getExitBlock() const {
 // For each basic block, the sum of incoming edge counts equals the sum of
 // outgoing edge counts by Kirchoff's circuit law. If the unmeasured arcs form a
 // spanning tree, the count for each unmeasured arc (GCOV_ARC_ON_TREE) can be
-// uniquely identified.
-uint64_t GCOVFunction::propagateCounts(const GCOVBlock &v, GCOVArc *pred) {
-  // If GCOV_ARC_ON_TREE edges do form a tree, visited is not needed; otherwise
-  // this prevents infinite recursion.
-  if (!visited.insert(&v).second)
-    return 0;
+// uniquely identified. Use an iterative algorithm to decrease stack usage for
+// library users in threads. See the edge propagation algorithm in Optimally
+// Profiling and Tracing Programs, ACM Transactions on Programming Languages and
+// Systems, 1994.
+void GCOVFunction::propagateCounts(const GCOVBlock &v, GCOVArc *pred) {
+  struct Elem {
+    const GCOVBlock &v;
+    GCOVArc *pred;
+    bool inDst;
+    size_t i = 0;
+    uint64_t excess = 0;
+  };
 
-  uint64_t excess = 0;
-  for (GCOVArc *e : v.srcs())
-    if (e != pred)
-      excess += e->onTree() ? propagateCounts(e->src, e) : e->count;
-  for (GCOVArc *e : v.dsts())
-    if (e != pred)
-      excess -= e->onTree() ? propagateCounts(e->dst, e) : e->count;
-  if (int64_t(excess) < 0)
-    excess = -excess;
-  if (pred)
-    pred->count = excess;
-  return excess;
+  SmallVector<Elem, 0> stack;
+  stack.push_back({v, pred, false});
+  for (;;) {
+    Elem &u = stack.back();
+    // If GCOV_ARC_ON_TREE edges do form a tree, visited is not needed;
+    // otherwise, this prevents infinite recursion for bad input.
+    if (u.i == 0 && !visited.insert(&u.v).second) {
+      stack.pop_back();
+      if (stack.empty())
+        break;
+      continue;
+    }
+    if (u.i < u.v.pred.size()) {
+      GCOVArc *e = u.v.pred[u.i++];
+      if (e != u.pred) {
+        if (e->onTree())
+          stack.push_back({e->src, e, /*inDst=*/false});
+        else
+          u.excess += e->count;
+      }
+    } else if (u.i < u.v.pred.size() + u.v.succ.size()) {
+      GCOVArc *e = u.v.succ[u.i++ - u.v.pred.size()];
+      if (e != u.pred) {
+        if (e->onTree())
+          stack.push_back({e->dst, e, /*inDst=*/true});
+        else
+          u.excess -= e->count;
+      }
+    } else {
+      uint64_t excess = u.excess;
+      if (static_cast<int64_t>(excess) < 0)
+        excess = -excess;
+      if (u.pred)
+        u.pred->count = excess;
+      bool inDst = u.inDst;
+      stack.pop_back();
+      if (stack.empty())
+        break;
+      stack.back().excess += inDst ? -excess : excess;
+    }
+  }
 }
 
 void GCOVFunction::print(raw_ostream &OS) const {
@@ -421,101 +469,84 @@ void GCOVBlock::print(raw_ostream &OS) const {
 LLVM_DUMP_METHOD void GCOVBlock::dump() const { print(dbgs()); }
 #endif
 
-//===----------------------------------------------------------------------===//
-// Cycles detection
-//
-// The algorithm in GCC is based on the algorithm by Hawick & James:
-//   "Enumerating Circuits and Loops in Graphs with Self-Arcs and Multiple-Arcs"
-//   http://complexity.massey.ac.nz/cstn/013/cstn-013.pdf.
-
-/// Get the count for the detected cycle.
-uint64_t GCOVBlock::getCycleCount(const Edges &Path) {
-  uint64_t CycleCount = std::numeric_limits<uint64_t>::max();
-  for (auto E : Path) {
-    CycleCount = std::min(E->cycleCount, CycleCount);
-  }
-  for (auto E : Path) {
-    E->cycleCount -= CycleCount;
-  }
-  return CycleCount;
-}
-
-/// Unblock a vertex previously marked as blocked.
-void GCOVBlock::unblock(const GCOVBlock *U, BlockVector &Blocked,
-                        BlockVectorLists &BlockLists) {
-  auto it = find(Blocked, U);
-  if (it == Blocked.end()) {
-    return;
-  }
-
-  const size_t index = it - Blocked.begin();
-  Blocked.erase(it);
-
-  const BlockVector ToUnblock(BlockLists[index]);
-  BlockLists.erase(BlockLists.begin() + index);
-  for (auto GB : ToUnblock) {
-    GCOVBlock::unblock(GB, Blocked, BlockLists);
-  }
-}
-
-bool GCOVBlock::lookForCircuit(const GCOVBlock *V, const GCOVBlock *Start,
-                               Edges &Path, BlockVector &Blocked,
-                               BlockVectorLists &BlockLists,
-                               const BlockVector &Blocks, uint64_t &Count) {
-  Blocked.push_back(V);
-  BlockLists.emplace_back(BlockVector());
-  bool FoundCircuit = false;
-
-  for (auto E : V->dsts()) {
-    const GCOVBlock *W = &E->dst;
-    if (W < Start || find(Blocks, W) == Blocks.end()) {
+uint64_t
+GCOVBlock::augmentOneCycle(GCOVBlock *src,
+                           std::vector<std::pair<GCOVBlock *, size_t>> &stack) {
+  GCOVBlock *u;
+  size_t i;
+  stack.clear();
+  stack.emplace_back(src, 0);
+  src->incoming = (GCOVArc *)1; // Mark u available for cycle detection
+  for (;;) {
+    std::tie(u, i) = stack.back();
+    if (i == u->succ.size()) {
+      u->traversable = false;
+      stack.pop_back();
+      if (stack.empty())
+        break;
       continue;
     }
-
-    Path.push_back(E);
-
-    if (W == Start) {
-      // We've a cycle.
-      Count += GCOVBlock::getCycleCount(Path);
-      FoundCircuit = true;
-    } else if (find(Blocked, W) == Blocked.end() && // W is not blocked.
-               GCOVBlock::lookForCircuit(W, Start, Path, Blocked, BlockLists,
-                                         Blocks, Count)) {
-      FoundCircuit = true;
+    ++stack.back().second;
+    GCOVArc *succ = u->succ[i];
+    // Ignore saturated arcs (cycleCount has been reduced to 0) and visited
+    // blocks. Ignore self arcs to guard against bad input (.gcno has no
+    // self arcs).
+    if (succ->cycleCount == 0 || !succ->dst.traversable || &succ->dst == u)
+      continue;
+    if (succ->dst.incoming == nullptr) {
+      succ->dst.incoming = succ;
+      stack.emplace_back(&succ->dst, 0);
+      continue;
     }
-
-    Path.pop_back();
-  }
-
-  if (FoundCircuit) {
-    GCOVBlock::unblock(V, Blocked, BlockLists);
-  } else {
-    for (auto E : V->dsts()) {
-      const GCOVBlock *W = &E->dst;
-      if (W < Start || find(Blocks, W) == Blocks.end()) {
-        continue;
-      }
-      const size_t index = find(Blocked, W) - Blocked.begin();
-      BlockVector &List = BlockLists[index];
-      if (find(List, V) == List.end()) {
-        List.push_back(V);
-      }
+    uint64_t minCount = succ->cycleCount;
+    for (GCOVBlock *v = u;;) {
+      minCount = std::min(minCount, v->incoming->cycleCount);
+      v = &v->incoming->src;
+      if (v == &succ->dst)
+        break;
     }
+    succ->cycleCount -= minCount;
+    for (GCOVBlock *v = u;;) {
+      v->incoming->cycleCount -= minCount;
+      v = &v->incoming->src;
+      if (v == &succ->dst)
+        break;
+    }
+    return minCount;
   }
-
-  return FoundCircuit;
+  return 0;
 }
 
-/// Get the count for the list of blocks which lie on the same line.
-void GCOVBlock::getCyclesCount(const BlockVector &Blocks, uint64_t &Count) {
-  for (auto Block : Blocks) {
-    Edges Path;
-    BlockVector Blocked;
-    BlockVectorLists BlockLists;
-
-    GCOVBlock::lookForCircuit(Block, Block, Path, Blocked, BlockLists, Blocks,
-                              Count);
+// Get the total execution count of loops among blocks on the same line.
+// Assuming a reducible flow graph, the count is the sum of back edge counts.
+// Identifying loops is complex, so we simply find cycles and perform cycle
+// cancelling iteratively.
+uint64_t GCOVBlock::getCyclesCount(const BlockVector &blocks) {
+  std::vector<std::pair<GCOVBlock *, size_t>> stack;
+  uint64_t count = 0, d;
+  for (;;) {
+    // Make blocks on the line traversable and try finding a cycle.
+    for (const auto *b : blocks) {
+      const_cast<GCOVBlock *>(b)->traversable = true;
+      const_cast<GCOVBlock *>(b)->incoming = nullptr;
+    }
+    d = 0;
+    for (const auto *block : blocks) {
+      auto *b = const_cast<GCOVBlock *>(block);
+      if (b->traversable && (d = augmentOneCycle(b, stack)) > 0)
+        break;
+    }
+    if (d == 0)
+      break;
+    count += d;
   }
+  // If there is no more loop, all traversable bits should have been cleared.
+  // This property is needed by subsequent calls.
+  for (const auto *b : blocks) {
+    assert(!b->traversable);
+    (void)b;
+  }
+  return count;
 }
 
 //===----------------------------------------------------------------------===//
@@ -581,7 +612,7 @@ public:
     // Open source files without requiring a NUL terminator. The concurrent
     // modification may nullify the NUL terminator condition.
     ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
-        MemoryBuffer::getFileOrSTDIN(Filename, -1,
+        MemoryBuffer::getFileOrSTDIN(Filename, /*IsText=*/false,
                                      /*RequiresNullTerminator=*/false);
     if (std::error_code EC = BufferOrErr.getError()) {
       errs() << Filename << ": " << EC.message() << "\n";
@@ -635,7 +666,7 @@ static std::string mangleCoveragePath(StringRef Filename, bool PreservePaths) {
 
   if (S < I)
     Result.append(S, I);
-  return std::string(Result.str());
+  return std::string(Result);
 }
 
 std::string Context::getCoveragePath(StringRef filename,
@@ -647,7 +678,7 @@ std::string Context::getCoveragePath(StringRef filename,
     return std::string(filename);
 
   std::string CoveragePath;
-  if (options.LongFileNames && !filename.equals(mainFilename))
+  if (options.LongFileNames && filename != mainFilename)
     CoveragePath =
         mangleCoveragePath(mainFilename, options.PreservePaths) + "##";
   CoveragePath += mangleCoveragePath(filename, options.PreservePaths);
@@ -667,17 +698,19 @@ void Context::collectFunction(GCOVFunction &f, Summary &summary) {
   if (f.startLine >= si.startLineToFunctions.size())
     si.startLineToFunctions.resize(f.startLine + 1);
   si.startLineToFunctions[f.startLine].push_back(&f);
+  SmallSet<uint32_t, 16> lines;
+  SmallSet<uint32_t, 16> linesExec;
   for (const GCOVBlock &b : f.blocksRange()) {
     if (b.lines.empty())
       continue;
-    uint32_t maxLineNum = *std::max_element(b.lines.begin(), b.lines.end());
+    uint32_t maxLineNum = *llvm::max_element(b.lines);
     if (maxLineNum >= si.lines.size())
       si.lines.resize(maxLineNum + 1);
     for (uint32_t lineNum : b.lines) {
       LineInfo &line = si.lines[lineNum];
-      if (!line.exists)
+      if (lines.insert(lineNum).second)
         ++summary.lines;
-      if (line.count == 0 && b.count)
+      if (b.count && linesExec.insert(lineNum).second)
         ++summary.linesExec;
       line.exists = true;
       line.count += b.count;
@@ -707,7 +740,7 @@ void Context::collectSourceLine(SourceInfo &si, Summary *summary,
       arc->cycleCount = arc->count;
   }
 
-  GCOVBlock::getCyclesCount(line.blocks, count);
+  count += GCOVBlock::getCyclesCount(line.blocks);
   line.count = count;
   if (line.exists) {
     ++summary->lines;
@@ -752,9 +785,9 @@ void Context::annotateSource(SourceInfo &si, const GCOVFile &file,
   os << "        -:    0:Source:" << si.displayName << '\n';
   os << "        -:    0:Graph:" << gcno << '\n';
   os << "        -:    0:Data:" << gcda << '\n';
-  os << "        -:    0:Runs:" << file.RunCount << '\n';
-  if (file.Version < GCOV::V900)
-    os << "        -:    0:Programs:" << file.ProgramCount << '\n';
+  os << "        -:    0:Runs:" << file.runCount << '\n';
+  if (file.version < GCOV::V900)
+    os << "        -:    0:Programs:" << file.programCount << '\n';
 
   for (size_t lineNum = 1; !source.empty(); ++lineNum) {
     if (lineNum >= si.lines.size()) {
@@ -880,10 +913,10 @@ void Context::print(StringRef filename, StringRef gcno, StringRef gcda,
 
     if (options.NoOutput || options.Intermediate)
       continue;
-    Optional<raw_fd_ostream> os;
+    std::optional<raw_fd_ostream> os;
     if (!options.UseStdout) {
       std::error_code ec;
-      os.emplace(gcovName, ec, sys::fs::OF_Text);
+      os.emplace(gcovName, ec, sys::fs::OF_TextWithCRLF);
       if (ec) {
         errs() << ec.message() << '\n';
         continue;
@@ -898,7 +931,7 @@ void Context::print(StringRef filename, StringRef gcno, StringRef gcda,
     // (PR GCC/82702). We create just one file.
     std::string outputPath(sys::path::filename(filename));
     std::error_code ec;
-    raw_fd_ostream os(outputPath + ".gcov", ec, sys::fs::OF_Text);
+    raw_fd_ostream os(outputPath + ".gcov", ec, sys::fs::OF_TextWithCRLF);
     if (ec) {
       errs() << ec.message() << '\n';
       return;

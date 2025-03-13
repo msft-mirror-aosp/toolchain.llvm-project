@@ -15,6 +15,7 @@
 #include "char-block.h"
 #include "char-set.h"
 #include "provenance.h"
+#include "flang/Common/Fortran-features.h"
 #include "flang/Common/idioms.h"
 #include "flang/Common/reference-counted.h"
 #include "flang/Common/restorer.h"
@@ -29,47 +30,82 @@
 
 namespace Fortran::parser {
 
-// Use "..."_err_en_US and "..."_en_US literals to define the static
-// text and fatality of a message.
+// Use "..."_err_en_US, "..."_warn_en_US, "..."_port_en_US, "..."_because_en_US,
+// "..."_todo_en_US, and "..."_en_US string literals to define the static text
+// and severity of a message or attachment.
+enum class Severity {
+  Error, // fatal error that prevents code and module file generation
+  Warning, // likely problem
+  Portability, // nonstandard or obsolete features
+  Because, // for AttachTo(), explanatory attachment to support another message
+  Context, // (internal): attachment from SetContext()
+  Todo, // a feature that's not yet implemented, a fatal error
+  None // everything else, common for attachments with source locations
+};
+
 class MessageFixedText {
 public:
+  constexpr MessageFixedText() {}
   constexpr MessageFixedText(
-      const char str[], std::size_t n, bool isFatal = false)
-      : text_{str, n}, isFatal_{isFatal} {}
+      const char str[], std::size_t n, Severity severity = Severity::None)
+      : text_{str, n}, severity_{severity} {}
   constexpr MessageFixedText(const MessageFixedText &) = default;
   constexpr MessageFixedText(MessageFixedText &&) = default;
   constexpr MessageFixedText &operator=(const MessageFixedText &) = default;
   constexpr MessageFixedText &operator=(MessageFixedText &&) = default;
 
   CharBlock text() const { return text_; }
-  bool isFatal() const { return isFatal_; }
+  bool empty() const { return text_.empty(); }
+  Severity severity() const { return severity_; }
+  MessageFixedText &set_severity(Severity severity) {
+    severity_ = severity;
+    return *this;
+  }
+  bool IsFatal() const {
+    return severity_ == Severity::Error || severity_ == Severity::Todo;
+  }
 
 private:
   CharBlock text_;
-  bool isFatal_{false};
+  Severity severity_{Severity::None};
 };
 
 inline namespace literals {
-constexpr MessageFixedText operator""_en_US(const char str[], std::size_t n) {
-  return MessageFixedText{str, n, false /* not fatal */};
-}
-
 constexpr MessageFixedText operator""_err_en_US(
     const char str[], std::size_t n) {
-  return MessageFixedText{str, n, true /* fatal */};
+  return MessageFixedText{str, n, Severity::Error};
+}
+constexpr MessageFixedText operator""_warn_en_US(
+    const char str[], std::size_t n) {
+  return MessageFixedText{str, n, Severity::Warning};
+}
+constexpr MessageFixedText operator""_port_en_US(
+    const char str[], std::size_t n) {
+  return MessageFixedText{str, n, Severity::Portability};
+}
+constexpr MessageFixedText operator""_because_en_US(
+    const char str[], std::size_t n) {
+  return MessageFixedText{str, n, Severity::Because};
+}
+constexpr MessageFixedText operator""_todo_en_US(
+    const char str[], std::size_t n) {
+  return MessageFixedText{str, n, Severity::Todo};
+}
+constexpr MessageFixedText operator""_en_US(const char str[], std::size_t n) {
+  return MessageFixedText{str, n, Severity::None};
 }
 } // namespace literals
 
 // The construction of a MessageFormattedText uses a MessageFixedText
 // as a vsnprintf() formatting string that is applied to the
-// following arguments.  CharBlock and std::string argument
-// values are also supported; they are automatically converted into
-// char pointers that are suitable for '%s' formatting.
+// following arguments.  CharBlock, std::string, and std::string_view
+// argument values are also supported; they are automatically converted
+// into char pointers that are suitable for '%s' formatting.
 class MessageFormattedText {
 public:
   template <typename... A>
   MessageFormattedText(const MessageFixedText &text, A &&...x)
-      : isFatal_{text.isFatal()} {
+      : severity_{text.severity()} {
     Format(&text, Convert(std::forward<A>(x))...);
   }
   MessageFormattedText(const MessageFormattedText &) = default;
@@ -77,17 +113,26 @@ public:
   MessageFormattedText &operator=(const MessageFormattedText &) = default;
   MessageFormattedText &operator=(MessageFormattedText &&) = default;
   const std::string &string() const { return string_; }
-  bool isFatal() const { return isFatal_; }
+  bool IsFatal() const {
+    return severity_ == Severity::Error || severity_ == Severity::Todo;
+  }
+  Severity severity() const { return severity_; }
+  MessageFormattedText &set_severity(Severity severity) {
+    severity_ = severity;
+    return *this;
+  }
   std::string MoveString() { return std::move(string_); }
+  bool operator==(const MessageFormattedText &that) const {
+    return severity_ == that.severity_ && string_ == that.string_;
+  }
+  bool operator!=(const MessageFormattedText &that) const {
+    return !(*this == that);
+  }
 
 private:
   void Format(const MessageFixedText *, ...);
 
   template <typename A> A Convert(const A &x) {
-    static_assert(!std::is_class_v<std::decay_t<A>>);
-    return x;
-  }
-  template <typename A> A Convert(A &x) {
     static_assert(!std::is_class_v<std::decay_t<A>>);
     return x;
   }
@@ -98,13 +143,14 @@ private:
   const char *Convert(const char *s) { return s; }
   const char *Convert(char *s) { return s; }
   const char *Convert(const std::string &);
-  const char *Convert(std::string &);
   const char *Convert(std::string &&);
+  const char *Convert(const std::string_view &);
+  const char *Convert(std::string_view &&);
   const char *Convert(CharBlock);
   std::intmax_t Convert(std::int64_t x) { return x; }
   std::uintmax_t Convert(std::uint64_t x) { return x; }
 
-  bool isFatal_{false};
+  Severity severity_;
   std::string string_;
   std::forward_list<std::string> conversions_; // preserves created strings
 };
@@ -157,6 +203,26 @@ public:
   Message(ProvenanceRange pr, const MessageExpectedText &t)
       : location_{pr}, text_{t} {}
 
+  Message(common::LanguageFeature feature, ProvenanceRange pr,
+      const MessageFixedText &t)
+      : location_{pr}, text_{t}, languageFeature_{feature} {}
+  Message(common::LanguageFeature feature, ProvenanceRange pr,
+      const MessageFormattedText &s)
+      : location_{pr}, text_{s}, languageFeature_{feature} {}
+  Message(common::LanguageFeature feature, ProvenanceRange pr,
+      MessageFormattedText &&s)
+      : location_{pr}, text_{std::move(s)}, languageFeature_{feature} {}
+
+  Message(common::UsageWarning warning, ProvenanceRange pr,
+      const MessageFixedText &t)
+      : location_{pr}, text_{t}, usageWarning_{warning} {}
+  Message(common::UsageWarning warning, ProvenanceRange pr,
+      const MessageFormattedText &s)
+      : location_{pr}, text_{s}, usageWarning_{warning} {}
+  Message(common::UsageWarning warning, ProvenanceRange pr,
+      MessageFormattedText &&s)
+      : location_{pr}, text_{std::move(s)}, usageWarning_{warning} {}
+
   Message(CharBlock csr, const MessageFixedText &t)
       : location_{csr}, text_{t} {}
   Message(CharBlock csr, const MessageFormattedText &s)
@@ -166,12 +232,42 @@ public:
   Message(CharBlock csr, const MessageExpectedText &t)
       : location_{csr}, text_{t} {}
 
+  Message(
+      common::LanguageFeature feature, CharBlock csr, const MessageFixedText &t)
+      : location_{csr}, text_{t}, languageFeature_{feature} {}
+  Message(common::LanguageFeature feature, CharBlock csr,
+      const MessageFormattedText &s)
+      : location_{csr}, text_{s}, languageFeature_{feature} {}
+  Message(
+      common::LanguageFeature feature, CharBlock csr, MessageFormattedText &&s)
+      : location_{csr}, text_{std::move(s)}, languageFeature_{feature} {}
+
+  Message(
+      common::UsageWarning warning, CharBlock csr, const MessageFixedText &t)
+      : location_{csr}, text_{t}, usageWarning_{warning} {}
+  Message(common::UsageWarning warning, CharBlock csr,
+      const MessageFormattedText &s)
+      : location_{csr}, text_{s}, usageWarning_{warning} {}
+  Message(common::UsageWarning warning, CharBlock csr, MessageFormattedText &&s)
+      : location_{csr}, text_{std::move(s)}, usageWarning_{warning} {}
+
   template <typename RANGE, typename A, typename... As>
   Message(RANGE r, const MessageFixedText &t, A &&x, As &&...xs)
       : location_{r}, text_{MessageFormattedText{
                           t, std::forward<A>(x), std::forward<As>(xs)...}} {}
+  template <typename RANGE, typename A, typename... As>
+  Message(common::LanguageFeature feature, RANGE r, const MessageFixedText &t,
+      A &&x, As &&...xs)
+      : location_{r}, text_{MessageFormattedText{
+                          t, std::forward<A>(x), std::forward<As>(xs)...}},
+        languageFeature_{feature} {}
+  template <typename RANGE, typename A, typename... As>
+  Message(common::UsageWarning warning, RANGE r, const MessageFixedText &t,
+      A &&x, As &&...xs)
+      : location_{r}, text_{MessageFormattedText{
+                          t, std::forward<A>(x), std::forward<As>(xs)...}},
+        usageWarning_{warning} {}
 
-  bool attachmentIsContext() const { return attachmentIsContext_; }
   Reference attachment() const { return attachment_; }
 
   void SetContext(Message *c) {
@@ -186,6 +282,12 @@ public:
 
   bool SortBefore(const Message &that) const;
   bool IsFatal() const;
+  Severity severity() const;
+  Message &set_severity(Severity);
+  std::optional<common::LanguageFeature> languageFeature() const;
+  Message &set_languageFeature(common::LanguageFeature);
+  std::optional<common::UsageWarning> usageWarning() const;
+  Message &set_usageWarning(common::UsageWarning);
   std::string ToString() const;
   std::optional<ProvenanceRange> GetProvenanceRange(
       const AllCookedSources &) const;
@@ -200,15 +302,18 @@ public:
     return std::holds_alternative<MessageExpectedText>(text_);
   }
   bool Merge(const Message &);
+  bool operator==(const Message &that) const;
+  bool operator!=(const Message &that) const { return !(*this == that); }
 
 private:
   bool AtSameLocation(const Message &) const;
-
   std::variant<ProvenanceRange, CharBlock> location_;
   std::variant<MessageFixedText, MessageFormattedText, MessageExpectedText>
       text_;
   bool attachmentIsContext_{false};
   Reference attachment_;
+  std::optional<common::LanguageFeature> languageFeature_;
+  std::optional<common::UsageWarning> usageWarning_;
 };
 
 class Messages {
@@ -228,6 +333,16 @@ public:
     return messages_.emplace_back(std::forward<A>(args)...);
   }
 
+  template <typename... A>
+  Message &Say(common::LanguageFeature feature, A &&...args) {
+    return Say(std::forward<A>(args)...).set_languageFeature(feature);
+  }
+
+  template <typename... A>
+  Message &Say(common::UsageWarning warning, A &&...args) {
+    return Say(std::forward<A>(args)...).set_usageWarning(warning);
+  }
+
   void Annex(Messages &&that) {
     messages_.splice(messages_.end(), that.messages_);
   }
@@ -238,7 +353,7 @@ public:
   void ResolveProvenances(const AllCookedSources &);
   void Emit(llvm::raw_ostream &, const AllCookedSources &,
       bool echoSourceLines = true) const;
-  void AttachTo(Message &);
+  void AttachTo(Message &, std::optional<Severity> = std::nullopt);
   bool AnyFatalError() const;
 
 private:
@@ -283,6 +398,10 @@ public:
     return common::ScopedSet(messages_, nullptr);
   }
 
+  template <typename... A> Message *Say(A &&...args) {
+    return Say(at_, std::forward<A>(args)...);
+  }
+
   template <typename... A> Message *Say(CharBlock at, A &&...args) {
     if (messages_ != nullptr) {
       auto &msg{messages_->Say(at, std::forward<A>(args)...)};
@@ -295,8 +414,38 @@ public:
     }
   }
 
-  template <typename... A> Message *Say(A &&...args) {
-    return Say(at_, std::forward<A>(args)...);
+  template <typename... A>
+  Message *Say(std::optional<CharBlock> at, A &&...args) {
+    return Say(at.value_or(at_), std::forward<A>(args)...);
+  }
+
+  template <typename... A>
+  Message *Say(common::LanguageFeature feature, A &&...args) {
+    Message *msg{Say(std::forward<A>(args)...)};
+    if (msg) {
+      msg->set_languageFeature(feature);
+    }
+    return msg;
+  }
+
+  template <typename... A>
+  Message *Say(common::UsageWarning warning, A &&...args) {
+    Message *msg{Say(std::forward<A>(args)...)};
+    if (msg) {
+      msg->set_usageWarning(warning);
+    }
+    return msg;
+  }
+
+  Message *Say(Message &&msg) {
+    if (messages_ != nullptr) {
+      if (contextMessage_) {
+        msg.SetContext(contextMessage_.get());
+      }
+      return &messages_->Say(std::move(msg));
+    } else {
+      return nullptr;
+    }
   }
 
 private:

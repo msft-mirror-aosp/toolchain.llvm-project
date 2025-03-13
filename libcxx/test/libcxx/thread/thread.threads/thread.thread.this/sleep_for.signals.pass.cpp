@@ -6,17 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-// UNSUPPORTED: libcpp-has-no-threads
+// UNSUPPORTED: no-threads
 
 // This test uses the POSIX header <sys/time.h> which Windows doesn't provide
 // UNSUPPORTED: windows
 
-// Until 58a0a70fb2f1, this_thread::sleep_for misbehaves when interrupted by
-// a signal, as tested here. Disable the test on the corresponding system
-// libraries.
-// XFAIL: with_system_cxx_lib=macosx10.11
-// XFAIL: with_system_cxx_lib=macosx10.10
-// XFAIL: with_system_cxx_lib=macosx10.9
+// ALLOW_RETRIES: 3
 
 // <thread>
 

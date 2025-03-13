@@ -8,25 +8,25 @@
 
 #undef NDEBUG
 #include "src/assert/assert.h"
-#include "utils/UnitTest/Test.h"
+#include "test/UnitTest/Test.h"
 
 extern "C" int close(int);
 
-TEST(Assert, Enabled) {
+TEST(LlvmLibcAssert, Enabled) {
   // -1 matches against any signal, which is necessary for now until
-  // __llvm_libc::abort() unblocks SIGABRT. Close standard error for the
+  // LIBC_NAMESPACE::abort() unblocks SIGABRT. Close standard error for the
   // child process so we don't print the assertion failure message.
   EXPECT_DEATH(
       [] {
         close(2);
         assert(0);
       },
-      -1);
+      WITH_SIGNAL(-1));
 }
 
 #define NDEBUG
 #include "src/assert/assert.h"
 
-TEST(Assert, Disabled) {
+TEST(LlvmLibcAssert, Disabled) {
   EXPECT_EXITS([] { assert(0); }, 0);
 }

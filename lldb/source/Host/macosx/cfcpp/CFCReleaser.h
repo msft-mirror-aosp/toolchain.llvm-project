@@ -11,9 +11,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
-#ifdef __cplusplus
-
-#include <assert.h>
+#include <cassert>
 
 // Templatized CF helper class that can own any CF pointer and will
 // call CFRelease() on any valid pointer it owns unless that pointer is
@@ -105,5 +103,4 @@ private:
   T _ptr;
 };
 
-#endif // #ifdef __cplusplus
 #endif // LLDB_SOURCE_HOST_MACOSX_CFCPP_CFCRELEASER_H

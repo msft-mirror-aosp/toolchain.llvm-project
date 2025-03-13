@@ -25,13 +25,16 @@ void ArithmeticIfStmtChecker::Leave(
   // R853 Check for a scalar-numeric-expr
   // C849 that shall not be of type complex.
   auto &parsedExpr{std::get<parser::Expr>(arithmeticIfStmt.t)};
-  if (const auto *expr{GetExpr(parsedExpr)}) {
+  if (const auto *expr{GetExpr(context_, parsedExpr)}) {
     if (expr->Rank() > 0) {
       context_.Say(parsedExpr.source,
           "ARITHMETIC IF expression must be a scalar expression"_err_en_US);
     } else if (ExprHasTypeCategory(*expr, common::TypeCategory::Complex)) {
       context_.Say(parsedExpr.source,
           "ARITHMETIC IF expression must not be a COMPLEX expression"_err_en_US);
+    } else if (ExprHasTypeCategory(*expr, common::TypeCategory::Unsigned)) {
+      context_.Say(parsedExpr.source,
+          "ARITHMETIC IF expression must not be an UNSIGNED expression"_err_en_US);
     } else if (!IsNumericExpr(*expr)) {
       context_.Say(parsedExpr.source,
           "ARITHMETIC IF expression must be a numeric expression"_err_en_US);

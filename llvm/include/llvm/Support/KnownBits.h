@@ -15,6 +15,7 @@
 #define LLVM_SUPPORT_KNOWNBITS_H
 
 #include "llvm/ADT/APInt.h"
+#include <optional>
 
 namespace llvm {
 
@@ -28,9 +29,12 @@ private:
   KnownBits(APInt Zero, APInt One)
       : Zero(std::move(Zero)), One(std::move(One)) {}
 
+  // Flip the range of values: [-0x80000000, 0x7FFFFFFF] <-> [0, 0xFFFFFFFF]
+  static KnownBits flipSignBit(const KnownBits &Val);
+
 public:
   // Default construct Zero and One.
-  KnownBits() {}
+  KnownBits() = default;
 
   /// Create a known bits object of BitWidth bits initialized to unknown.
   KnownBits(unsigned BitWidth) : Zero(BitWidth, 0), One(BitWidth, 0) {}
@@ -47,8 +51,7 @@ public:
 
   /// Returns true if we know the value of all bits.
   bool isConstant() const {
-    assert(!hasConflict() && "KnownBits conflict!");
-    return Zero.countPopulation() + One.countPopulation() == getBitWidth();
+    return Zero.popcount() + One.popcount() == getBitWidth();
   }
 
   /// Returns the value when all bits have a known value. This just returns One
@@ -59,7 +62,12 @@ public:
   }
 
   /// Returns true if we don't know any bits.
-  bool isUnknown() const { return Zero.isNullValue() && One.isNullValue(); }
+  bool isUnknown() const { return Zero.isZero() && One.isZero(); }
+
+  /// Returns true if we don't know the sign bit.
+  bool isSignUnknown() const {
+    return !Zero.isSignBitSet() && !One.isSignBitSet();
+  }
 
   /// Resets the known state of all bits.
   void resetAll() {
@@ -68,16 +76,10 @@ public:
   }
 
   /// Returns true if value is all zero.
-  bool isZero() const {
-    assert(!hasConflict() && "KnownBits conflict!");
-    return Zero.isAllOnesValue();
-  }
+  bool isZero() const { return Zero.isAllOnes(); }
 
   /// Returns true if value is all one bits.
-  bool isAllOnes() const {
-    assert(!hasConflict() && "KnownBits conflict!");
-    return One.isAllOnesValue();
-  }
+  bool isAllOnes() const { return One.isAllOnes(); }
 
   /// Make all bits known to be zero and discard any previous information.
   void setAllZero() {
@@ -98,10 +100,12 @@ public:
   bool isNonNegative() const { return Zero.isSignBitSet(); }
 
   /// Returns true if this value is known to be non-zero.
-  bool isNonZero() const { return !One.isNullValue(); }
+  bool isNonZero() const { return !One.isZero(); }
 
   /// Returns true if this value is known to be positive.
-  bool isStrictlyPositive() const { return Zero.isSignBitSet() && !One.isNullValue(); }
+  bool isStrictlyPositive() const {
+    return Zero.isSignBitSet() && !One.isZero();
+  }
 
   /// Make this value negative.
   void makeNegative() {
@@ -113,16 +117,36 @@ public:
     Zero.setSignBit();
   }
 
-  /// Return the minimal value possible given these KnownBits.
+  /// Return the minimal unsigned value possible given these KnownBits.
   APInt getMinValue() const {
     // Assume that all bits that aren't known-ones are zeros.
     return One;
   }
 
-  /// Return the maximal value possible given these KnownBits.
+  /// Return the minimal signed value possible given these KnownBits.
+  APInt getSignedMinValue() const {
+    // Assume that all bits that aren't known-ones are zeros.
+    APInt Min = One;
+    // Sign bit is unknown.
+    if (Zero.isSignBitClear())
+      Min.setSignBit();
+    return Min;
+  }
+
+  /// Return the maximal unsigned value possible given these KnownBits.
   APInt getMaxValue() const {
     // Assume that all bits that aren't known-zeros are ones.
     return ~Zero;
+  }
+
+  /// Return the maximal signed value possible given these KnownBits.
+  APInt getSignedMaxValue() const {
+    // Assume that all bits that aren't known-zeros are ones.
+    APInt Max = ~Zero;
+    // Sign bit is unknown.
+    if (One.isSignBitClear())
+      Max.clearSignBit();
+    return Max;
   }
 
   /// Return known bits for a truncation of the value we're tracking.
@@ -183,11 +207,23 @@ public:
   /// tracking.
   KnownBits sextInReg(unsigned SrcBitWidth) const;
 
-  /// Return a KnownBits with the extracted bits
-  /// [bitPosition,bitPosition+numBits).
+  /// Insert the bits from a smaller known bits starting at bitPosition.
+  void insertBits(const KnownBits &SubBits, unsigned BitPosition) {
+    Zero.insertBits(SubBits.Zero, BitPosition);
+    One.insertBits(SubBits.One, BitPosition);
+  }
+
+  /// Return a subset of the known bits from [bitPosition,bitPosition+numBits).
   KnownBits extractBits(unsigned NumBits, unsigned BitPosition) const {
     return KnownBits(Zero.extractBits(NumBits, BitPosition),
                      One.extractBits(NumBits, BitPosition));
+  }
+
+  /// Concatenate the bits from \p Lo onto the bottom of *this.  This is
+  /// equivalent to:
+  ///   (this->zext(NewWidth) << Lo.getBitWidth()) | Lo.zext(NewWidth)
+  KnownBits concat(const KnownBits &Lo) const {
+    return KnownBits(Zero.concat(Lo.Zero), One.concat(Lo.One));
   }
 
   /// Return KnownBits based on this, but updated given that the underlying
@@ -195,24 +231,16 @@ public:
   KnownBits makeGE(const APInt &Val) const;
 
   /// Returns the minimum number of trailing zero bits.
-  unsigned countMinTrailingZeros() const {
-    return Zero.countTrailingOnes();
-  }
+  unsigned countMinTrailingZeros() const { return Zero.countr_one(); }
 
   /// Returns the minimum number of trailing one bits.
-  unsigned countMinTrailingOnes() const {
-    return One.countTrailingOnes();
-  }
+  unsigned countMinTrailingOnes() const { return One.countr_one(); }
 
   /// Returns the minimum number of leading zero bits.
-  unsigned countMinLeadingZeros() const {
-    return Zero.countLeadingOnes();
-  }
+  unsigned countMinLeadingZeros() const { return Zero.countl_one(); }
 
   /// Returns the minimum number of leading one bits.
-  unsigned countMinLeadingOnes() const {
-    return One.countLeadingOnes();
-  }
+  unsigned countMinLeadingOnes() const { return One.countl_one(); }
 
   /// Returns the number of times the sign bit is replicated into the other
   /// bits.
@@ -221,37 +249,44 @@ public:
       return countMinLeadingZeros();
     if (isNegative())
       return countMinLeadingOnes();
-    return 0;
+    // Every value has at least 1 sign bit.
+    return 1;
+  }
+
+  /// Returns the maximum number of bits needed to represent all possible
+  /// signed values with these known bits. This is the inverse of the minimum
+  /// number of known sign bits. Examples for bitwidth 5:
+  /// 110?? --> 4
+  /// 0000? --> 2
+  unsigned countMaxSignificantBits() const {
+    return getBitWidth() - countMinSignBits() + 1;
   }
 
   /// Returns the maximum number of trailing zero bits possible.
-  unsigned countMaxTrailingZeros() const {
-    return One.countTrailingZeros();
-  }
+  unsigned countMaxTrailingZeros() const { return One.countr_zero(); }
 
   /// Returns the maximum number of trailing one bits possible.
-  unsigned countMaxTrailingOnes() const {
-    return Zero.countTrailingZeros();
-  }
+  unsigned countMaxTrailingOnes() const { return Zero.countr_zero(); }
 
   /// Returns the maximum number of leading zero bits possible.
-  unsigned countMaxLeadingZeros() const {
-    return One.countLeadingZeros();
-  }
+  unsigned countMaxLeadingZeros() const { return One.countl_zero(); }
 
   /// Returns the maximum number of leading one bits possible.
-  unsigned countMaxLeadingOnes() const {
-    return Zero.countLeadingZeros();
-  }
+  unsigned countMaxLeadingOnes() const { return Zero.countl_zero(); }
 
   /// Returns the number of bits known to be one.
-  unsigned countMinPopulation() const {
-    return One.countPopulation();
-  }
+  unsigned countMinPopulation() const { return One.popcount(); }
 
   /// Returns the maximum number of bits that could be one.
   unsigned countMaxPopulation() const {
-    return getBitWidth() - Zero.countPopulation();
+    return getBitWidth() - Zero.popcount();
+  }
+
+  /// Returns the maximum number of bits needed to represent all possible
+  /// unsigned values with these known bits. This is the inverse of the
+  /// minimum number of leading zeros.
+  unsigned countMaxActiveBits() const {
+    return getBitWidth() - countMinLeadingZeros();
   }
 
   /// Create known bits from a known constant.
@@ -259,9 +294,29 @@ public:
     return KnownBits(~C, C);
   }
 
-  /// Compute known bits common to LHS and RHS.
-  static KnownBits commonBits(const KnownBits &LHS, const KnownBits &RHS) {
-    return KnownBits(LHS.Zero & RHS.Zero, LHS.One & RHS.One);
+  /// Returns KnownBits information that is known to be true for both this and
+  /// RHS.
+  ///
+  /// When an operation is known to return one of its operands, this can be used
+  /// to combine information about the known bits of the operands to get the
+  /// information that must be true about the result.
+  KnownBits intersectWith(const KnownBits &RHS) const {
+    return KnownBits(Zero & RHS.Zero, One & RHS.One);
+  }
+
+  /// Returns KnownBits information that is known to be true for either this or
+  /// RHS or both.
+  ///
+  /// This can be used to combine different sources of information about the
+  /// known bits of a single value, e.g. information about the low bits and the
+  /// high bits of the result of a multiplication.
+  KnownBits unionWith(const KnownBits &RHS) const {
+    return KnownBits(Zero | RHS.Zero, One | RHS.One);
+  }
+
+  /// Return true if LHS and RHS have no common bits set.
+  static bool haveNoCommonBitsSet(const KnownBits &LHS, const KnownBits &RHS) {
+    return (LHS.Zero | RHS.Zero).isAllOnes();
   }
 
   /// Compute known bits resulting from adding LHS, RHS and a 1-bit Carry.
@@ -269,14 +324,67 @@ public:
       const KnownBits &LHS, const KnownBits &RHS, const KnownBits &Carry);
 
   /// Compute known bits resulting from adding LHS and RHS.
-  static KnownBits computeForAddSub(bool Add, bool NSW, const KnownBits &LHS,
-                                    KnownBits RHS);
+  static KnownBits computeForAddSub(bool Add, bool NSW, bool NUW,
+                                    const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute known bits results from subtracting RHS from LHS with 1-bit
+  /// Borrow.
+  static KnownBits computeForSubBorrow(const KnownBits &LHS, KnownBits RHS,
+                                       const KnownBits &Borrow);
+
+  /// Compute knownbits resulting from addition of LHS and RHS.
+  static KnownBits add(const KnownBits &LHS, const KnownBits &RHS,
+                       bool NSW = false, bool NUW = false) {
+    return computeForAddSub(/*Add=*/true, NSW, NUW, LHS, RHS);
+  }
+
+  /// Compute knownbits resulting from subtraction of LHS and RHS.
+  static KnownBits sub(const KnownBits &LHS, const KnownBits &RHS,
+                       bool NSW = false, bool NUW = false) {
+    return computeForAddSub(/*Add=*/false, NSW, NUW, LHS, RHS);
+  }
+
+  /// Compute knownbits resulting from llvm.sadd.sat(LHS, RHS)
+  static KnownBits sadd_sat(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute knownbits resulting from llvm.uadd.sat(LHS, RHS)
+  static KnownBits uadd_sat(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute knownbits resulting from llvm.ssub.sat(LHS, RHS)
+  static KnownBits ssub_sat(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute knownbits resulting from llvm.usub.sat(LHS, RHS)
+  static KnownBits usub_sat(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute knownbits resulting from APIntOps::avgFloorS
+  static KnownBits avgFloorS(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute knownbits resulting from APIntOps::avgFloorU
+  static KnownBits avgFloorU(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute knownbits resulting from APIntOps::avgCeilS
+  static KnownBits avgCeilS(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute knownbits resulting from APIntOps::avgCeilU
+  static KnownBits avgCeilU(const KnownBits &LHS, const KnownBits &RHS);
 
   /// Compute known bits resulting from multiplying LHS and RHS.
-  static KnownBits computeForMul(const KnownBits &LHS, const KnownBits &RHS);
+  static KnownBits mul(const KnownBits &LHS, const KnownBits &RHS,
+                       bool NoUndefSelfMultiply = false);
+
+  /// Compute known bits from sign-extended multiply-hi.
+  static KnownBits mulhs(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute known bits from zero-extended multiply-hi.
+  static KnownBits mulhu(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute known bits for sdiv(LHS, RHS).
+  static KnownBits sdiv(const KnownBits &LHS, const KnownBits &RHS,
+                        bool Exact = false);
 
   /// Compute known bits for udiv(LHS, RHS).
-  static KnownBits udiv(const KnownBits &LHS, const KnownBits &RHS);
+  static KnownBits udiv(const KnownBits &LHS, const KnownBits &RHS,
+                        bool Exact = false);
 
   /// Compute known bits for urem(LHS, RHS).
   static KnownBits urem(const KnownBits &LHS, const KnownBits &RHS);
@@ -296,29 +404,57 @@ public:
   /// Compute known bits for smin(LHS, RHS).
   static KnownBits smin(const KnownBits &LHS, const KnownBits &RHS);
 
+  /// Compute known bits for abdu(LHS, RHS).
+  static KnownBits abdu(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Compute known bits for abds(LHS, RHS).
+  static KnownBits abds(KnownBits LHS, KnownBits RHS);
+
   /// Compute known bits for shl(LHS, RHS).
   /// NOTE: RHS (shift amount) bitwidth doesn't need to be the same as LHS.
-  static KnownBits shl(const KnownBits &LHS, const KnownBits &RHS);
+  static KnownBits shl(const KnownBits &LHS, const KnownBits &RHS,
+                       bool NUW = false, bool NSW = false,
+                       bool ShAmtNonZero = false);
 
   /// Compute known bits for lshr(LHS, RHS).
   /// NOTE: RHS (shift amount) bitwidth doesn't need to be the same as LHS.
-  static KnownBits lshr(const KnownBits &LHS, const KnownBits &RHS);
+  static KnownBits lshr(const KnownBits &LHS, const KnownBits &RHS,
+                        bool ShAmtNonZero = false, bool Exact = false);
 
   /// Compute known bits for ashr(LHS, RHS).
   /// NOTE: RHS (shift amount) bitwidth doesn't need to be the same as LHS.
-  static KnownBits ashr(const KnownBits &LHS, const KnownBits &RHS);
+  static KnownBits ashr(const KnownBits &LHS, const KnownBits &RHS,
+                        bool ShAmtNonZero = false, bool Exact = false);
 
-  /// Insert the bits from a smaller known bits starting at bitPosition.
-  void insertBits(const KnownBits &SubBits, unsigned BitPosition) {
-    Zero.insertBits(SubBits.Zero, BitPosition);
-    One.insertBits(SubBits.One, BitPosition);
-  }
+  /// Determine if these known bits always give the same ICMP_EQ result.
+  static std::optional<bool> eq(const KnownBits &LHS, const KnownBits &RHS);
 
-  /// Return a subset of the known bits from [bitPosition,bitPosition+numBits).
-  KnownBits extractBits(unsigned NumBits, unsigned BitPosition) {
-    return KnownBits(Zero.extractBits(NumBits, BitPosition),
-                     One.extractBits(NumBits, BitPosition));
-  }
+  /// Determine if these known bits always give the same ICMP_NE result.
+  static std::optional<bool> ne(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_UGT result.
+  static std::optional<bool> ugt(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_UGE result.
+  static std::optional<bool> uge(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_ULT result.
+  static std::optional<bool> ult(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_ULE result.
+  static std::optional<bool> ule(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_SGT result.
+  static std::optional<bool> sgt(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_SGE result.
+  static std::optional<bool> sge(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_SLT result.
+  static std::optional<bool> slt(const KnownBits &LHS, const KnownBits &RHS);
+
+  /// Determine if these known bits always give the same ICMP_SLE result.
+  static std::optional<bool> sle(const KnownBits &LHS, const KnownBits &RHS);
 
   /// Update known bits based on ANDing with RHS.
   KnownBits &operator&=(const KnownBits &RHS);
@@ -332,13 +468,35 @@ public:
   /// Compute known bits for the absolute value.
   KnownBits abs(bool IntMinIsPoison = false) const;
 
-  KnownBits byteSwap() {
+  KnownBits byteSwap() const {
     return KnownBits(Zero.byteSwap(), One.byteSwap());
   }
 
-  KnownBits reverseBits() {
+  KnownBits reverseBits() const {
     return KnownBits(Zero.reverseBits(), One.reverseBits());
   }
+
+  /// Compute known bits for X & -X, which has only the lowest bit set of X set.
+  /// The name comes from the X86 BMI instruction
+  KnownBits blsi() const;
+
+  /// Compute known bits for X ^ (X - 1), which has all bits up to and including
+  /// the lowest set bit of X set. The name comes from the X86 BMI instruction.
+  KnownBits blsmsk() const;
+
+  bool operator==(const KnownBits &Other) const {
+    return Zero == Other.Zero && One == Other.One;
+  }
+
+  bool operator!=(const KnownBits &Other) const { return !(*this == Other); }
+
+  void print(raw_ostream &OS) const;
+  void dump() const;
+
+private:
+  // Internal helper for getting the initial KnownBits for an `srem` or `urem`
+  // operation with the low-bits set.
+  static KnownBits remGetLowBits(const KnownBits &LHS, const KnownBits &RHS);
 };
 
 inline KnownBits operator&(KnownBits LHS, const KnownBits &RHS) {
@@ -369,6 +527,11 @@ inline KnownBits operator^(KnownBits LHS, const KnownBits &RHS) {
 inline KnownBits operator^(const KnownBits &LHS, KnownBits &&RHS) {
   RHS ^= LHS;
   return std::move(RHS);
+}
+
+inline raw_ostream &operator<<(raw_ostream &OS, const KnownBits &Known) {
+  Known.print(OS);
+  return OS;
 }
 
 } // end namespace llvm

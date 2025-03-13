@@ -11,7 +11,7 @@ int S::(*e;  // expected-error{{expected unqualified-id}}
 int S::*f;
 int g = S::(a);  // expected-error {{expected unqualified-id}} expected-error {{use of undeclared identifier 'a'}}
 int h = S::(b;  // expected-error {{expected unqualified-id}} expected-error {{use of undeclared identifier 'b'}}
-            );
+            );  // expected-error {{expected unqualified-id}}
 int i = S::c;
 
 void foo() {
@@ -24,7 +24,7 @@ void foo() {
 // The following tests used to be crash bugs.
 
 // PR21815
-// expected-error@+2{{C++ requires a type specifier for all declarations}}
+// expected-error@+2{{a type specifier is required for all declarations}}
 // expected-error@+1{{expected unqualified-id}}
 a (::( ));
 

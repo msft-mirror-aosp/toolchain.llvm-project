@@ -18,6 +18,7 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadPlanStepOut.h"
 #include "lldb/Target/ThreadPlanStepThrough.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegularExpression.h"
 #include "lldb/Utility/Stream.h"
@@ -33,14 +34,14 @@ uint32_t ThreadPlanStepInRange::s_default_flag_values =
 
 ThreadPlanStepInRange::ThreadPlanStepInRange(
     Thread &thread, const AddressRange &range,
-    const SymbolContext &addr_context, lldb::RunMode stop_others,
-    LazyBool step_in_avoids_code_without_debug_info,
+    const SymbolContext &addr_context, const char *step_into_target,
+    lldb::RunMode stop_others, LazyBool step_in_avoids_code_without_debug_info,
     LazyBool step_out_avoids_code_without_debug_info)
     : ThreadPlanStepRange(ThreadPlan::eKindStepInRange,
                           "Step Range stepping in", thread, range, addr_context,
                           stop_others),
       ThreadPlanShouldStopHere(this), m_step_past_prologue(true),
-      m_virtual_step(false) {
+      m_virtual_step(eLazyBoolCalculate), m_step_into_target(step_into_target) {
   SetCallbacks();
   SetFlagsToDefault();
   SetupAvoidNoDebug(step_in_avoids_code_without_debug_info,
@@ -125,7 +126,7 @@ void ThreadPlanStepInRange::GetDescription(Stream *s,
 }
 
 bool ThreadPlanStepInRange::ShouldStop(Event *event_ptr) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+  Log *log = GetLog(LLDBLog::Step);
 
   if (log) {
     StreamString s;
@@ -133,6 +134,7 @@ bool ThreadPlanStepInRange::ShouldStop(Event *event_ptr) {
                 GetTarget().GetArchitecture().GetAddressByteSize());
     LLDB_LOGF(log, "ThreadPlanStepInRange reached %s.", s.GetData());
   }
+  ClearNextBranchBreakpointExplainedStop();
 
   if (IsPlanComplete())
     return true;
@@ -147,7 +149,7 @@ bool ThreadPlanStepInRange::ShouldStop(Event *event_ptr) {
       m_sub_plan_sp.reset();
   }
 
-  if (m_virtual_step) {
+  if (m_virtual_step == eLazyBoolYes) {
     // If we've just completed a virtual step, all we need to do is check for a
     // ShouldStopHere plan, and otherwise we're done.
     // FIXME - This can be both a step in and a step out.  Probably should
@@ -248,7 +250,7 @@ bool ThreadPlanStepInRange::ShouldStop(Event *event_ptr) {
                                                         eSymbolContextSymbol);
 
         if (sc.function) {
-          func_start_address = sc.function->GetAddressRange().GetBaseAddress();
+          func_start_address = sc.function->GetAddress();
           if (curr_addr == func_start_address.GetLoadAddress(&GetTarget()))
             bytes_to_skip = sc.function->GetPrologueByteSize();
         } else if (sc.symbol) {
@@ -261,15 +263,14 @@ bool ThreadPlanStepInRange::ShouldStop(Event *event_ptr) {
           const Architecture *arch = GetTarget().GetArchitecturePlugin();
           if (arch) {
             Address curr_sec_addr;
-            GetTarget().GetSectionLoadList().ResolveLoadAddress(curr_addr,
-                                                                curr_sec_addr);
+            GetTarget().ResolveLoadAddress(curr_addr, curr_sec_addr);
             bytes_to_skip = arch->GetBytesToSkip(*sc.symbol, curr_sec_addr);
           }
         }
 
         if (bytes_to_skip != 0) {
           func_start_address.Slide(bytes_to_skip);
-          log = lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP);
+          log = GetLog(LLDBLog::Step);
           LLDB_LOGF(log, "Pushing past prologue ");
 
           m_sub_plan_sp = thread.QueueThreadPlanForRunToAddress(
@@ -291,11 +292,10 @@ bool ThreadPlanStepInRange::ShouldStop(Event *event_ptr) {
 }
 
 void ThreadPlanStepInRange::SetAvoidRegexp(const char *name) {
-  auto name_ref = llvm::StringRef::withNullAsEmpty(name);
   if (m_avoid_regexp_up)
-    *m_avoid_regexp_up = RegularExpression(name_ref);
+    *m_avoid_regexp_up = RegularExpression(name);
   else
-    m_avoid_regexp_up = std::make_unique<RegularExpression>(name_ref);
+    m_avoid_regexp_up = std::make_unique<RegularExpression>(name);
 }
 
 void ThreadPlanStepInRange::SetDefaultFlagValue(uint32_t new_value) {
@@ -340,17 +340,13 @@ bool ThreadPlanStepInRange::FrameMatchesAvoidCriteria() {
           sc.GetFunctionName(Mangled::ePreferDemangledWithoutArguments)
               .GetCString();
       if (frame_function_name) {
-        llvm::SmallVector<llvm::StringRef, 2> matches;
-        bool return_value =
-            avoid_regexp_to_use->Execute(frame_function_name, &matches);
-        if (return_value && matches.size() > 1) {
-          std::string match = matches[1].str();
-          LLDB_LOGF(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP),
-                    "Stepping out of function \"%s\" because it matches "
-                    "the avoid regexp \"%s\" - match substring: \"%s\".",
+        bool return_value = avoid_regexp_to_use->Execute(frame_function_name);
+        if (return_value) {
+          LLDB_LOGF(GetLog(LLDBLog::Step),
+                    "Stepping out of function \"%s\" because it matches the "
+                    "avoid regexp \"%s\".",
                     frame_function_name,
-                    avoid_regexp_to_use->GetText().str().c_str(),
-                    match.c_str());
+                    avoid_regexp_to_use->GetText().str().c_str());
         }
         return return_value;
       }
@@ -364,7 +360,7 @@ bool ThreadPlanStepInRange::DefaultShouldStopHereCallback(
     Status &status, void *baton) {
   bool should_stop_here = true;
   StackFrame *frame = current_plan->GetThread().GetStackFrameAtIndex(0).get();
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+  Log *log = GetLog(LLDBLog::Step);
 
   // First see if the ThreadPlanShouldStopHere default implementation thinks we
   // should get out of here:
@@ -434,7 +430,7 @@ bool ThreadPlanStepInRange::DoPlanExplainsStop(Event *event_ptr) {
 
   bool return_value = false;
 
-  if (m_virtual_step) {
+  if (m_virtual_step == eLazyBoolYes) {
     return_value = true;
   } else {
     StopInfoSP stop_info_sp = GetPrivateStopInfo();
@@ -446,7 +442,7 @@ bool ThreadPlanStepInRange::DoPlanExplainsStop(Event *event_ptr) {
           return_value = true;
         }
       } else if (IsUsuallyUnexplainedStopReason(reason)) {
-        Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+        Log *log = GetLog(LLDBLog::Step);
         if (log)
           log->PutCString("ThreadPlanStepInRange got asked if it explains the "
                           "stop for some reason other than step.");
@@ -463,13 +459,16 @@ bool ThreadPlanStepInRange::DoPlanExplainsStop(Event *event_ptr) {
 
 bool ThreadPlanStepInRange::DoWillResume(lldb::StateType resume_state,
                                          bool current_plan) {
-  m_virtual_step = false;
+  m_virtual_step = eLazyBoolCalculate;
   if (resume_state == eStateStepping && current_plan) {
     Thread &thread = GetThread();
     // See if we are about to step over a virtual inlined call.
+    // But if we already know we're virtual stepping, don't decrement the
+    // inlined depth again...
+
     bool step_without_resume = thread.DecrementCurrentInlinedDepth();
     if (step_without_resume) {
-      Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
+      Log *log = GetLog(LLDBLog::Step);
       LLDB_LOGF(log,
                 "ThreadPlanStepInRange::DoWillResume: returning false, "
                 "inline_depth: %d",
@@ -479,11 +478,21 @@ bool ThreadPlanStepInRange::DoWillResume(lldb::StateType resume_state,
       // FIXME: Maybe it would be better to create a InlineStep stop reason, but
       // then
       // the whole rest of the world would have to handle that stop reason.
-      m_virtual_step = true;
+      m_virtual_step = eLazyBoolYes;
     }
     return !step_without_resume;
   }
   return true;
 }
 
-bool ThreadPlanStepInRange::IsVirtualStep() { return m_virtual_step; }
+bool ThreadPlanStepInRange::IsVirtualStep() {
+  if (m_virtual_step == eLazyBoolCalculate) {
+    Thread &thread = GetThread();
+    uint32_t cur_inline_depth = thread.GetCurrentInlinedDepth();
+    if (cur_inline_depth == UINT32_MAX || cur_inline_depth == 0)
+      m_virtual_step = eLazyBoolNo;
+    else
+      m_virtual_step = eLazyBoolYes;
+  }
+  return m_virtual_step == eLazyBoolYes;
+}

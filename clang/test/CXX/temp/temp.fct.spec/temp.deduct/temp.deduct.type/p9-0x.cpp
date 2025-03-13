@@ -3,7 +3,7 @@
 template<typename ...Types> struct tuple;
 template<unsigned> struct unsigned_c;
 
-template<typename T, typename U> 
+template<typename T, typename U>
 struct is_same {
   static const bool value = false;
 };

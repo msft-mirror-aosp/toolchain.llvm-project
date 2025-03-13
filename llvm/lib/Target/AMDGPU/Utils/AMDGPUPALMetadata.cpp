@@ -15,14 +15,12 @@
 //
 
 #include "AMDGPUPALMetadata.h"
-#include "AMDGPU.h"
-#include "AMDGPUAsmPrinter.h"
-#include "MCTargetDesc/AMDGPUTargetStreamer.h"
+#include "AMDGPUPTNote.h"
 #include "SIDefines.h"
 #include "llvm/BinaryFormat/ELF.h"
-#include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/Support/AMDGPUMetadata.h"
 #include "llvm/Support/EndianStream.h"
 
@@ -31,19 +29,19 @@ using namespace llvm::AMDGPU;
 
 // Read the PAL metadata from IR metadata, where it was put by the frontend.
 void AMDGPUPALMetadata::readFromIR(Module &M) {
-  auto NamedMD = M.getNamedMetadata("amdgpu.pal.metadata.msgpack");
+  auto *NamedMD = M.getNamedMetadata("amdgpu.pal.metadata.msgpack");
   if (NamedMD && NamedMD->getNumOperands()) {
     // This is the new msgpack format for metadata. It is a NamedMD containing
     // an MDTuple containing an MDString containing the msgpack data.
     BlobType = ELF::NT_AMDGPU_METADATA;
-    auto MDN = dyn_cast<MDTuple>(NamedMD->getOperand(0));
+    auto *MDN = dyn_cast<MDTuple>(NamedMD->getOperand(0));
     if (MDN && MDN->getNumOperands()) {
-      if (auto MDS = dyn_cast<MDString>(MDN->getOperand(0)))
+      if (auto *MDS = dyn_cast<MDString>(MDN->getOperand(0)))
         setFromMsgPackBlob(MDS->getString());
     }
     return;
   }
-  BlobType = ELF::NT_AMD_AMDGPU_PAL_METADATA;
+  BlobType = ELF::NT_AMD_PAL_METADATA;
   NamedMD = M.getNamedMetadata("amdgpu.pal.metadata");
   if (!NamedMD || !NamedMD->getNumOperands()) {
     // Emit msgpack metadata by default
@@ -54,12 +52,12 @@ void AMDGPUPALMetadata::readFromIR(Module &M) {
   // containing an MDTuple containing a number of MDNodes each of which is an
   // integer value, and each two integer values forms a key=value pair that we
   // store as Registers[key]=value in the map.
-  auto Tuple = dyn_cast<MDTuple>(NamedMD->getOperand(0));
+  auto *Tuple = dyn_cast<MDTuple>(NamedMD->getOperand(0));
   if (!Tuple)
     return;
   for (unsigned I = 0, E = Tuple->getNumOperands() & -2; I != E; I += 2) {
-    auto Key = mdconst::dyn_extract<ConstantInt>(Tuple->getOperand(I));
-    auto Val = mdconst::dyn_extract<ConstantInt>(Tuple->getOperand(I + 1));
+    auto *Key = mdconst::dyn_extract<ConstantInt>(Tuple->getOperand(I));
+    auto *Val = mdconst::dyn_extract<ConstantInt>(Tuple->getOperand(I + 1));
     if (!Key || !Val)
       continue;
     setRegister(Key->getZExtValue(), Val->getZExtValue());
@@ -71,14 +69,14 @@ void AMDGPUPALMetadata::readFromIR(Module &M) {
 // Metadata.
 bool AMDGPUPALMetadata::setFromBlob(unsigned Type, StringRef Blob) {
   BlobType = Type;
-  if (Type == ELF::NT_AMD_AMDGPU_PAL_METADATA)
+  if (Type == ELF::NT_AMD_PAL_METADATA)
     return setFromLegacyBlob(Blob);
   return setFromMsgPackBlob(Blob);
 }
 
 // Set PAL metadata from legacy (array of key=value pairs) blob.
 bool AMDGPUPALMetadata::setFromLegacyBlob(StringRef Blob) {
-  auto Data = reinterpret_cast<const uint32_t *>(Blob.data());
+  const auto *Data = reinterpret_cast<const uint32_t *>(Blob.data());
   for (unsigned I = 0; I != Blob.size() / sizeof(uint32_t) / 2; ++I)
     setRegister(Data[I * 2], Data[I * 2 + 1]);
   return true;
@@ -86,7 +84,6 @@ bool AMDGPUPALMetadata::setFromLegacyBlob(StringRef Blob) {
 
 // Set PAL metadata from msgpack blob.
 bool AMDGPUPALMetadata::setFromMsgPackBlob(StringRef Blob) {
-  msgpack::Reader Reader(Blob);
   return MsgPackDoc.readFromBlob(Blob, /*Multi=*/false);
 }
 
@@ -141,10 +138,20 @@ void AMDGPUPALMetadata::setRsrc1(CallingConv::ID CC, unsigned Val) {
   setRegister(getRsrc1Reg(CC), Val);
 }
 
+void AMDGPUPALMetadata::setRsrc1(CallingConv::ID CC, const MCExpr *Val,
+                                 MCContext &Ctx) {
+  setRegister(getRsrc1Reg(CC), Val, Ctx);
+}
+
 // Set the rsrc2 register in the metadata for a particular shader stage.
 // In fact this ORs the value into any previous setting of the register.
 void AMDGPUPALMetadata::setRsrc2(CallingConv::ID CC, unsigned Val) {
   setRegister(getRsrc1Reg(CC) + 1, Val);
+}
+
+void AMDGPUPALMetadata::setRsrc2(CallingConv::ID CC, const MCExpr *Val,
+                                 MCContext &Ctx) {
+  setRegister(getRsrc1Reg(CC) + 1, Val, Ctx);
 }
 
 // Set the SPI_PS_INPUT_ENA register in the metadata.
@@ -186,12 +193,47 @@ void AMDGPUPALMetadata::setRegister(unsigned Reg, unsigned Val) {
   N = N.getDocument()->getNode(Val);
 }
 
+// Set a register in the metadata.
+// In fact this ORs the value into any previous setting of the register.
+void AMDGPUPALMetadata::setRegister(unsigned Reg, const MCExpr *Val,
+                                    MCContext &Ctx) {
+  if (!isLegacy()) {
+    // In the new MsgPack format, ignore register numbered >= 0x10000000. It
+    // is a PAL ABI pseudo-register in the old non-MsgPack format.
+    if (Reg >= 0x10000000)
+      return;
+  }
+  auto &N = getRegisters()[MsgPackDoc.getNode(Reg)];
+  auto ExprIt = REM.find(Reg);
+
+  if (ExprIt != REM.end()) {
+    Val = MCBinaryExpr::createOr(Val, ExprIt->getSecond(), Ctx);
+    // This conditional may be redundant most of the time, but the alternate
+    // setRegister(unsigned, unsigned) could've been called while the
+    // conditional returns true (i.e., Reg exists in REM).
+    if (N.getKind() == msgpack::Type::UInt) {
+      const MCExpr *NExpr = MCConstantExpr::create(N.getUInt(), Ctx);
+      Val = MCBinaryExpr::createOr(Val, NExpr, Ctx);
+    }
+  } else if (N.getKind() == msgpack::Type::UInt) {
+    const MCExpr *NExpr = MCConstantExpr::create(N.getUInt(), Ctx);
+    Val = MCBinaryExpr::createOr(Val, NExpr, Ctx);
+  } else {
+    // Default to uint64_t 0 so additional calls to setRegister will allow
+    // propagate ORs.
+    N = (uint64_t)0;
+  }
+  REM[Reg] = Val;
+  DelayedExprs.assignDocNode(N, msgpack::Type::UInt, Val);
+}
+
 // Set the entry point name for one shader.
 void AMDGPUPALMetadata::setEntryPoint(unsigned CC, StringRef Name) {
   if (isLegacy())
     return;
   // Msgpack format.
-  getHwStage(CC)[".entry_point"] = MsgPackDoc.getNode(Name, /*Copy=*/true);
+  getHwStage(CC)[".entry_point_symbol"] =
+      MsgPackDoc.getNode(Name, /*Copy=*/true);
 }
 
 // Set the number of used vgprs in the metadata. This is an optional
@@ -211,6 +253,29 @@ void AMDGPUPALMetadata::setNumUsedVgprs(CallingConv::ID CC, unsigned Val) {
   getHwStage(CC)[".vgpr_count"] = MsgPackDoc.getNode(Val);
 }
 
+void AMDGPUPALMetadata::setNumUsedVgprs(CallingConv::ID CC, const MCExpr *Val,
+                                        MCContext &Ctx) {
+  if (isLegacy()) {
+    // Old non-msgpack format.
+    unsigned NumUsedVgprsKey = getScratchSizeKey(CC) +
+                               PALMD::Key::VS_NUM_USED_VGPRS -
+                               PALMD::Key::VS_SCRATCH_SIZE;
+    setRegister(NumUsedVgprsKey, Val, Ctx);
+    return;
+  }
+  // Msgpack format.
+  setHwStage(CC, ".vgpr_count", msgpack::Type::UInt, Val);
+}
+
+// Set the number of used agprs in the metadata.
+void AMDGPUPALMetadata::setNumUsedAgprs(CallingConv::ID CC, unsigned Val) {
+  getHwStage(CC)[".agpr_count"] = Val;
+}
+
+void AMDGPUPALMetadata::setNumUsedAgprs(unsigned CC, const MCExpr *Val) {
+  setHwStage(CC, ".agpr_count", msgpack::Type::UInt, Val);
+}
+
 // Set the number of used sgprs in the metadata. This is an optional advisory
 // record for logging etc; wave dispatch actually uses the rsrc1 register for
 // the shader stage to determine the number of sgprs to allocate.
@@ -227,6 +292,20 @@ void AMDGPUPALMetadata::setNumUsedSgprs(CallingConv::ID CC, unsigned Val) {
   getHwStage(CC)[".sgpr_count"] = MsgPackDoc.getNode(Val);
 }
 
+void AMDGPUPALMetadata::setNumUsedSgprs(unsigned CC, const MCExpr *Val,
+                                        MCContext &Ctx) {
+  if (isLegacy()) {
+    // Old non-msgpack format.
+    unsigned NumUsedSgprsKey = getScratchSizeKey(CC) +
+                               PALMD::Key::VS_NUM_USED_SGPRS -
+                               PALMD::Key::VS_SCRATCH_SIZE;
+    setRegister(NumUsedSgprsKey, Val, Ctx);
+    return;
+  }
+  // Msgpack format.
+  setHwStage(CC, ".sgpr_count", msgpack::Type::UInt, Val);
+}
+
 // Set the scratch size in the metadata.
 void AMDGPUPALMetadata::setScratchSize(CallingConv::ID CC, unsigned Val) {
   if (isLegacy()) {
@@ -238,12 +317,54 @@ void AMDGPUPALMetadata::setScratchSize(CallingConv::ID CC, unsigned Val) {
   getHwStage(CC)[".scratch_memory_size"] = MsgPackDoc.getNode(Val);
 }
 
-// Set the scratch size in the metadata.
-void AMDGPUPALMetadata::setStackFrameSize(const MachineFunction &MF,
-                                          unsigned Val) {
-  auto Node = MsgPackDoc.getMapNode();
+void AMDGPUPALMetadata::setScratchSize(unsigned CC, const MCExpr *Val,
+                                       MCContext &Ctx) {
+  if (isLegacy()) {
+    // Old non-msgpack format.
+    setRegister(getScratchSizeKey(CC), Val, Ctx);
+    return;
+  }
+  // Msgpack format.
+  setHwStage(CC, ".scratch_memory_size", msgpack::Type::UInt, Val);
+}
+
+// Set the stack frame size of a function in the metadata.
+void AMDGPUPALMetadata::setFunctionScratchSize(StringRef FnName, unsigned Val) {
+  auto Node = getShaderFunction(FnName);
   Node[".stack_frame_size_in_bytes"] = MsgPackDoc.getNode(Val);
-  getShaderFunctions()[MF.getFunction().getName()] = Node;
+  Node[".backend_stack_size"] = MsgPackDoc.getNode(Val);
+}
+
+// Set the amount of LDS used in bytes in the metadata.
+void AMDGPUPALMetadata::setFunctionLdsSize(StringRef FnName, unsigned Val) {
+  auto Node = getShaderFunction(FnName);
+  Node[".lds_size"] = MsgPackDoc.getNode(Val);
+}
+
+// Set the number of used vgprs in the metadata.
+void AMDGPUPALMetadata::setFunctionNumUsedVgprs(StringRef FnName,
+                                                unsigned Val) {
+  auto Node = getShaderFunction(FnName);
+  Node[".vgpr_count"] = MsgPackDoc.getNode(Val);
+}
+
+void AMDGPUPALMetadata::setFunctionNumUsedVgprs(StringRef FnName,
+                                                const MCExpr *Val) {
+  auto Node = getShaderFunction(FnName);
+  DelayedExprs.assignDocNode(Node[".vgpr_count"], msgpack::Type::UInt, Val);
+}
+
+// Set the number of used vgprs in the metadata.
+void AMDGPUPALMetadata::setFunctionNumUsedSgprs(StringRef FnName,
+                                                unsigned Val) {
+  auto Node = getShaderFunction(FnName);
+  Node[".sgpr_count"] = MsgPackDoc.getNode(Val);
+}
+
+void AMDGPUPALMetadata::setFunctionNumUsedSgprs(StringRef FnName,
+                                                const MCExpr *Val) {
+  auto Node = getShaderFunction(FnName);
+  DelayedExprs.assignDocNode(Node[".sgpr_count"], msgpack::Type::UInt, Val);
 }
 
 // Set the hardware register bit in PAL metadata to enable wave32 on the
@@ -595,8 +716,43 @@ static const char *getRegisterName(unsigned RegNum) {
       {0xa2c1, "VGT_STRMOUT_VTX_STRIDE_3"},
       {0xa316, "VGT_VERTEX_REUSE_BLOCK_CNTL"},
 
+      {0x2e28, "COMPUTE_PGM_RSRC3"},
+      {0x2e2a, "COMPUTE_SHADER_CHKSUM"},
+      {0x2e24, "COMPUTE_USER_ACCUM_0"},
+      {0x2e25, "COMPUTE_USER_ACCUM_1"},
+      {0x2e26, "COMPUTE_USER_ACCUM_2"},
+      {0x2e27, "COMPUTE_USER_ACCUM_3"},
+      {0xa1ff, "GE_MAX_OUTPUT_PER_SUBGROUP"},
+      {0xa2d3, "GE_NGG_SUBGRP_CNTL"},
+      {0xc25f, "GE_STEREO_CNTL"},
+      {0xc262, "GE_USER_VGPR_EN"},
+      {0xc258, "IA_MULTI_VGT_PARAM_PIPED"},
+      {0xa210, "PA_STEREO_CNTL"},
+      {0xa1c2, "SPI_SHADER_IDX_FORMAT"},
+      {0x2c80, "SPI_SHADER_PGM_CHKSUM_GS"},
+      {0x2d00, "SPI_SHADER_PGM_CHKSUM_HS"},
+      {0x2c06, "SPI_SHADER_PGM_CHKSUM_PS"},
+      {0x2c45, "SPI_SHADER_PGM_CHKSUM_VS"},
+      {0x2c88, "SPI_SHADER_PGM_LO_GS"},
+      {0x2cb2, "SPI_SHADER_USER_ACCUM_ESGS_0"},
+      {0x2cb3, "SPI_SHADER_USER_ACCUM_ESGS_1"},
+      {0x2cb4, "SPI_SHADER_USER_ACCUM_ESGS_2"},
+      {0x2cb5, "SPI_SHADER_USER_ACCUM_ESGS_3"},
+      {0x2d32, "SPI_SHADER_USER_ACCUM_LSHS_0"},
+      {0x2d33, "SPI_SHADER_USER_ACCUM_LSHS_1"},
+      {0x2d34, "SPI_SHADER_USER_ACCUM_LSHS_2"},
+      {0x2d35, "SPI_SHADER_USER_ACCUM_LSHS_3"},
+      {0x2c32, "SPI_SHADER_USER_ACCUM_PS_0"},
+      {0x2c33, "SPI_SHADER_USER_ACCUM_PS_1"},
+      {0x2c34, "SPI_SHADER_USER_ACCUM_PS_2"},
+      {0x2c35, "SPI_SHADER_USER_ACCUM_PS_3"},
+      {0x2c72, "SPI_SHADER_USER_ACCUM_VS_0"},
+      {0x2c73, "SPI_SHADER_USER_ACCUM_VS_1"},
+      {0x2c74, "SPI_SHADER_USER_ACCUM_VS_2"},
+      {0x2c75, "SPI_SHADER_USER_ACCUM_VS_3"},
+
       {0, nullptr}};
-  auto Entry = RegInfoTable;
+  const auto *Entry = RegInfoTable;
   for (; Entry->Num && Entry->Num != RegNum; ++Entry)
     ;
   return Entry->Name;
@@ -607,6 +763,7 @@ void AMDGPUPALMetadata::toString(std::string &String) {
   String.clear();
   if (!BlobType)
     return;
+  ResolvedAll = DelayedExprs.resolveDelayedExpressions();
   raw_string_ostream Stream(String);
   if (isLegacy()) {
     if (MsgPackDoc.getRoot().getKind() == msgpack::Type::Nil)
@@ -656,7 +813,8 @@ void AMDGPUPALMetadata::toString(std::string &String) {
 // a .note record of the specified AMD type. Returns an empty blob if
 // there is no PAL metadata,
 void AMDGPUPALMetadata::toBlob(unsigned Type, std::string &Blob) {
-  if (Type == ELF::NT_AMD_AMDGPU_PAL_METADATA)
+  ResolvedAll = DelayedExprs.resolveDelayedExpressions();
+  if (Type == ELF::NT_AMD_PAL_METADATA)
     toLegacyBlob(Blob);
   else if (Type)
     toMsgPackBlob(Blob);
@@ -668,7 +826,7 @@ void AMDGPUPALMetadata::toLegacyBlob(std::string &Blob) {
   if (Registers.getMap().empty())
     return;
   raw_string_ostream OS(Blob);
-  support::endian::Writer EW(OS, support::endianness::little);
+  support::endian::Writer EW(OS, llvm::endianness::little);
   for (auto I : Registers.getMap()) {
     EW.write(uint32_t(I.first.getUInt()));
     EW.write(uint32_t(I.second.getUInt()));
@@ -747,6 +905,44 @@ msgpack::MapDocNode AMDGPUPALMetadata::getShaderFunctions() {
   return ShaderFunctions.getMap();
 }
 
+// Get (create if necessary) a function in the shader functions map.
+msgpack::MapDocNode AMDGPUPALMetadata::getShaderFunction(StringRef Name) {
+  auto Functions = getShaderFunctions();
+  return Functions[Name].getMap(/*Convert=*/true);
+}
+
+msgpack::DocNode &AMDGPUPALMetadata::refComputeRegisters() {
+  auto &N =
+      MsgPackDoc.getRoot()
+          .getMap(/*Convert=*/true)[MsgPackDoc.getNode("amdpal.pipelines")]
+          .getArray(/*Convert=*/true)[0]
+          .getMap(/*Convert=*/true)[MsgPackDoc.getNode(".compute_registers")];
+  N.getMap(/*Convert=*/true);
+  return N;
+}
+
+msgpack::MapDocNode AMDGPUPALMetadata::getComputeRegisters() {
+  if (ComputeRegisters.isEmpty())
+    ComputeRegisters = refComputeRegisters();
+  return ComputeRegisters.getMap();
+}
+
+msgpack::DocNode &AMDGPUPALMetadata::refGraphicsRegisters() {
+  auto &N =
+      MsgPackDoc.getRoot()
+          .getMap(/*Convert=*/true)[MsgPackDoc.getNode("amdpal.pipelines")]
+          .getArray(/*Convert=*/true)[0]
+          .getMap(/*Convert=*/true)[MsgPackDoc.getNode(".graphics_registers")];
+  N.getMap(/*Convert=*/true);
+  return N;
+}
+
+msgpack::MapDocNode AMDGPUPALMetadata::getGraphicsRegisters() {
+  if (GraphicsRegisters.isEmpty())
+    GraphicsRegisters = refGraphicsRegisters();
+  return GraphicsRegisters.getMap();
+}
+
 // Return the PAL metadata hardware shader stage name.
 static const char *getStageName(CallingConv::ID CC) {
   switch (CC) {
@@ -769,15 +965,21 @@ static const char *getStageName(CallingConv::ID CC) {
   }
 }
 
+msgpack::DocNode &AMDGPUPALMetadata::refHwStage() {
+  auto &N =
+      MsgPackDoc.getRoot()
+          .getMap(/*Convert=*/true)[MsgPackDoc.getNode("amdpal.pipelines")]
+          .getArray(/*Convert=*/true)[0]
+          .getMap(/*Convert=*/true)[MsgPackDoc.getNode(".hardware_stages")];
+  N.getMap(/*Convert=*/true);
+  return N;
+}
+
 // Get (create if necessary) the .hardware_stages entry for the given calling
 // convention.
 msgpack::MapDocNode AMDGPUPALMetadata::getHwStage(unsigned CC) {
   if (HwStages.isEmpty())
-    HwStages = MsgPackDoc.getRoot()
-                   .getMap(/*Convert=*/true)["amdpal.pipelines"]
-                   .getArray(/*Convert=*/true)[0]
-                   .getMap(/*Convert=*/true)[".hardware_stages"]
-                   .getMap(/*Convert=*/true);
+    HwStages = refHwStage();
   return HwStages.getMap()[getStageName(CC)].getMap(/*Convert=*/true);
 }
 
@@ -787,7 +989,7 @@ const char *AMDGPUPALMetadata::getVendor() const {
 }
 
 // Get .note record type of metadata blob to be emitted:
-// ELF::NT_AMD_AMDGPU_PAL_METADATA (legacy key=val format), or
+// ELF::NT_AMD_PAL_METADATA (legacy key=val format), or
 // ELF::NT_AMDGPU_METADATA (MsgPack format), or
 // 0 (no PAL metadata).
 unsigned AMDGPUPALMetadata::getType() const {
@@ -796,17 +998,104 @@ unsigned AMDGPUPALMetadata::getType() const {
 
 // Return whether the blob type is legacy PAL metadata.
 bool AMDGPUPALMetadata::isLegacy() const {
-  return BlobType == ELF::NT_AMD_AMDGPU_PAL_METADATA;
+  return BlobType == ELF::NT_AMD_PAL_METADATA;
 }
 
 // Set legacy PAL metadata format.
 void AMDGPUPALMetadata::setLegacy() {
-  BlobType = ELF::NT_AMD_AMDGPU_PAL_METADATA;
+  BlobType = ELF::NT_AMD_PAL_METADATA;
 }
 
 // Erase all PAL metadata.
 void AMDGPUPALMetadata::reset() {
   MsgPackDoc.clear();
+  REM.clear();
+  DelayedExprs.clear();
   Registers = MsgPackDoc.getEmptyNode();
   HwStages = MsgPackDoc.getEmptyNode();
+  ShaderFunctions = MsgPackDoc.getEmptyNode();
+}
+
+bool AMDGPUPALMetadata::resolvedAllMCExpr() {
+  return ResolvedAll && DelayedExprs.empty();
+}
+
+unsigned AMDGPUPALMetadata::getPALVersion(unsigned idx) {
+  assert(idx < 2 &&
+         "illegal index to PAL version - should be 0 (major) or 1 (minor)");
+  if (!VersionChecked) {
+    if (Version.isEmpty()) {
+      auto &M = MsgPackDoc.getRoot().getMap(/*Convert=*/true);
+      auto I = M.find(MsgPackDoc.getNode("amdpal.version"));
+      if (I != M.end())
+        Version = I->second;
+    }
+    VersionChecked = true;
+  }
+  if (Version.isEmpty())
+    // Default to 2.6 if there's no version info
+    return idx ? 6 : 2;
+  return Version.getArray()[idx].getUInt();
+}
+
+unsigned AMDGPUPALMetadata::getPALMajorVersion() { return getPALVersion(0); }
+
+unsigned AMDGPUPALMetadata::getPALMinorVersion() { return getPALVersion(1); }
+
+// Set the field in a given .hardware_stages entry
+void AMDGPUPALMetadata::setHwStage(unsigned CC, StringRef field, unsigned Val) {
+  getHwStage(CC)[field] = Val;
+}
+
+void AMDGPUPALMetadata::setHwStage(unsigned CC, StringRef field, bool Val) {
+  getHwStage(CC)[field] = Val;
+}
+
+void AMDGPUPALMetadata::setHwStage(unsigned CC, StringRef field,
+                                   msgpack::Type Type, const MCExpr *Val) {
+  DelayedExprs.assignDocNode(getHwStage(CC)[field], Type, Val);
+}
+
+void AMDGPUPALMetadata::setComputeRegisters(StringRef field, unsigned Val) {
+  getComputeRegisters()[field] = Val;
+}
+
+void AMDGPUPALMetadata::setComputeRegisters(StringRef field, bool Val) {
+  getComputeRegisters()[field] = Val;
+}
+
+msgpack::DocNode *AMDGPUPALMetadata::refComputeRegister(StringRef field) {
+  auto M = getComputeRegisters();
+  auto I = M.find(field);
+  return I == M.end() ? nullptr : &I->second;
+}
+
+bool AMDGPUPALMetadata::checkComputeRegisters(StringRef field, unsigned Val) {
+  if (auto *N = refComputeRegister(field))
+    return N->getUInt() == Val;
+  return false;
+}
+
+bool AMDGPUPALMetadata::checkComputeRegisters(StringRef field, bool Val) {
+  if (auto *N = refComputeRegister(field))
+    return N->getBool() == Val;
+  return false;
+}
+
+void AMDGPUPALMetadata::setGraphicsRegisters(StringRef field, unsigned Val) {
+  getGraphicsRegisters()[field] = Val;
+}
+
+void AMDGPUPALMetadata::setGraphicsRegisters(StringRef field, bool Val) {
+  getGraphicsRegisters()[field] = Val;
+}
+
+void AMDGPUPALMetadata::setGraphicsRegisters(StringRef field1, StringRef field2,
+                                             unsigned Val) {
+  getGraphicsRegisters()[field1].getMap(true)[field2] = Val;
+}
+
+void AMDGPUPALMetadata::setGraphicsRegisters(StringRef field1, StringRef field2,
+                                             bool Val) {
+  getGraphicsRegisters()[field1].getMap(true)[field2] = Val;
 }

@@ -10,6 +10,7 @@
 #define LLDB_SOURCE_COMMANDS_COMMANDOBJECTTHREADUTIL_H
 
 #include "lldb/Interpreter/CommandObjectMultiword.h"
+#include <stack>
 
 namespace lldb_private {
 
@@ -54,7 +55,7 @@ public:
 
   ~CommandObjectIterateOverThreads() override = default;
 
-  bool DoExecute(Args &command, CommandReturnObject &result) override;
+  void DoExecute(Args &command, CommandReturnObject &result) override;
 
 protected:
   // Override this to do whatever you need to do for one thread.
@@ -74,6 +75,28 @@ protected:
   lldb::ReturnStatus m_success_return = lldb::eReturnStatusSuccessFinishResult;
   bool m_unique_stacks = false;
   bool m_add_return = true;
+};
+
+/// Class similar to \a CommandObjectIterateOverThreads, but which performs
+/// an action on multiple threads at once instead of iterating over each thread.
+class CommandObjectMultipleThreads : public CommandObjectParsed {
+public:
+  CommandObjectMultipleThreads(CommandInterpreter &interpreter,
+                               const char *name, const char *help,
+                               const char *syntax, uint32_t flags);
+
+  void DoExecute(Args &command, CommandReturnObject &result) override;
+
+protected:
+  /// Method that handles the command after the main arguments have been parsed.
+  ///
+  /// \param[in] tids
+  ///     The thread ids passed as arguments.
+  ///
+  /// \return
+  ///     A boolean result similar to the one expected from \a DoExecute.
+  virtual bool DoExecuteOnThreads(Args &command, CommandReturnObject &result,
+                                  llvm::ArrayRef<lldb::tid_t> tids) = 0;
 };
 
 } // namespace lldb_private

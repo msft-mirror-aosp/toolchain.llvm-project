@@ -1,29 +1,41 @@
 add_llvm_component_library(LLVMCore
   AbstractCallSite.cpp
   AsmWriter.cpp
+  Assumptions.cpp
   Attributes.cpp
   AutoUpgrade.cpp
   BasicBlock.cpp
+  BuiltinGCs.cpp
   Comdat.cpp
   ConstantFold.cpp
+  ConstantFPRange.cpp
   ConstantRange.cpp
+  ConstantRangeList.cpp
   Constants.cpp
+  ConvergenceVerifier.cpp
   Core.cpp
+  CycleInfo.cpp
   DIBuilder.cpp
   DataLayout.cpp
   DebugInfo.cpp
   DebugInfoMetadata.cpp
+  DIExpressionOptimizer.cpp
+  DebugProgramInstruction.cpp
   DebugLoc.cpp
   DiagnosticHandler.cpp
   DiagnosticInfo.cpp
   DiagnosticPrinter.cpp
   Dominators.cpp
+  EHPersonalities.cpp
   FPEnv.cpp
   Function.cpp
+  GCStrategy.cpp
   GVMaterializer.cpp
   Globals.cpp
+  Intrinsics.cpp
   IRBuilder.cpp
   IRPrintingPasses.cpp
+  SSAContext.cpp
   InlineAsm.cpp
   Instruction.cpp
   Instructions.cpp
@@ -33,6 +45,7 @@ add_llvm_component_library(LLVMCore
   LLVMRemarkStreamer.cpp
   LegacyPassManager.cpp
   MDBuilder.cpp
+  MemoryModelRelaxationAnnotations.cpp
   Mangler.cpp
   Metadata.cpp
   Module.cpp
@@ -45,17 +58,25 @@ add_llvm_component_library(LLVMCore
   PassRegistry.cpp
   PassTimingInfo.cpp
   PrintPasses.cpp
+  ProfDataUtils.cpp
   SafepointIRVerifier.cpp
   ProfileSummary.cpp
+  PseudoProbe.cpp
+  ReplaceConstant.cpp
   Statepoint.cpp
   StructuralHash.cpp
   Type.cpp
+  TypedPointerType.cpp
   TypeFinder.cpp
   Use.cpp
   User.cpp
   Value.cpp
   ValueSymbolTable.cpp
+  VectorBuilder.cpp
+  VectorTypeUtils.cpp
   Verifier.cpp
+  VFABIDemangler.cpp
+  RuntimeLibcalls.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/IR
@@ -68,6 +89,8 @@ add_llvm_component_library(LLVMCore
 
   LINK_COMPONENTS
   BinaryFormat
+  Demangle
   Remarks
   Support
+  TargetParser
   )

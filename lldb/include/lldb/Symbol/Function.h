@@ -10,10 +10,10 @@
 #define LLDB_SYMBOL_FUNCTION_H
 
 #include "lldb/Core/AddressRange.h"
+#include "lldb/Core/Declaration.h"
 #include "lldb/Core/Mangled.h"
-#include "lldb/Expression/DWARFExpression.h"
+#include "lldb/Expression/DWARFExpressionList.h"
 #include "lldb/Symbol/Block.h"
-#include "lldb/Symbol/Declaration.h"
 #include "lldb/Utility/UserID.h"
 #include "llvm/ADT/ArrayRef.h"
 
@@ -110,8 +110,6 @@ public:
   ///     The number of bytes that this object occupies in memory.
   ///     The returned value does not include the bytes for any
   ///     shared string values.
-  ///
-  /// \see ConstString::StaticMemorySize ()
   virtual size_t MemorySize() const;
 
 protected:
@@ -238,8 +236,6 @@ public:
   ///     The number of bytes that this object occupies in memory.
   ///     The returned value does not include the bytes for any
   ///     shared string values.
-  ///
-  /// \see ConstString::StaticMemorySize ()
   size_t MemorySize() const override;
 
 private:
@@ -257,8 +253,8 @@ class Function;
 /// Represent the locations of a parameter at a call site, both in the caller
 /// and in the callee.
 struct CallSiteParameter {
-  DWARFExpression LocationInCallee;
-  DWARFExpression LocationInCaller;
+  DWARFExpressionList LocationInCallee;
+  DWARFExpressionList LocationInCaller;
 };
 
 /// A vector of \c CallSiteParameter.
@@ -271,7 +267,7 @@ using CallSiteParameterArray = llvm::SmallVector<CallSiteParameter, 0>;
 class CallEdge {
 public:
   enum class AddrType : uint8_t { Call, AfterCall };
-  virtual ~CallEdge() {}
+  virtual ~CallEdge();
 
   /// Get the callee's definition.
   ///
@@ -309,10 +305,7 @@ public:
 
 protected:
   CallEdge(AddrType caller_address_type, lldb::addr_t caller_address,
-           bool is_tail_call, CallSiteParameterArray &&parameters)
-      : caller_address(caller_address),
-        caller_address_type(caller_address_type), is_tail_call(is_tail_call),
-        parameters(std::move(parameters)) {}
+           bool is_tail_call, CallSiteParameterArray &&parameters);
 
   /// Helper that finds the load address of \p unresolved_pc, a file address
   /// which refers to an instruction within \p caller.
@@ -343,11 +336,7 @@ public:
   /// return PC within the calling function to identify a specific call site.
   DirectCallEdge(const char *symbol_name, AddrType caller_address_type,
                  lldb::addr_t caller_address, bool is_tail_call,
-                 CallSiteParameterArray &&parameters)
-      : CallEdge(caller_address_type, caller_address, is_tail_call,
-                 std::move(parameters)) {
-    lazy_callee.symbol_name = symbol_name;
-  }
+                 CallSiteParameterArray &&parameters);
 
   Function *GetCallee(ModuleList &images, ExecutionContext &exe_ctx) override;
 
@@ -374,12 +363,9 @@ class IndirectCallEdge : public CallEdge {
 public:
   /// Construct a call edge using a DWARFExpression to identify the callee, and
   /// a return PC within the calling function to identify a specific call site.
-  IndirectCallEdge(DWARFExpression call_target, AddrType caller_address_type,
-                   lldb::addr_t caller_address, bool is_tail_call,
-                   CallSiteParameterArray &&parameters)
-      : CallEdge(caller_address_type, caller_address, is_tail_call,
-                 std::move(parameters)),
-        call_target(std::move(call_target)) {}
+  IndirectCallEdge(DWARFExpressionList call_target,
+                   AddrType caller_address_type, lldb::addr_t caller_address,
+                   bool is_tail_call, CallSiteParameterArray &&parameters);
 
   Function *GetCallee(ModuleList &images, ExecutionContext &exe_ctx) override;
 
@@ -387,7 +373,7 @@ private:
   // Used to describe an indirect call.
   //
   // Specifies the location of the callee address in the calling frame.
-  DWARFExpression call_target;
+  DWARFExpressionList call_target;
 };
 
 /// \class Function Function.h "lldb/Symbol/Function.h"
@@ -442,7 +428,7 @@ public:
   ///     The section offset based address for this function.
   Function(CompileUnit *comp_unit, lldb::user_id_t func_uid,
            lldb::user_id_t func_type_uid, const Mangled &mangled,
-           Type *func_type, const AddressRange &range);
+           Type *func_type, Address address, AddressRanges ranges);
 
   /// Destructor.
   ~Function() override;
@@ -458,7 +444,20 @@ public:
 
   Function *CalculateSymbolContextFunction() override;
 
+  /// DEPRECATED: Use GetAddressRanges instead.
   const AddressRange &GetAddressRange() { return m_range; }
+
+  AddressRanges GetAddressRanges() { return m_block.GetRanges(); }
+
+  /// Return the address of the function (its entry point). This address is also
+  /// used as a base address for relocation of function-scope entities (blocks
+  /// and variables).
+  const Address &GetAddress() const { return m_address; }
+
+  bool GetRangeContainingLoadAddress(lldb::addr_t load_addr, Target &target,
+                                     AddressRange &range) {
+    return m_block.GetRangeContainingLoadAddress(load_addr, target, range);
+  }
 
   lldb::LanguageType GetLanguage() const;
   /// Find the file and line number of the source location of the start of the
@@ -471,7 +470,8 @@ public:
   ///
   /// \param[out] line_no
   ///     The line number.
-  void GetStartLineSourceInfo(FileSpec &source_file, uint32_t &line_no);
+  void GetStartLineSourceInfo(lldb::SupportFileSP &source_file_sp,
+                              uint32_t &line_no);
 
   /// Find the file and line number of the source location of the end of the
   /// function.
@@ -489,7 +489,7 @@ public:
   llvm::ArrayRef<std::unique_ptr<CallEdge>> GetCallEdges();
 
   /// Get the outgoing tail-calling edges from this function. If none exist,
-  /// return None.
+  /// return std::nullopt.
   llvm::ArrayRef<std::unique_ptr<CallEdge>> GetTailCallingEdges();
 
   /// Get the outgoing call edge from this function which has the given return
@@ -525,13 +525,13 @@ public:
   /// \return
   ///     A location expression that describes the function frame
   ///     base.
-  DWARFExpression &GetFrameBaseExpression() { return m_frame_base; }
+  DWARFExpressionList &GetFrameBaseExpression() { return m_frame_base; }
 
   /// Get const accessor for the frame base location.
   ///
   /// \return
   ///     A const compile unit object pointer.
-  const DWARFExpression &GetFrameBaseExpression() const { return m_frame_base; }
+  const DWARFExpressionList &GetFrameBaseExpression() const { return m_frame_base; }
 
   ConstString GetName() const;
 
@@ -546,6 +546,12 @@ public:
   /// \return
   ///     The DeclContext, or NULL if none exists.
   CompilerDeclContext GetDeclContext();
+
+  /// Get the CompilerContext for this function, if available.
+  ///
+  /// \return
+  ///     The CompilerContext, or an empty vector if none is available.
+  std::vector<CompilerContext> GetCompilerContext();
 
   /// Get accessor for the type that describes the function return value type,
   /// and parameter types.
@@ -595,8 +601,6 @@ public:
   ///     The number of bytes that this object occupies in memory.
   ///     The returned value does not include the bytes for any
   ///     shared string values.
-  ///
-  /// \see ConstString::StaticMemorySize ()
   size_t MemorySize() const;
 
   /// Get whether compiler optimizations were enabled for this function
@@ -631,10 +635,10 @@ public:
 
   lldb::DisassemblerSP GetInstructions(const ExecutionContext &exe_ctx,
                                        const char *flavor,
-                                       bool prefer_file_cache);
+                                       bool force_live_memory = false);
 
   bool GetDisassembly(const ExecutionContext &exe_ctx, const char *flavor,
-                      bool prefer_file_cache, Stream &strm);
+                      Stream &strm, bool force_live_memory = false);
 
 protected:
   enum {
@@ -660,12 +664,16 @@ protected:
   Block m_block;
 
   /// The function address range that covers the widest range needed to contain
-  /// all blocks
+  /// all blocks. DEPRECATED: do not use this field in new code as the range may
+  /// include addresses belonging to other functions.
   AddressRange m_range;
+
+  /// The address (entry point) of the function.
+  Address m_address;
 
   /// The frame base expression for variables that are relative to the frame
   /// pointer.
-  DWARFExpression m_frame_base;
+  DWARFExpressionList m_frame_base;
 
   Flags m_flags;
 

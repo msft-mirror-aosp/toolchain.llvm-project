@@ -48,7 +48,7 @@ public:
                                      QualType BaseObjectType,
                                      const PartialDiagnostic &PDiag) {
     DependentDiagnostic *DD = Create(Context, Parent, PDiag);
-    DD->AccessData.Loc = Loc.getRawEncoding();
+    DD->AccessData.Loc = Loc;
     DD->AccessData.IsMember = IsMemberAccess;
     DD->AccessData.Access = AS;
     DD->AccessData.TargetDecl = TargetDecl;
@@ -73,7 +73,7 @@ public:
 
   SourceLocation getAccessLoc() const {
     assert(getKind() == Access);
-    return SourceLocation::getFromRawEncoding(AccessData.Loc);
+    return AccessData.Loc;
   }
 
   NamedDecl *getAccessTarget() const {
@@ -112,8 +112,10 @@ private:
   PartialDiagnostic Diag;
 
   struct {
-    unsigned Loc;
+    SourceLocation Loc;
+    LLVM_PREFERRED_TYPE(AccessSpecifier)
     unsigned Access : 2;
+    LLVM_PREFERRED_TYPE(bool)
     unsigned IsMember : 1;
     NamedDecl *TargetDecl;
     CXXRecordDecl *NamingClass;

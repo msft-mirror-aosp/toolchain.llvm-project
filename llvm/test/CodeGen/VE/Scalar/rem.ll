@@ -83,8 +83,7 @@ define signext i16 @remi16(i16 signext %a, i16 signext %b) {
 ; CHECK-NEXT:    divs.w.sx %s2, %s0, %s1
 ; CHECK-NEXT:    muls.w.sx %s1, %s2, %s1
 ; CHECK-NEXT:    subs.w.sx %s0, %s0, %s1
-; CHECK-NEXT:    sll %s0, %s0, 48
-; CHECK-NEXT:    sra.l %s0, %s0, 48
+; CHECK-NEXT:    adds.w.sx %s0, %s0, (0)1
 ; CHECK-NEXT:    b.l.t (, %s10)
   %a32 = sext i16 %a to i32
   %b32 = sext i16 %b to i32
@@ -113,8 +112,7 @@ define signext i8 @remi8(i8 signext %a, i8 signext %b) {
 ; CHECK-NEXT:    divs.w.sx %s2, %s0, %s1
 ; CHECK-NEXT:    muls.w.sx %s1, %s2, %s1
 ; CHECK-NEXT:    subs.w.sx %s0, %s0, %s1
-; CHECK-NEXT:    sll %s0, %s0, 56
-; CHECK-NEXT:    sra.l %s0, %s0, 56
+; CHECK-NEXT:    adds.w.sx %s0, %s0, (0)1
 ; CHECK-NEXT:    b.l.t (, %s10)
   %a32 = sext i8 %a to i32
   %b32 = sext i8 %b to i32
@@ -167,7 +165,11 @@ define i64 @remi64ri(i64 %a) {
 define signext i32 @remi32ri(i32 signext %a) {
 ; CHECK-LABEL: remi32ri:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    divs.w.sx %s1, %s0, (62)0
+; CHECK-NEXT:    lea %s1, 1431655766
+; CHECK-NEXT:    muls.l %s1, %s0, %s1
+; CHECK-NEXT:    srl %s2, %s1, 63
+; CHECK-NEXT:    srl %s1, %s1, 32
+; CHECK-NEXT:    adds.w.sx %s1, %s1, %s2
 ; CHECK-NEXT:    muls.w.sx %s1, 3, %s1
 ; CHECK-NEXT:    subs.w.sx %s0, %s0, %s1
 ; CHECK-NEXT:    adds.w.sx %s0, %s0, (0)1
@@ -183,11 +185,11 @@ define i128 @remu128ri(i128 %a) {
 ; CHECK-NEXT:    lea %s2, __umodti3@lo
 ; CHECK-NEXT:    and %s2, %s2, (32)0
 ; CHECK-NEXT:    lea.sl %s12, __umodti3@hi(, %s2)
-; CHECK-NEXT:    or %s2, 3, (0)1
+; CHECK-NEXT:    or %s2, 11, (0)1
 ; CHECK-NEXT:    or %s3, 0, (0)1
 ; CHECK-NEXT:    bsic %s10, (, %s12)
 ; CHECK-NEXT:    or %s11, 0, %s9
-  %r = urem i128 %a, 3
+  %r = urem i128 %a, 11
   ret i128 %r
 }
 
@@ -207,7 +209,10 @@ define i64 @remu64ri(i64 %a) {
 define zeroext i32 @remu32ri(i32 zeroext %a) {
 ; CHECK-LABEL: remu32ri:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    divu.w %s1, %s0, (62)0
+; CHECK-NEXT:    lea %s1, -1431655765
+; CHECK-NEXT:    and %s1, %s1, (32)0
+; CHECK-NEXT:    muls.l %s1, %s0, %s1
+; CHECK-NEXT:    srl %s1, %s1, 33
 ; CHECK-NEXT:    muls.w.sx %s1, 3, %s1
 ; CHECK-NEXT:    subs.w.sx %s0, %s0, %s1
 ; CHECK-NEXT:    adds.w.zx %s0, %s0, (0)1

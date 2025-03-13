@@ -14,20 +14,10 @@
 //===----------------------------------------------------------------------===//
 //
 #include "AMDGPU.h"
-#include "AMDGPUInstrInfo.h"
-#include "AMDGPUSubtarget.h"
-#include "SIInstrInfo.h"
-#include "SIMachineFunctionInfo.h"
+#include "GCNSubtarget.h"
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetMachine.h"
 #include <queue>
 
 #define DEBUG_TYPE "si-mode-register"
@@ -39,10 +29,10 @@ using namespace llvm;
 struct Status {
   // Mask is a bitmask where a '1' indicates the corresponding Mode bit has a
   // known value
-  unsigned Mask;
-  unsigned Mode;
+  unsigned Mask = 0;
+  unsigned Mode = 0;
 
-  Status() : Mask(0), Mode(0){};
+  Status() = default;
 
   Status(unsigned NewMask, unsigned NewMode) : Mask(NewMask), Mode(NewMode) {
     Mode &= Mask;
@@ -106,13 +96,13 @@ public:
 
   // In Phase 1 we record the first instruction that has a mode requirement,
   // which is used in Phase 3 if we need to insert a mode change.
-  MachineInstr *FirstInsertionPoint;
+  MachineInstr *FirstInsertionPoint = nullptr;
 
   // A flag to indicate whether an Exit value has been set (we can't tell by
   // examining the Exit value itself as all values may be valid results).
-  bool ExitSet;
+  bool ExitSet = false;
 
-  BlockData() : FirstInsertionPoint(nullptr), ExitSet(false){};
+  BlockData() = default;
 };
 
 namespace {
@@ -173,14 +163,43 @@ FunctionPass *llvm::createSIModeRegisterPass() { return new SIModeRegister(); }
 // double precision setting.
 Status SIModeRegister::getInstructionMode(MachineInstr &MI,
                                           const SIInstrInfo *TII) {
-  if (TII->usesFPDPRounding(MI)) {
-    switch (MI.getOpcode()) {
+  unsigned Opcode = MI.getOpcode();
+  if (TII->usesFPDPRounding(MI) ||
+      Opcode == AMDGPU::FPTRUNC_ROUND_F16_F32_PSEUDO ||
+      Opcode == AMDGPU::FPTRUNC_ROUND_F16_F32_PSEUDO_fake16_e32 ||
+      Opcode == AMDGPU::FPTRUNC_ROUND_F16_F32_PSEUDO_t16_e64 ||
+      Opcode == AMDGPU::FPTRUNC_ROUND_F32_F64_PSEUDO) {
+    switch (Opcode) {
     case AMDGPU::V_INTERP_P1LL_F16:
     case AMDGPU::V_INTERP_P1LV_F16:
     case AMDGPU::V_INTERP_P2_F16:
       // f16 interpolation instructions need double precision round to zero
       return Status(FP_ROUND_MODE_DP(3),
                     FP_ROUND_MODE_DP(FP_ROUND_ROUND_TO_ZERO));
+    case AMDGPU::FPTRUNC_ROUND_F16_F32_PSEUDO: {
+      unsigned Mode = MI.getOperand(2).getImm();
+      MI.removeOperand(2);
+      MI.setDesc(TII->get(AMDGPU::V_CVT_F16_F32_e32));
+      return Status(FP_ROUND_MODE_DP(3), FP_ROUND_MODE_DP(Mode));
+    }
+    case AMDGPU::FPTRUNC_ROUND_F16_F32_PSEUDO_fake16_e32: {
+      unsigned Mode = MI.getOperand(2).getImm();
+      MI.removeOperand(2);
+      MI.setDesc(TII->get(AMDGPU::V_CVT_F16_F32_fake16_e32));
+      return Status(FP_ROUND_MODE_DP(3), FP_ROUND_MODE_DP(Mode));
+    }
+    case AMDGPU::FPTRUNC_ROUND_F16_F32_PSEUDO_t16_e64: {
+      unsigned Mode = MI.getOperand(6).getImm();
+      MI.removeOperand(6);
+      MI.setDesc(TII->get(AMDGPU::V_CVT_F16_F32_t16_e64));
+      return Status(FP_ROUND_MODE_DP(3), FP_ROUND_MODE_DP(Mode));
+    }
+    case AMDGPU::FPTRUNC_ROUND_F32_F64_PSEUDO: {
+      unsigned Mode = MI.getOperand(2).getImm();
+      MI.removeOperand(2);
+      MI.setDesc(TII->get(AMDGPU::V_CVT_F32_F64_e32));
+      return Status(FP_ROUND_MODE_DP(3), FP_ROUND_MODE_DP(Mode));
+    }
     default:
       return DefaultStatus;
     }
@@ -196,14 +215,13 @@ Status SIModeRegister::getInstructionMode(MachineInstr &MI,
 void SIModeRegister::insertSetreg(MachineBasicBlock &MBB, MachineInstr *MI,
                                   const SIInstrInfo *TII, Status InstrMode) {
   while (InstrMode.Mask) {
-    unsigned Offset = countTrailingZeros<unsigned>(InstrMode.Mask);
-    unsigned Width = countTrailingOnes<unsigned>(InstrMode.Mask >> Offset);
+    unsigned Offset = llvm::countr_zero<unsigned>(InstrMode.Mask);
+    unsigned Width = llvm::countr_one<unsigned>(InstrMode.Mask >> Offset);
     unsigned Value = (InstrMode.Mode >> Offset) & ((1 << Width) - 1);
-    BuildMI(MBB, MI, 0, TII->get(AMDGPU::S_SETREG_IMM32_B32))
+    using namespace AMDGPU::Hwreg;
+    BuildMI(MBB, MI, nullptr, TII->get(AMDGPU::S_SETREG_IMM32_B32))
         .addImm(Value)
-        .addImm(((Width - 1) << AMDGPU::Hwreg::WIDTH_M1_SHIFT_) |
-                (Offset << AMDGPU::Hwreg::OFFSET_SHIFT_) |
-                (AMDGPU::Hwreg::ID_MODE << AMDGPU::Hwreg::ID_SHIFT_));
+        .addImm(HwregEncoding::encode(ID_MODE, Offset, Width));
     ++NumSetregInserted;
     Changed = true;
     InstrMode.Mask &= ~(((1 << Width) - 1) << Offset);
@@ -236,7 +254,7 @@ void SIModeRegister::processBlockPhase1(MachineBasicBlock &MBB,
   // RequirePending is used to indicate whether we are collecting the initial
   // requirements for the block, and need to defer the first InsertionPoint to
   // Phase 3. It is set to false once we have set FirstInsertionPoint, or when
-  // we discover an explict setreg that means this block doesn't have any
+  // we discover an explicit setreg that means this block doesn't have any
   // initial requirements.
   bool RequirePending = true;
   Status IPChange;
@@ -250,16 +268,12 @@ void SIModeRegister::processBlockPhase1(MachineBasicBlock &MBB,
       // as we assume it has been inserted by a higher authority (this is
       // likely to be a very rare occurrence).
       unsigned Dst = TII->getNamedOperand(MI, AMDGPU::OpName::simm16)->getImm();
-      if (((Dst & AMDGPU::Hwreg::ID_MASK_) >> AMDGPU::Hwreg::ID_SHIFT_) !=
-          AMDGPU::Hwreg::ID_MODE)
+      using namespace AMDGPU::Hwreg;
+      auto [Id, Offset, Width] = HwregEncoding::decode(Dst);
+      if (Id != ID_MODE)
         continue;
 
-      unsigned Width = ((Dst & AMDGPU::Hwreg::WIDTH_M1_MASK_) >>
-                        AMDGPU::Hwreg::WIDTH_M1_SHIFT_) +
-                       1;
-      unsigned Offset =
-          (Dst & AMDGPU::Hwreg::OFFSET_MASK_) >> AMDGPU::Hwreg::OFFSET_SHIFT_;
-      unsigned Mask = ((1 << Width) - 1) << Offset;
+      unsigned Mask = maskTrailingOnes<unsigned>(Width) << Offset;
 
       // If an InsertionPoint is set we will insert a setreg there.
       if (InsertionPoint) {
@@ -384,12 +398,8 @@ void SIModeRegister::processBlockPhase2(MachineBasicBlock &MBB,
     BlockInfo[ThisBlock]->Exit = TmpStatus;
     // Add the successors to the work list so we can propagate the changed exit
     // status.
-    for (MachineBasicBlock::succ_iterator S = MBB.succ_begin(),
-                                          E = MBB.succ_end();
-         S != E; S = std::next(S)) {
-      MachineBasicBlock &B = *(*S);
-      Phase2List.push(&B);
-    }
+    for (MachineBasicBlock *Succ : MBB.successors())
+      Phase2List.push(Succ);
   }
   BlockInfo[ThisBlock]->ExitSet = ExitSet;
   if (RevisitRequired)
@@ -413,6 +423,14 @@ void SIModeRegister::processBlockPhase3(MachineBasicBlock &MBB,
 }
 
 bool SIModeRegister::runOnMachineFunction(MachineFunction &MF) {
+  // Constrained FP intrinsics are used to support non-default rounding modes.
+  // strictfp attribute is required to mark functions with strict FP semantics
+  // having constrained FP intrinsics. This pass fixes up operations that uses
+  // a non-default rounding mode for non-strictfp functions. But it should not
+  // assume or modify any default rounding modes in case of strictfp functions.
+  const Function &F = MF.getFunction();
+  if (F.hasFnAttribute(llvm::Attribute::StrictFP))
+    return Changed;
   BlockInfo.resize(MF.getNumBlockIDs());
   const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
   const SIInstrInfo *TII = ST.getInstrInfo();

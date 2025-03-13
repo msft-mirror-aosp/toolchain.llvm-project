@@ -30,3 +30,35 @@ define void @constraint_f() nounwind {
   tail call void asm "fadd.d fa0, fa0, $0", "f"(double 0.0)
   ret void
 }
+
+define void @constraint_cf() nounwind {
+; CHECK: error: couldn't allocate input reg for constraint 'cf'
+  tail call void asm "fadd.s fa0, fa0, $0", "^cf"(float 0.0)
+; CHECK: error: couldn't allocate input reg for constraint 'cf'
+  tail call void asm "fadd.d fa0, fa0, $0", "^cf"(double 0.0)
+  ret void
+}
+
+define void @constraint_r_fixed_vec() nounwind {
+; CHECK: error: couldn't allocate input reg for constraint 'r'
+  tail call void asm "add a0, a0, $0", "r"(<4 x i32> zeroinitializer)
+  ret void
+}
+
+define void @constraint_r_scalable_vec() nounwind {
+; CHECK: error: couldn't allocate input reg for constraint 'r'
+  tail call void asm "add a0, a0, $0", "r"(<vscale x 4 x i32> zeroinitializer)
+  ret void
+}
+
+define void @constraint_cr_fixed_vec() nounwind {
+; CHECK: error: couldn't allocate input reg for constraint 'cr'
+  tail call void asm "add a0, a0, $0", "^cr"(<4 x i32> zeroinitializer)
+  ret void
+}
+
+define void @constraint_cr_scalable_vec() nounwind {
+; CHECK: error: couldn't allocate input reg for constraint 'cr'
+  tail call void asm "add a0, a0, $0", "^cr"(<vscale x 4 x i32> zeroinitializer)
+  ret void
+}

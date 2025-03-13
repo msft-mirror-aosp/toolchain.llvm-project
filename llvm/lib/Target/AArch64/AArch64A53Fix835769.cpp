@@ -15,12 +15,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "AArch64.h"
+#include "AArch64Subtarget.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -116,8 +116,13 @@ INITIALIZE_PASS(AArch64A53Fix835769, "aarch64-fix-cortex-a53-835769-pass",
 bool
 AArch64A53Fix835769::runOnMachineFunction(MachineFunction &F) {
   LLVM_DEBUG(dbgs() << "***** AArch64A53Fix835769 *****\n");
+  auto &STI = F.getSubtarget<AArch64Subtarget>();
+  // Fix not requested, skip pass.
+  if (!STI.fixCortexA53_835769())
+    return false;
+
   bool Changed = false;
-  TII = F.getSubtarget().getInstrInfo();
+  TII = STI.getInstrInfo();
 
   for (auto &MBB : F) {
     Changed |= runOnBasicBlock(MBB);
@@ -159,7 +164,7 @@ static MachineInstr *getLastNonPseudo(MachineBasicBlock &MBB,
   // If there is no non-pseudo in the current block, loop back around and try
   // the previous block (if there is one).
   while ((FMBB = getBBFallenThrough(FMBB, TII))) {
-    for (MachineInstr &I : make_range(FMBB->rbegin(), FMBB->rend()))
+    for (MachineInstr &I : llvm::reverse(*FMBB))
       if (!I.isPseudo())
         return &I;
   }
@@ -217,6 +222,7 @@ AArch64A53Fix835769::runOnBasicBlock(MachineBasicBlock &MBB) {
       if (isFirstInstructionInSequence(PrevInstr) &&
           isSecondInstructionInSequence(CurrInstr)) {
         LLVM_DEBUG(dbgs() << "   ** pattern found at Idx " << Idx << "!\n");
+        (void) Idx;
         Sequences.push_back(CurrInstr);
       }
     }

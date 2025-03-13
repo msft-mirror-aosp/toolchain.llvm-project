@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fsyntax-only -verify -fobjc-exceptions %s
+// RUN: %clang_cc1 -fsyntax-only -verify -fobjc-exceptions -Werror=return-type %s
 typedef signed char BOOL;
 typedef struct _NSZone NSZone;
 
@@ -34,10 +34,15 @@ typedef struct _NSZone NSZone;
     @try {}
     // the exception name is optional (weird)
     @catch (NSException *) {}
-}
+} // expected-error {{non-void function does not return a value}}
+
+- (NSDictionary *)anotherFunction {
+    @try {}
+    @finally {}
+} // FIXME: This should warn about a missing return too.
 @end
 
-int foo() {
+int foo(void) {
   struct s { int a, b; } agg, *pagg;
 
   @throw 42; // expected-error {{@throw requires an Objective-C object type ('int' invalid)}}

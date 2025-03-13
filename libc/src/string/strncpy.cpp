@@ -9,12 +9,14 @@
 #include "src/string/strncpy.h"
 
 #include "src/__support/common.h"
+#include "src/__support/macros/config.h"
 #include <stddef.h> // For size_t.
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
-char *LLVM_LIBC_ENTRYPOINT(strncpy)(char *__restrict dest,
-                                    const char *__restrict src, size_t n) {
+LLVM_LIBC_FUNCTION(char *, strncpy,
+                   (char *__restrict dest, const char *__restrict src,
+                    size_t n)) {
   size_t i = 0;
   // Copy up until \0 is found.
   for (; i < n && src[i] != '\0'; ++i)
@@ -25,4 +27,4 @@ char *LLVM_LIBC_ENTRYPOINT(strncpy)(char *__restrict dest,
   return dest;
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

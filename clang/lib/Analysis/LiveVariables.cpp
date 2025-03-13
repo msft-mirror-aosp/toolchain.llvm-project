@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 using namespace clang;
@@ -72,6 +73,11 @@ bool LiveVariables::LivenessValues::isLive(const VarDecl *D) const {
     bool alive = false;
     for (const BindingDecl *BD : DD->bindings())
       alive |= liveBindings.contains(BD);
+
+    // Note: the only known case this condition is necessary, is when a bindig
+    // to a tuple-like structure is created. The HoldingVar initializers have a
+    // DeclRefExpr to the DecompositionDecl.
+    alive |= liveDecls.contains(DD);
     return alive;
   }
   return liveDecls.contains(D);
@@ -208,6 +214,22 @@ static void AddLiveExpr(llvm::ImmutableSet<const Expr *> &Set,
   Set = F.add(Set, LookThroughExpr(E));
 }
 
+/// Add as a live expression all individual conditions in a logical expression.
+/// For example, for the expression:
+/// "(a < b) || (c && d && ((e || f) != (g && h)))"
+/// the following expressions will be added as live:
+/// "a < b", "c", "d", "((e || f) != (g && h))"
+static void AddAllConditionalTerms(llvm::ImmutableSet<const Expr *> &Set,
+                                   llvm::ImmutableSet<const Expr *>::Factory &F,
+                                   const Expr *Cond) {
+  AddLiveExpr(Set, F, Cond);
+  if (auto const *BO = dyn_cast<BinaryOperator>(Cond->IgnoreParens());
+      BO && BO->isLogicalOp()) {
+    AddAllConditionalTerms(Set, F, BO->getLHS());
+    AddAllConditionalTerms(Set, F, BO->getRHS());
+  }
+}
+
 void TransferFunctions::Visit(Stmt *S) {
   if (observer)
     observer->observeStmt(S, currentBlock, val);
@@ -307,7 +329,27 @@ void TransferFunctions::Visit(Stmt *S) {
       AddLiveExpr(val.liveExprs, LV.ESetFact, cast<ForStmt>(S)->getCond());
       return;
     }
-
+    case Stmt::ConditionalOperatorClass: {
+      // Keep not only direct children alive, but also all the short-circuited
+      // parts of the condition. Short-circuiting evaluation may cause the
+      // conditional operator evaluation to skip the evaluation of the entire
+      // condtion expression, so the value of the entire condition expression is
+      // never computed.
+      //
+      // This makes a difference when we compare exploded nodes coming from true
+      // and false expressions with no side effects: the only difference in the
+      // state is the value of (part of) the condition.
+      //
+      // BinaryConditionalOperatorClass ('x ?: y') is not affected because it
+      // explicitly calculates the value of the entire condition expression (to
+      // possibly use as a value for the "true expr") even if it is
+      // short-circuited.
+      auto const *CO = cast<ConditionalOperator>(S);
+      AddAllConditionalTerms(val.liveExprs, LV.ESetFact, CO->getCond());
+      AddLiveExpr(val.liveExprs, LV.ESetFact, CO->getTrueExpr());
+      AddLiveExpr(val.liveExprs, LV.ESetFact, CO->getFalseExpr());
+      return;
+    }
   }
 
   // HACK + FIXME: What is this? One could only guess that this is an attempt to
@@ -325,6 +367,11 @@ static bool writeShouldKill(const VarDecl *VD) {
 }
 
 void TransferFunctions::VisitBinaryOperator(BinaryOperator *B) {
+  if (LV.killAtAssign && B->getOpcode() == BO_Assign) {
+    if (const auto *DR = dyn_cast<DeclRefExpr>(B->getLHS()->IgnoreParens())) {
+      LV.inAssignment[DR] = 1;
+    }
+  }
   if (B->isAssignmentOp()) {
     if (!LV.killAtAssign)
       return;
@@ -338,8 +385,12 @@ void TransferFunctions::VisitBinaryOperator(BinaryOperator *B) {
 
       if (const BindingDecl* BD = dyn_cast<BindingDecl>(D)) {
         Killed = !BD->getType()->isReferenceType();
-        if (Killed)
+        if (Killed) {
+          if (const auto *HV = BD->getHoldingVar())
+            val.liveDecls = LV.DSetFact.remove(val.liveDecls, HV);
+
           val.liveBindings = LV.BSetFact.remove(val.liveBindings, BD);
+        }
       } else if (const auto *VD = dyn_cast<VarDecl>(D)) {
         Killed = writeShouldKill(VD);
         if (Killed)
@@ -366,8 +417,12 @@ void TransferFunctions::VisitDeclRefExpr(DeclRefExpr *DR) {
   const Decl* D = DR->getDecl();
   bool InAssignment = LV.inAssignment[DR];
   if (const auto *BD = dyn_cast<BindingDecl>(D)) {
-    if (!InAssignment)
+    if (!InAssignment) {
+      if (const auto *HV = BD->getHoldingVar())
+        val.liveDecls = LV.DSetFact.add(val.liveDecls, HV);
+
       val.liveBindings = LV.BSetFact.add(val.liveBindings, BD);
+    }
   } else if (const auto *VD = dyn_cast<VarDecl>(D)) {
     if (!InAssignment && !isAlwaysAlive(VD))
       val.liveDecls = LV.DSetFact.add(val.liveDecls, VD);
@@ -377,8 +432,16 @@ void TransferFunctions::VisitDeclRefExpr(DeclRefExpr *DR) {
 void TransferFunctions::VisitDeclStmt(DeclStmt *DS) {
   for (const auto *DI : DS->decls()) {
     if (const auto *DD = dyn_cast<DecompositionDecl>(DI)) {
-      for (const auto *BD : DD->bindings())
+      for (const auto *BD : DD->bindings()) {
+        if (const auto *HV = BD->getHoldingVar())
+          val.liveDecls = LV.DSetFact.remove(val.liveDecls, HV);
+
         val.liveBindings = LV.BSetFact.remove(val.liveBindings, BD);
+      }
+
+      // When a bindig to a tuple-like structure is created, the HoldingVar
+      // initializers have a DeclRefExpr to the DecompositionDecl.
+      val.liveDecls = LV.DSetFact.remove(val.liveDecls, DD);
     } else if (const auto *VD = dyn_cast<VarDecl>(DI)) {
       if (!isAlwaysAlive(VD))
         val.liveDecls = LV.DSetFact.remove(val.liveDecls, VD);
@@ -464,7 +527,7 @@ LiveVariablesImpl::runOnBlock(const CFGBlock *block,
        ei = block->rend(); it != ei; ++it) {
     const CFGElement &elem = *it;
 
-    if (Optional<CFGAutomaticObjDtor> Dtor =
+    if (std::optional<CFGAutomaticObjDtor> Dtor =
             elem.getAs<CFGAutomaticObjDtor>()) {
       val.liveDecls = DSetFact.add(val.liveDecls, Dtor->getVarDecl());
       continue;
@@ -513,29 +576,8 @@ LiveVariables::computeLiveness(AnalysisDeclContext &AC, bool killAtAssign) {
   llvm::BitVector everAnalyzedBlock(cfg->getNumBlockIDs());
 
   // FIXME: we should enqueue using post order.
-  for (CFG::const_iterator it = cfg->begin(), ei = cfg->end(); it != ei; ++it) {
-    const CFGBlock *block = *it;
-    worklist.enqueueBlock(block);
-
-    // FIXME: Scan for DeclRefExprs using in the LHS of an assignment.
-    // We need to do this because we lack context in the reverse analysis
-    // to determine if a DeclRefExpr appears in such a context, and thus
-    // doesn't constitute a "use".
-    if (killAtAssign)
-      for (CFGBlock::const_iterator bi = block->begin(), be = block->end();
-           bi != be; ++bi) {
-        if (Optional<CFGStmt> cs = bi->getAs<CFGStmt>()) {
-          const Stmt* stmt = cs->getStmt();
-          if (const auto *BO = dyn_cast<BinaryOperator>(stmt)) {
-            if (BO->getOpcode() == BO_Assign) {
-              if (const auto *DR =
-                    dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParens())) {
-                LV->inAssignment[DR] = 1;
-              }
-            }
-          }
-        }
-      }
+  for (const CFGBlock *B : cfg->nodes()) {
+    worklist.enqueueBlock(B);
   }
 
   while (const CFGBlock *block = worklist.dequeue()) {

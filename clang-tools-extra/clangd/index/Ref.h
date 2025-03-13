@@ -9,10 +9,8 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REF_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REF_H
 
-#include "SymbolID.h"
-#include "SymbolLocation.h"
-#include "clang/Index/IndexSymbol.h"
-#include "llvm/ADT/DenseMap.h"
+#include "index/SymbolID.h"
+#include "index/SymbolLocation.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/StringSaver.h"
@@ -65,6 +63,9 @@ enum class RefKind : uint8_t {
   //   ^ this references Foo, but does not explicitly spell out its name
   // };
   Spelled = 1 << 3,
+  // A reference which is a call. Used as a filter for which references
+  // to store in data structures used for computing outgoing calls.
+  Call = 1 << 4,
   All = Declaration | Definition | Reference | Spelled,
 };
 

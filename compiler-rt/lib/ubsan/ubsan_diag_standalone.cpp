@@ -20,18 +20,16 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(
     uptr pc, uptr bp, void *context, bool request_fast, u32 max_depth) {
   uptr top = 0;
   uptr bottom = 0;
-  if (StackTrace::WillUseFastUnwind(request_fast)) {
-    GetThreadStackTopAndBottom(false, &top, &bottom);
-    Unwind(max_depth, pc, bp, nullptr, top, bottom, true);
-  } else
-    Unwind(max_depth, pc, bp, context, 0, 0, false);
+  GetThreadStackTopAndBottom(false, &top, &bottom);
+  bool fast = StackTrace::WillUseFastUnwind(request_fast);
+  Unwind(max_depth, pc, bp, context, top, bottom, fast);
 }
 
 extern "C" {
 SANITIZER_INTERFACE_ATTRIBUTE
 void __sanitizer_print_stack_trace() {
   GET_CURRENT_PC_BP;
-  BufferedStackTrace stack;
+  UNINITIALIZED BufferedStackTrace stack;
   stack.Unwind(pc, bp, nullptr, common_flags()->fast_unwind_on_fatal);
   stack.Print();
 }

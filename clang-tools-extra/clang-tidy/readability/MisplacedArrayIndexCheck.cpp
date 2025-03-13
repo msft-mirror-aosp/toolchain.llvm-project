@@ -14,16 +14,13 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace readability {
+namespace clang::tidy::readability {
 
 void MisplacedArrayIndexCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(
-      traverse(ast_type_traits::TK_AsIs,
-               arraySubscriptExpr(hasLHS(hasType(isInteger())),
-                                  hasRHS(hasType(isAnyPointer())))
-                   .bind("expr")),
+      traverse(TK_AsIs, arraySubscriptExpr(hasLHS(hasType(isInteger())),
+                                           hasRHS(hasType(isAnyPointer())))
+                            .bind("expr")),
       this);
 }
 
@@ -53,6 +50,4 @@ void MisplacedArrayIndexCheck::check(const MatchFinder::MatchResult &Result) {
       ArraySubscriptE->getRHS()->getSourceRange(), LText);
 }
 
-} // namespace readability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::readability

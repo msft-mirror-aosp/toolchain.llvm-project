@@ -6,7 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-// UNSUPPORTED: c++03
+// UNSUPPORTED: c++03, c++11, c++14
+// UNSUPPORTED: availability-filesystem-missing
 
 // <filesystem>
 
@@ -22,19 +23,23 @@
 // bool operator<=(path const&, path const&) noexcept;
 // bool operator> (path const&, path const&) noexcept;
 // bool operator>=(path const&, path const&) noexcept;
+// strong_ordering operator<=>(path const&, path const&) noexcept;
 //
 // size_t hash_value(path const&) noexcept;
+// template<> struct hash<filesystem::path>;
 
-
-#include "filesystem_include.h"
+#include <filesystem>
+#include <cassert>
+#include <string>
 #include <type_traits>
 #include <vector>
-#include <cassert>
 
-#include "test_macros.h"
-#include "test_iterators.h"
+#include "assert_macros.h"
 #include "count_new.h"
-#include "filesystem_test_helper.h"
+#include "test_comparisons.h"
+#include "test_iterators.h"
+#include "test_macros.h"
+namespace fs = std::filesystem;
 
 struct PathCompareTest {
   const char* LHS;
@@ -42,13 +47,20 @@ struct PathCompareTest {
   int expect;
 };
 
-#define LONGA "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-#define LONGB "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-#define LONGC "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-#define LONGD "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
-const PathCompareTest CompareTestCases[] =
-{
-    {"", "",  0},
+#define LONGA                                                                                                          \
+  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
+  "AAAAAAAA"
+#define LONGB                                                                                                          \
+  "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" \
+  "BBBBBBBB"
+#define LONGC                                                                                                          \
+  "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC" \
+  "CCCCCCCC"
+#define LONGD                                                                                                          \
+  "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" \
+  "DDDDDDDD"
+const PathCompareTest CompareTestCases[] = {
+    {"", "", 0},
     {"a", "", 1},
     {"", "a", -1},
     {"a/b/c", "a/b/c", 0},
@@ -57,14 +69,19 @@ const PathCompareTest CompareTestCases[] =
     {"a/b", "a/b/c", -1},
     {"a/b/c", "a/b", 1},
     {"a/b/", "a/b/.", -1},
-    {"a/b/", "a/b",    1},
+    {"a/b/", "a/b", 1},
     {"a/b//////", "a/b/////.", -1},
     {"a/.././b", "a///..//.////b", 0},
     {"//foo//bar///baz////", "//foo/bar/baz/", 0}, // duplicate separators
-    {"///foo/bar", "/foo/bar", 0}, // "///" is not a root directory
-    {"/foo/bar/", "/foo/bar", 1}, // trailing separator
+    {"///foo/bar", "/foo/bar", 0},                 // "///" is not a root directory
+    {"/foo/bar/", "/foo/bar", 1},                  // trailing separator
     {"foo", "/foo", -1}, // if !this->has_root_directory() and p.has_root_directory(), a value less than 0.
-    {"/foo", "foo", 1}, //  if this->has_root_directory() and !p.has_root_directory(), a value greater than 0.
+    {"/foo", "foo", 1},  //  if this->has_root_directory() and !p.has_root_directory(), a value greater than 0.
+#ifdef _WIN32
+    {"C:/a", "C:\\a", 0},
+#else
+    {"C:/a", "C:\\a", -1},
+#endif
     {("//" LONGA "////" LONGB "/" LONGC "///" LONGD), ("//" LONGA "/" LONGB "/" LONGC "/" LONGD), 0},
     {(LONGA "/" LONGB "/" LONGC), (LONGA "/" LONGB "/" LONGB), 1}
 
@@ -74,27 +91,25 @@ const PathCompareTest CompareTestCases[] =
 #undef LONGC
 #undef LONGD
 
-static inline int normalize_ret(int ret)
-{
-  return ret < 0 ? -1 : (ret > 0 ? 1 : 0);
-}
+static inline int normalize_ret(int ret) { return ret < 0 ? -1 : (ret > 0 ? 1 : 0); }
 
-void test_compare_basic()
-{
+void test_compare_basic() {
   using namespace fs;
-  for (auto const & TC : CompareTestCases) {
+  for (auto const& TC : CompareTestCases) {
     const path p1(TC.LHS);
     const path p2(TC.RHS);
-    const std::string R(TC.RHS);
-    const std::string_view RV(TC.RHS);
-    const int E = TC.expect;
-    { // compare(...) functions
+    std::string RHS(TC.RHS);
+    const path::string_type R(RHS.begin(), RHS.end());
+    const std::basic_string_view<path::value_type> RV(R);
+    const path::value_type* Ptr = R.c_str();
+    const int E                 = TC.expect;
+    {                           // compare(...) functions
       DisableAllocationGuard g; // none of these operations should allocate
 
       // check runtime results
       int ret1 = normalize_ret(p1.compare(p2));
       int ret2 = normalize_ret(p1.compare(R));
-      int ret3 = normalize_ret(p1.compare(TC.RHS));
+      int ret3 = normalize_ret(p1.compare(Ptr));
       int ret4 = normalize_ret(p1.compare(RV));
 
       g.release();
@@ -106,32 +121,38 @@ void test_compare_basic()
       // check signatures
       ASSERT_NOEXCEPT(p1.compare(p2));
     }
-    { // comparison operators
+    {                           // comparison operators
       DisableAllocationGuard g; // none of these operations should allocate
 
-      // Check runtime result
-      assert((p1 == p2) == (E == 0));
-      assert((p1 != p2) == (E != 0));
-      assert((p1 <  p2) == (E <  0));
-      assert((p1 <= p2) == (E <= 0));
-      assert((p1 >  p2) == (E >  0));
-      assert((p1 >= p2) == (E >= 0));
+      // check signatures
+      AssertComparisonsAreNoexcept<path>();
+      AssertComparisonsReturnBool<path>();
+#if TEST_STD_VER > 17
+      AssertOrderAreNoexcept<path>();
+      AssertOrderReturn<std::strong_ordering, path>();
+#endif
 
-      // Check signatures
-      ASSERT_NOEXCEPT(p1 == p2);
-      ASSERT_NOEXCEPT(p1 != p2);
-      ASSERT_NOEXCEPT(p1 <  p2);
-      ASSERT_NOEXCEPT(p1 <= p2);
-      ASSERT_NOEXCEPT(p1 >  p2);
-      ASSERT_NOEXCEPT(p1 >= p2);
+      // check comarison results
+      assert(testComparisons(p1, p2, /*isEqual*/ E == 0, /*isLess*/ E < 0));
+#if TEST_STD_VER > 17
+      assert(testOrder(p1, p2, E <=> 0));
+#endif
     }
     { // check hash values
       auto h1 = hash_value(p1);
       auto h2 = hash_value(p2);
       assert((h1 == h2) == (p1 == p2));
       // check signature
-      ASSERT_SAME_TYPE(size_t, decltype(hash_value(p1)));
+      ASSERT_SAME_TYPE(std::size_t, decltype(hash_value(p1)));
       ASSERT_NOEXCEPT(hash_value(p1));
+    }
+    { // check std::hash
+      auto h1 = std::hash<fs::path>()(p1);
+      auto h2 = std::hash<fs::path>()(p2);
+      assert((h1 == h2) == (p1 == p2));
+      // check signature
+      ASSERT_SAME_TYPE(std::size_t, decltype(std::hash<fs::path>()(p1)));
+      ASSERT_NOEXCEPT(std::hash<fs::path>()(p1));
     }
   }
 }
@@ -167,14 +188,14 @@ void test_compare_elements() {
 
   auto BuildPath = [](std::vector<std::string> const& Elems) {
     fs::path p;
-    for (auto &E : Elems)
+    for (auto& E : Elems)
       p /= E;
     return p;
   };
 
-  for (auto &TC : TestCases) {
-    fs::path LHS = BuildPath(TC.LHSElements);
-    fs::path RHS = BuildPath(TC.RHSElements);
+  for (auto& TC : TestCases) {
+    fs::path LHS        = BuildPath(TC.LHSElements);
+    fs::path RHS        = BuildPath(TC.RHSElements);
     const int ExpectCmp = CompareElements(TC.LHSElements, TC.RHSElements);
     assert(ExpectCmp == TC.Expect);
     const int GotCmp = normalize_ret(LHS.compare(RHS));

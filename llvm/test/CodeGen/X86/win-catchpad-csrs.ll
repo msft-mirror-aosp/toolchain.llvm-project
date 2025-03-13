@@ -1,22 +1,22 @@
 ; RUN: llc -verify-machineinstrs -mtriple=i686-pc-windows-msvc < %s | FileCheck --check-prefix=X86 %s
 ; RUN: llc -verify-machineinstrs -mtriple=x86_64-pc-windows-msvc < %s | FileCheck --check-prefix=X64 %s
 
-%rtti.TypeDescriptor2 = type { i8**, i8*, [3 x i8] }
-%eh.CatchableType = type { i32, i8*, i32, i32, i32, i32, i8* }
-%eh.CatchableTypeArray.1 = type { i32, [1 x %eh.CatchableType*] }
-%eh.ThrowInfo = type { i32, i8*, i8*, i8* }
+%rtti.TypeDescriptor2 = type { ptr, ptr, [3 x i8] }
+%eh.CatchableType = type { i32, ptr, i32, i32, i32, i32, ptr }
+%eh.CatchableTypeArray.1 = type { i32, [1 x ptr] }
+%eh.ThrowInfo = type { i32, ptr, ptr, ptr }
 
 $"\01??_R0H@8" = comdat any
 
-@"\01??_7type_info@@6B@" = external constant i8*
-@"\01??_R0H@8" = linkonce_odr global %rtti.TypeDescriptor2 { i8** @"\01??_7type_info@@6B@", i8* null, [3 x i8] c".H\00" }, comdat
+@"\01??_7type_info@@6B@" = external constant ptr
+@"\01??_R0H@8" = linkonce_odr global %rtti.TypeDescriptor2 { ptr @"\01??_7type_info@@6B@", ptr null, [3 x i8] c".H\00" }, comdat
 
 declare i32 @getint()
 declare void @useints(...)
 declare void @f(i32 %p)
 declare i32 @__CxxFrameHandler3(...)
 
-define i32 @try_catch_catch() personality i32 (...)* @__CxxFrameHandler3 {
+define i32 @try_catch_catch() personality ptr @__CxxFrameHandler3 {
 entry:
   %a = call i32 @getint()
   %b = call i32 @getint()
@@ -33,7 +33,7 @@ catch.dispatch:
   %cs = catchswitch within none [label %handler1] unwind to caller
 
 handler1:
-  %h1 = catchpad within %cs [%rtti.TypeDescriptor2* @"\01??_R0H@8", i32 0, i8* null]
+  %h1 = catchpad within %cs [ptr @"\01??_R0H@8", i32 0, ptr null]
   call void @f(i32 2) [ "funclet"(token %h1) ]
   catchret from %h1 to label %try.cont
 }
@@ -109,8 +109,10 @@ handler1:
 ; X64: callq f
 ; X64: [[contbb:\.LBB0_[0-9]+]]: # Block address taken
 ; X64-NEXT:                      # %try.cont
+; X64: .seh_startepilogue
 ; X64: addq $40, %rsp
 ; X64: popq %rbp
+; X64: .seh_endepilogue
 ; X64: retq
 
 ; X64: "?catch$[[catch1bb:[0-9]+]]@?0?try_catch_catch@4HA":
@@ -131,11 +133,13 @@ handler1:
 ; X64: movl $2, %ecx
 ; X64: callq f
 ; X64: leaq [[contbb]](%rip), %rax
+; X64: .seh_startepilogue
 ; X64: addq $40, %rsp
 ; X64: popq %rbx
 ; X64: popq %rdi
 ; X64: popq %rsi
 ; X64: popq %rbp
+; X64: .seh_endepilogue
 ; X64: retq
 
 ; X64: $handlerMap$0$try_catch_catch:
@@ -145,7 +149,7 @@ handler1:
 ; X64:   .long   "?catch$[[catch1bb]]@?0?try_catch_catch@4HA"@IMGREL
 ; X64:   .long   88
 
-define i32 @try_one_csr() personality i32 (...)* @__CxxFrameHandler3 {
+define i32 @try_one_csr() personality ptr @__CxxFrameHandler3 {
 entry:
   %a = call i32 @getint()
   %b = call i32 @getint()
@@ -157,7 +161,7 @@ catch.dispatch:
   %cs = catchswitch within none [label %handler1] unwind to caller
 
 handler1:
-  %0 = catchpad within %cs [%rtti.TypeDescriptor2* @"\01??_R0H@8", i32 0, i8* null]
+  %0 = catchpad within %cs [ptr @"\01??_R0H@8", i32 0, ptr null]
   catchret from %0 to label %try.cont
 
 try.cont:
@@ -182,10 +186,12 @@ try.cont:
 ; X64: callq f
 ; X64: [[contbb:\.LBB1_[0-9]+]]: # Block address taken
 ; X64-NEXT:                      # %try.cont
+; X64: .seh_startepilogue
 ; X64: addq $40, %rsp
 ; X64-NOT: popq
 ; X64: popq %rsi
 ; X64: popq %rbp
+; X64: .seh_endepilogue
 ; X64: retq
 
 ; X64: "?catch$[[catch1bb:[0-9]+]]@?0?try_one_csr@4HA":
@@ -200,9 +206,11 @@ try.cont:
 ; X64: leaq 32(%rdx), %rbp
 ; X64: .seh_endprologue
 ; X64: leaq [[contbb]](%rip), %rax
+; X64: .seh_startepilogue
 ; X64: addq $40, %rsp
 ; X64: popq %rsi
 ; X64: popq %rbp
+; X64: .seh_endepilogue
 ; X64: retq
 
 ; X64: $handlerMap$0$try_one_csr:
@@ -212,7 +220,7 @@ try.cont:
 ; X64:   .long   "?catch$[[catch1bb]]@?0?try_one_csr@4HA"@IMGREL
 ; X64:   .long   72
 
-define i32 @try_no_csr() personality i32 (...)* @__CxxFrameHandler3 {
+define i32 @try_no_csr() personality ptr @__CxxFrameHandler3 {
 entry:
   invoke void @f(i32 1)
           to label %try.cont unwind label %catch.dispatch
@@ -221,7 +229,7 @@ catch.dispatch:
   %cs = catchswitch within none [label %handler1] unwind to caller
 
 handler1:
-  %cp1 = catchpad within %cs [%rtti.TypeDescriptor2* @"\01??_R0H@8", i32 0, i8* null]
+  %cp1 = catchpad within %cs [ptr @"\01??_R0H@8", i32 0, ptr null]
   catchret from %cp1 to label %try.cont
 
 try.cont:
@@ -241,9 +249,11 @@ try.cont:
 ; X64: callq f
 ; X64: [[contbb:\.LBB2_[0-9]+]]: # Block address taken
 ; X64-NEXT:                      # %try.cont
+; X64: .seh_startepilogue
 ; X64: addq $48, %rsp
 ; X64-NOT: popq
 ; X64: popq %rbp
+; X64: .seh_endepilogue
 ; X64: retq
 
 ; X64: "?catch$[[catch1bb:[0-9]+]]@?0?try_no_csr@4HA":
@@ -256,8 +266,10 @@ try.cont:
 ; X64: leaq 48(%rdx), %rbp
 ; X64: .seh_endprologue
 ; X64: leaq [[contbb]](%rip), %rax
+; X64: .seh_startepilogue
 ; X64: addq $32, %rsp
 ; X64: popq %rbp
+; X64: .seh_endepilogue
 ; X64: retq
 
 ; X64: $handlerMap$0$try_no_csr:

@@ -17,19 +17,15 @@
 
 #define DEBUG_TYPE "format-test"
 
-using clang::tooling::ReplacementTest;
-using clang::tooling::toReplacements;
-
 namespace clang {
 namespace format {
 namespace {
 
-class FormatTestRawStrings : public ::testing::Test {
+class FormatTestRawStrings : public testing::Test {
 protected:
   enum StatusCheck { SC_ExpectComplete, SC_ExpectIncomplete, SC_DoNotCheck };
 
-  std::string format(llvm::StringRef Code,
-                     const FormatStyle &Style = getLLVMStyle(),
+  std::string format(StringRef Code, const FormatStyle &Style = getLLVMStyle(),
                      StatusCheck CheckComplete = SC_ExpectComplete) {
     LLVM_DEBUG(llvm::errs() << "---\n");
     LLVM_DEBUG(llvm::errs() << Code << "\n\n");
@@ -782,10 +778,15 @@ a = ParseTextProto<ProtoType>(R"(key:value)");)test",
 }
 
 TEST_F(FormatTestRawStrings, UpdatesToCanonicalDelimiters) {
-  FormatStyle Style = getRawStringPbStyleWithColumns(25);
+  FormatStyle Style = getRawStringPbStyleWithColumns(35);
   Style.RawStringFormats[0].CanonicalDelimiter = "proto";
+  Style.RawStringFormats[0].EnclosingFunctions.push_back("PARSE_TEXT_PROTO");
+
   expect_eq(R"test(a = R"proto(key: value)proto";)test",
             format(R"test(a = R"pb(key:value)pb";)test", Style));
+
+  expect_eq(R"test(PARSE_TEXT_PROTO(R"proto(key: value)proto");)test",
+            format(R"test(PARSE_TEXT_PROTO(R"(key:value)");)test", Style));
 
   // Don't update to canonical delimiter if it occurs as a raw string suffix in
   // the raw string content.

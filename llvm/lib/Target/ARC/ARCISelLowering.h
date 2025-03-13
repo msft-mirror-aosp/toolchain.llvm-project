@@ -77,6 +77,9 @@ public:
 private:
   const ARCSubtarget &Subtarget;
 
+  void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
+                          SelectionDAG &DAG) const override;
+
   // Lower Operand helpers
   SDValue LowerCallArguments(SDValue Chain, CallingConv::ID CallConv,
                              bool isVarArg,
@@ -109,7 +112,7 @@ private:
   bool CanLowerReturn(CallingConv::ID CallConv, MachineFunction &MF,
                       bool isVarArg,
                       const SmallVectorImpl<ISD::OutputArg> &ArgsFlags,
-                      LLVMContext &Context) const override;
+                      LLVMContext &Context, const Type *RetTy) const override;
 
   bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
 };

@@ -1,4 +1,4 @@
-//===- DataFlowSanitizer.h - dynamic data flow analysis -------------------===//
+//===- DataFlowSanitizer.h - dynamic data flow analysis ---------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,12 +8,12 @@
 #ifndef LLVM_TRANSFORMS_INSTRUMENTATION_DATAFLOWSANITIZER_H
 #define LLVM_TRANSFORMS_INSTRUMENTATION_DATAFLOWSANITIZER_H
 
-#include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include <string>
 #include <vector>
 
 namespace llvm {
+class Module;
 
 class DataFlowSanitizerPass : public PassInfoMixin<DataFlowSanitizerPass> {
 private:

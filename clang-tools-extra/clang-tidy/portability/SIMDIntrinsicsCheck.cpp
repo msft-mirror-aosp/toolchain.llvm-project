@@ -11,14 +11,13 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace portability {
+namespace clang::tidy::portability {
 
 namespace {
 
@@ -39,7 +38,7 @@ AST_MATCHER(FunctionDecl, isVectorFunction) {
 
 } // namespace
 
-static StringRef TrySuggestPPC(StringRef Name) {
+static StringRef trySuggestPpc(StringRef Name) {
   if (!Name.consume_front("vec_"))
     return {};
 
@@ -54,23 +53,23 @@ static StringRef TrySuggestPPC(StringRef Name) {
       .Default({});
 }
 
-static StringRef TrySuggestX86(StringRef Name) {
+static StringRef trySuggestX86(StringRef Name) {
   if (!(Name.consume_front("_mm_") || Name.consume_front("_mm256_") ||
         Name.consume_front("_mm512_")))
     return {};
 
   // [simd.alg]
-  if (Name.startswith("max_"))
+  if (Name.starts_with("max_"))
     return "$simd::max";
-  if (Name.startswith("min_"))
+  if (Name.starts_with("min_"))
     return "$simd::min";
 
   // [simd.binary]
-  if (Name.startswith("add_"))
+  if (Name.starts_with("add_"))
     return "operator+ on $simd objects";
-  if (Name.startswith("sub_"))
+  if (Name.starts_with("sub_"))
     return "operator- on $simd objects";
-  if (Name.startswith("mul_"))
+  if (Name.starts_with("mul_"))
     return "operator* on $simd objects";
 
   return {};
@@ -120,33 +119,29 @@ void SIMDIntrinsicsCheck::check(const MatchFinder::MatchResult &Result) {
   case llvm::Triple::ppc:
   case llvm::Triple::ppc64:
   case llvm::Triple::ppc64le:
-    New = TrySuggestPPC(Old);
+    New = trySuggestPpc(Old);
     break;
   case llvm::Triple::x86:
   case llvm::Triple::x86_64:
-    New = TrySuggestX86(Old);
+    New = trySuggestX86(Old);
     break;
   }
 
   // We have found a std::simd replacement.
   if (!New.empty()) {
-    std::string Message;
     // If Suggest is true, give a P0214 alternative, otherwise point it out it
     // is non-portable.
     if (Suggest) {
-      Message = (Twine("'") + Old + "' can be replaced by " + New).str();
-      Message = llvm::Regex("\\$std").sub(Std, Message);
-      Message =
-          llvm::Regex("\\$simd").sub((Std.str() + "::simd").str(), Message);
+      static const llvm::Regex StdRegex("\\$std"), SimdRegex("\\$simd");
+      diag(Call->getExprLoc(), "'%0' can be replaced by %1")
+          << Old
+          << SimdRegex.sub(SmallString<32>({Std, "::simd"}),
+                           StdRegex.sub(Std, New));
     } else {
-      Message = (Twine("'") + Old + "' is a non-portable " +
-                 llvm::Triple::getArchTypeName(Arch) + " intrinsic function")
-                    .str();
+      diag(Call->getExprLoc(), "'%0' is a non-portable %1 intrinsic function")
+          << Old << llvm::Triple::getArchTypeName(Arch);
     }
-    diag(Call->getExprLoc(), Message);
   }
 }
 
-} // namespace portability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::portability

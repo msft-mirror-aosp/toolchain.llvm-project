@@ -119,6 +119,10 @@ Options for all Libraries
   Compiler to use for testing. Defaults to the compiler that was also used for
   building.
 
+**OPENMP_TEST_Fortran_COMPILER** = ``${CMAKE_Fortran_COMPILER}``
+  Compiler to use for testing. Defaults to the compiler that was also used for
+  building. Will default to flang if build is in-tree.
+
 **OPENMP_LLVM_TOOLS_DIR** = ``/path/to/built/llvm/tools``
   Additional path to search for LLVM tools needed by tests.
 
@@ -137,7 +141,7 @@ Options for all Libraries
 Options for ``libomp``
 ----------------------
 
-**LIBOMP_ARCH** = ``aarch64|arm|i386|mic|mips|mips64|ppc64|ppc64le|x86_64|riscv64``
+**LIBOMP_ARCH** = ``aarch64|aarch64_32|arm|i386|loongarch64|mic|mips|mips64|ppc64|ppc64le|x86_64|riscv64|s390x``
   The default value for this option is chosen based on probing the compiler for
   architecture macros (e.g., is ``__x86_64__`` predefined by compiler?).
 
@@ -194,7 +198,7 @@ Optional Features
 **LIBOMP_OMPT_SUPPORT** = ``ON|OFF``
   Include support for the OpenMP Tools Interface (OMPT).
   This option is supported and ``ON`` by default for x86, x86_64, AArch64,
-  PPC64 and RISCV64 on Linux* and macOS*.
+  PPC64, RISCV64, LoongArch64, and s390x on Linux* and macOS*.
   This option is ``OFF`` if this feature is not supported for the platform.
 
 **LIBOMP_OMPT_OPTIONAL** = ``ON|OFF``
@@ -243,13 +247,22 @@ These flags are **appended**, they do not overwrite any of the preset flags.
 Options for ``libomptarget``
 ----------------------------
 
+An installed LLVM package is a prerequisite for building ``libomptarget``
+library. So ``libomptarget`` may only be built in two cases:
+
+- As a project of a regular LLVM build via **LLVM_ENABLE_PROJECTS**,
+  **LLVM_EXTERNAL_PROJECTS**, or **LLVM_ENABLE_RUNTIMES** or
+- as a standalone project build that uses a pre-installed LLVM package.
+  In this mode one has to make sure that the default CMake
+  ``find_package(LLVM)`` call `succeeds <https://cmake.org/cmake/help/latest/command/find_package.html#search-procedure>`_.
+
 **LIBOMPTARGET_OPENMP_HEADER_FOLDER** = ``""``
   Path of the folder that contains ``omp.h``.  This is required for testing
   out-of-tree builds.
 
 **LIBOMPTARGET_OPENMP_HOST_RTL_FOLDER** = ``""``
-  Path of the folder that contains ``libomp.so``.  This is required for testing
-  out-of-tree builds.
+  Path of the folder that contains ``libomp.so``, and ``libLLVMSupport.so``
+  when profiling is enabled.  This is required for testing.
 
 Options for ``NVPTX device RTL``
 --------------------------------
@@ -263,14 +276,18 @@ Options for ``NVPTX device RTL``
 **LIBOMPTARGET_NVPTX_CUDA_COMPILER** = ``""``
   Location of a CUDA compiler capable of emitting LLVM bitcode. Currently only
   the Clang compiler is supported. This is only used when building the CUDA LLVM
-  bitcode offloading device RTL. If unspecified and the CMake C compiler is
-  Clang, then Clang is used.
+  bitcode offloading device RTL. If unspecified, either the Clang from the build
+  itself is used (i.e. an in-tree build with LLVM_ENABLE_PROJECTS including
+  clang), or the Clang compiler that the build uses as C compiler
+  (CMAKE_C_COMPILER; only if it is Clang). The latter is common for a
+  stage2-build or when using -DLLVM_ENABLE_RUNTIMES=openmp.
 
 **LIBOMPTARGET_NVPTX_BC_LINKER** = ``""``
   Location of a linker capable of linking LLVM bitcode objects. This is only
-  used when building the CUDA LLVM bitcode offloading device RTL. If unspecified
-  and the CMake C compiler is Clang and there exists a llvm-link binary in the
-  directory containing Clang, then this llvm-link binary is used.
+  used when building the CUDA LLVM bitcode offloading device RTL. If
+  unspecified, either the llvm-link in that same directory as
+  LIBOMPTARGET_NVPTX_CUDA_COMPILER is used, or the llvm-link from the
+  same build (available in an in-tree build).
 
 **LIBOMPTARGET_NVPTX_ALTERNATE_HOST_COMPILER** = ``""``
   Host compiler to use with NVCC. This compiler is not going to be used to
@@ -281,11 +298,17 @@ Options for ``NVPTX device RTL``
 
  **LIBOMPTARGET_NVPTX_COMPUTE_CAPABILITIES** = ``35``
   List of CUDA compute capabilities that should be supported by the NVPTX
-  device RTL. E.g. for compute capabilities 6.0 and 7.0, the option "60,70"
+  device RTL. E.g. for compute capabilities 6.0 and 7.0, the option "60;70"
   should be used. Compute capability 3.5 is the minimum required.
 
  **LIBOMPTARGET_NVPTX_DEBUG** = ``OFF|ON``
   Enable printing of debug messages from the NVPTX device RTL.
+
+**LIBOMPTARGET_LIT_ARGS** = ``""``
+  Arguments given to lit. ``make check-libomptarget`` and
+  ``make check-libomptarget-*`` are affected. For example, use
+  ``LIBOMPTARGET_LIT_ARGS="-j4"`` to force ``lit`` to start only four parallel
+  jobs instead of by default the number of threads in the system.
 
 Example Usages of CMake
 =======================
@@ -338,3 +361,35 @@ Advanced Builds with Various Options
 **Footnotes**
 
 .. [*] Other names and brands may be claimed as the property of others.
+
+How to Run Tests
+================
+
+There are following check-* make targets for tests.
+
+- ``check-ompt`` (ompt tests under runtime/test/ompt)
+- ``check-ompt-multiplex`` (ompt multiplex tests under tools/multiplex/tests)
+- ``check-libarcher`` (libarcher tests under tools/archer/tests)
+- ``check-libomp`` (libomp tests under runtime/test. This includes check-ompt tests too)
+- ``check-libomptarget-*`` (libomptarget tests for specific target under libomptarget/test)
+- ``check-libomptarget`` (all check-libomptarget-* tests)
+- ``check-openmp`` (combination of all above tests excluding duplicates)
+
+For example, to run all available tests, use ``make check-openmp``.
+
+Options for Tests
+------------------
+Tests use lit framework.
+See `lit documentation <https://llvm.org/docs/CommandGuide/lit.html>`_ for lit options.
+
+**CHECK_OPENMP_ENV** = ``""``
+  Default environment variables which test process uses for ``check-openmp``
+  separated by space.  This can be used for individual targets (``check-ompt``,
+  ``check-ompt-multiplex``, ``check-libarcher``, ``check-libomp`` and
+  ``check-libomptarget-*``) too.  Note that each test still overrides
+  environment variables if needed.  For example, to change barrier pattern to be
+  used from default hyper barrier to hierarchical barrier, run:
+
+.. code-block:: console
+
+  $ CHECK_OPENMP_ENV="KMP_PLAIN_BARRIER_PATTERN=hier,hier KMP_FORKJOIN_BARRIER_PATTERN=hier,hier KMP_REDUCTION_BARRIER_PATTERN=hier,hier" make check-openmp

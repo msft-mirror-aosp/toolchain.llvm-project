@@ -9,15 +9,13 @@
 #include "JSON.h"
 
 // C includes
-#include <assert.h>
-#include <limits.h>
+#include <cassert>
+#include <climits>
 
 // C++ includes
-#include "lldb/Host/StringConvert.h"
+#include "StringConvert.h"
 #include <iomanip>
 #include <sstream>
-
-using namespace lldb_private;
 
 std::string JSONString::json_string_quote_metachars(const std::string &s) {
   if (s.find('"') == std::string::npos)
@@ -45,7 +43,7 @@ JSONString::JSONString(const std::string &s)
     : JSONValue(JSONValue::Kind::String), m_data(s) {}
 
 void JSONString::Write(std::ostream &s) {
-  s << "\"" << json_string_quote_metachars(m_data).c_str() << "\"";
+  s << "\"" << json_string_quote_metachars(m_data) << "\"";
 }
 
 uint64_t JSONNumber::GetAsUnsigned() const {
@@ -397,7 +395,7 @@ JSONParser::Token JSONParser::GetToken(std::string &value) {
           } else {
             error << "error: got exponent character but no exponent digits at "
                      "offset in float value \""
-                  << value.c_str() << "\"";
+                  << value << "\"";
             value = error.str();
             return Token::Status;
           }
@@ -407,8 +405,7 @@ JSONParser::Token JSONParser::GetToken(std::string &value) {
           if (got_frac_digits) {
             return Token::Float;
           } else {
-            error << "error: no digits after decimal point \"" << value.c_str()
-                  << "\"";
+            error << "error: no digits after decimal point \"" << value << "\"";
             value = error.str();
             return Token::Status;
           }
@@ -419,7 +416,7 @@ JSONParser::Token JSONParser::GetToken(std::string &value) {
           // We need at least some integer digits to make an integer
           return Token::Integer;
         } else {
-          error << "error: no digits negate sign \"" << value.c_str() << "\"";
+          error << "error: no digits negate sign \"" << value << "\"";
           value = error.str();
           return Token::Status;
         }

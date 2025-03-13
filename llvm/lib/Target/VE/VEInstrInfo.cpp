@@ -20,10 +20,9 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/TargetRegistry.h"
 
 #define DEBUG_TYPE "ve-instr-info"
 
@@ -99,7 +98,7 @@ static bool isUncondBranchOpcode(int Opc) {
 
 #define BRKIND(NAME) (Opc == NAME##a || Opc == NAME##a_nt || Opc == NAME##a_t)
   // VE has other branch relative always instructions for word/double/float,
-  // but we use only long branches in our lower.  So, sanity check it here.
+  // but we use only long branches in our lower.  So, check it here.
   assert(!BRKIND(BRCFW) && !BRKIND(BRCFD) && !BRKIND(BRCFS) &&
          "Branch relative word/double/float always instructions should not be "
          "used!");
@@ -127,7 +126,7 @@ static bool isIndirectBranchOpcode(int Opc) {
 #define BRKIND(NAME)                                                           \
   (Opc == NAME##ari || Opc == NAME##ari_nt || Opc == NAME##ari_t)
   // VE has other branch always instructions for word/double/float, but
-  // we use only long branches in our lower.  So, sanity check it here.
+  // we use only long branches in our lower.  So, check it here.
   assert(!BRKIND(BCFW) && !BRKIND(BCFD) && !BRKIND(BCFS) &&
          "Branch word/double/float always instructions should not be used!");
   return BRKIND(BCFL);
@@ -248,7 +247,7 @@ unsigned VEInstrInfo::insertBranch(MachineBasicBlock &MBB,
   const TargetRegisterInfo *TRI = &getRegisterInfo();
   MachineFunction *MF = MBB.getParent();
   const MachineRegisterInfo &MRI = MF->getRegInfo();
-  unsigned Reg = Cond[2].getReg();
+  Register Reg = Cond[2].getReg();
   if (IsIntegerCC(Cond[0].getImm())) {
     if (TRI->getRegSizeInBits(Reg, MRI) == 32) {
       opc[0] = VE::BRCFWir;
@@ -341,6 +340,11 @@ static void copyPhysSubRegs(MachineBasicBlock &MBB,
       MachineInstrBuilder MIB =
           BuildMI(MBB, I, DL, MCID, SubDest).addReg(SubSrc).addImm(0);
       MovMI = MIB.getInstr();
+    } else if (MCID.getOpcode() == VE::ANDMmm) {
+      // generate "ANDM, dest, vm0, src" instruction.
+      MachineInstrBuilder MIB =
+          BuildMI(MBB, I, DL, MCID, SubDest).addReg(VE::VM0).addReg(SubSrc);
+      MovMI = MIB.getInstr();
     } else {
       llvm_unreachable("Unexpected reg-to-reg copy instruction");
     }
@@ -354,7 +358,8 @@ static void copyPhysSubRegs(MachineBasicBlock &MBB,
 void VEInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                               MachineBasicBlock::iterator I, const DebugLoc &DL,
                               MCRegister DestReg, MCRegister SrcReg,
-                              bool KillSrc) const {
+                              bool KillSrc, bool RenamableDest,
+                              bool RenamableSrc) const {
 
   if (IsAliasOfSX(SrcReg) && IsAliasOfSX(DestReg)) {
     BuildMI(MBB, I, DL, get(VE::ORri), DestReg)
@@ -379,6 +384,16 @@ void VEInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                   .addReg(SrcReg, getKillRegState(KillSrc))
                                   .addReg(SubTmp, getKillRegState(true));
     MIB.getInstr()->addRegisterKilled(TmpReg, TRI, true);
+  } else if (VE::VMRegClass.contains(DestReg, SrcReg)) {
+    BuildMI(MBB, I, DL, get(VE::ANDMmm), DestReg)
+        .addReg(VE::VM0)
+        .addReg(SrcReg, getKillRegState(KillSrc));
+  } else if (VE::VM512RegClass.contains(DestReg, SrcReg)) {
+    // Use two instructions.
+    const unsigned SubRegIdx[] = {VE::sub_vm_even, VE::sub_vm_odd};
+    unsigned int NumSubRegs = 2;
+    copyPhysSubRegs(MBB, I, DL, DestReg, SrcReg, KillSrc, get(VE::ANDMmm),
+                    NumSubRegs, SubRegIdx, &getRegisterInfo());
   } else if (VE::F128RegClass.contains(DestReg, SrcReg)) {
     // Use two instructions.
     const unsigned SubRegIdx[] = {VE::sub_even, VE::sub_odd};
@@ -398,12 +413,14 @@ void VEInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
 /// the destination along with the FrameIndex of the loaded stack slot.  If
 /// not, return 0.  This predicate must return 0 if the instruction has
 /// any side effects other than loading from the stack slot.
-unsigned VEInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
+Register VEInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
                                           int &FrameIndex) const {
   if (MI.getOpcode() == VE::LDrii ||    // I64
       MI.getOpcode() == VE::LDLSXrii || // I32
       MI.getOpcode() == VE::LDUrii ||   // F32
-      MI.getOpcode() == VE::LDQrii      // F128 (pseudo)
+      MI.getOpcode() == VE::LDQrii ||   // F128 (pseudo)
+      MI.getOpcode() == VE::LDVMrii ||  // VM (pseudo)
+      MI.getOpcode() == VE::LDVM512rii  // VM512 (pseudo)
   ) {
     if (MI.getOperand(1).isFI() && MI.getOperand(2).isImm() &&
         MI.getOperand(2).getImm() == 0 && MI.getOperand(3).isImm() &&
@@ -420,12 +437,14 @@ unsigned VEInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
 /// the source reg along with the FrameIndex of the loaded stack slot.  If
 /// not, return 0.  This predicate must return 0 if the instruction has
 /// any side effects other than storing to the stack slot.
-unsigned VEInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
+Register VEInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
                                          int &FrameIndex) const {
-  if (MI.getOpcode() == VE::STrii ||  // I64
-      MI.getOpcode() == VE::STLrii || // I32
-      MI.getOpcode() == VE::STUrii || // F32
-      MI.getOpcode() == VE::STQrii    // F128 (pseudo)
+  if (MI.getOpcode() == VE::STrii ||   // I64
+      MI.getOpcode() == VE::STLrii ||  // I32
+      MI.getOpcode() == VE::STUrii ||  // F32
+      MI.getOpcode() == VE::STQrii ||  // F128 (pseudo)
+      MI.getOpcode() == VE::STVMrii || // VM (pseudo)
+      MI.getOpcode() == VE::STVM512rii // VM512 (pseudo)
   ) {
     if (MI.getOperand(0).isFI() && MI.getOperand(1).isImm() &&
         MI.getOperand(1).getImm() == 0 && MI.getOperand(2).isImm() &&
@@ -441,7 +460,9 @@ void VEInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                       MachineBasicBlock::iterator I,
                                       Register SrcReg, bool isKill, int FI,
                                       const TargetRegisterClass *RC,
-                                      const TargetRegisterInfo *TRI) const {
+                                      const TargetRegisterInfo *TRI,
+                                      Register VReg,
+                                      MachineInstr::MIFlag Flags) const {
   DebugLoc DL;
   if (I != MBB.end())
     DL = I->getDebugLoc();
@@ -481,15 +502,28 @@ void VEInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
         .addImm(0)
         .addReg(SrcReg, getKillRegState(isKill))
         .addMemOperand(MMO);
+  } else if (RC == &VE::VMRegClass) {
+    BuildMI(MBB, I, DL, get(VE::STVMrii))
+        .addFrameIndex(FI)
+        .addImm(0)
+        .addImm(0)
+        .addReg(SrcReg, getKillRegState(isKill))
+        .addMemOperand(MMO);
+  } else if (VE::VM512RegClass.hasSubClassEq(RC)) {
+    BuildMI(MBB, I, DL, get(VE::STVM512rii))
+        .addFrameIndex(FI)
+        .addImm(0)
+        .addImm(0)
+        .addReg(SrcReg, getKillRegState(isKill))
+        .addMemOperand(MMO);
   } else
     report_fatal_error("Can't store this register to stack slot");
 }
 
-void VEInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
-                                       MachineBasicBlock::iterator I,
-                                       Register DestReg, int FI,
-                                       const TargetRegisterClass *RC,
-                                       const TargetRegisterInfo *TRI) const {
+void VEInstrInfo::loadRegFromStackSlot(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator I, Register DestReg,
+    int FI, const TargetRegisterClass *RC, const TargetRegisterInfo *TRI,
+    Register VReg, MachineInstr::MIFlag Flags) const {
   DebugLoc DL;
   if (I != MBB.end())
     DL = I->getDebugLoc();
@@ -524,13 +558,25 @@ void VEInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
         .addImm(0)
         .addImm(0)
         .addMemOperand(MMO);
+  } else if (RC == &VE::VMRegClass) {
+    BuildMI(MBB, I, DL, get(VE::LDVMrii), DestReg)
+        .addFrameIndex(FI)
+        .addImm(0)
+        .addImm(0)
+        .addMemOperand(MMO);
+  } else if (VE::VM512RegClass.hasSubClassEq(RC)) {
+    BuildMI(MBB, I, DL, get(VE::LDVM512rii), DestReg)
+        .addFrameIndex(FI)
+        .addImm(0)
+        .addImm(0)
+        .addMemOperand(MMO);
   } else
     report_fatal_error("Can't load this register from stack slot");
 }
 
-bool VEInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
+bool VEInstrInfo::foldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
                                 Register Reg, MachineRegisterInfo *MRI) const {
-  LLVM_DEBUG(dbgs() << "FoldImmediate\n");
+  LLVM_DEBUG(dbgs() << "foldImmediate\n");
 
   LLVM_DEBUG(dbgs() << "checking DefMI\n");
   int64_t ImmVal;
@@ -731,6 +777,32 @@ static Register getVM512Upper(Register reg) {
 
 static Register getVM512Lower(Register reg) { return getVM512Upper(reg) + 1; }
 
+// Expand pseudo logical vector instructions for VM512 registers.
+static void expandPseudoLogM(MachineInstr &MI, const MCInstrDesc &MCID) {
+  MachineBasicBlock *MBB = MI.getParent();
+  DebugLoc DL = MI.getDebugLoc();
+
+  Register VMXu = getVM512Upper(MI.getOperand(0).getReg());
+  Register VMXl = getVM512Lower(MI.getOperand(0).getReg());
+  Register VMYu = getVM512Upper(MI.getOperand(1).getReg());
+  Register VMYl = getVM512Lower(MI.getOperand(1).getReg());
+
+  switch (MI.getOpcode()) {
+  default: {
+    Register VMZu = getVM512Upper(MI.getOperand(2).getReg());
+    Register VMZl = getVM512Lower(MI.getOperand(2).getReg());
+    BuildMI(*MBB, MI, DL, MCID).addDef(VMXu).addUse(VMYu).addUse(VMZu);
+    BuildMI(*MBB, MI, DL, MCID).addDef(VMXl).addUse(VMYl).addUse(VMZl);
+    break;
+  }
+  case VE::NEGMy:
+    BuildMI(*MBB, MI, DL, MCID).addDef(VMXu).addUse(VMYu);
+    BuildMI(*MBB, MI, DL, MCID).addDef(VMXl).addUse(VMYl);
+    break;
+  }
+  MI.eraseFromParent();
+}
+
 static void addOperandsForVFMK(MachineInstrBuilder &MIB, MachineInstr &MI,
                                bool Upper) {
   // VM512
@@ -770,7 +842,7 @@ static void expandPseudoVFMK(const TargetInstrInfo &TI, MachineInstr &MI) {
   // replace to pvfmk.w.up and pvfmk.w.lo
   // replace to pvfmk.s.up and pvfmk.s.lo
 
-  static std::map<unsigned, std::pair<unsigned, unsigned>> VFMKMap = {
+  static const std::pair<unsigned, std::pair<unsigned, unsigned>> VFMKMap[] = {
       {VE::VFMKyal, {VE::VFMKLal, VE::VFMKLal}},
       {VE::VFMKynal, {VE::VFMKLnal, VE::VFMKLnal}},
       {VE::VFMKWyvl, {VE::PVFMKWUPvl, VE::PVFMKWLOvl}},
@@ -781,8 +853,9 @@ static void expandPseudoVFMK(const TargetInstrInfo &TI, MachineInstr &MI) {
 
   unsigned Opcode = MI.getOpcode();
 
-  auto Found = VFMKMap.find(Opcode);
-  if (Found == VFMKMap.end())
+  const auto *Found =
+      llvm::find_if(VFMKMap, [&](auto P) { return P.first == Opcode; });
+  if (Found == std::end(VFMKMap))
     report_fatal_error("unexpected opcode for pseudo vfmk");
 
   unsigned OpcodeUpper = (*Found).second.first;
@@ -811,6 +884,25 @@ bool VEInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case VE::GETSTACKTOP: {
     return expandGetStackTopPseudo(MI);
   }
+
+  case VE::ANDMyy:
+    expandPseudoLogM(MI, get(VE::ANDMmm));
+    return true;
+  case VE::ORMyy:
+    expandPseudoLogM(MI, get(VE::ORMmm));
+    return true;
+  case VE::XORMyy:
+    expandPseudoLogM(MI, get(VE::XORMmm));
+    return true;
+  case VE::EQVMyy:
+    expandPseudoLogM(MI, get(VE::EQVMmm));
+    return true;
+  case VE::NNDMyy:
+    expandPseudoLogM(MI, get(VE::NNDMmm));
+    return true;
+  case VE::NEGMy:
+    expandPseudoLogM(MI, get(VE::NEGMm));
+    return true;
 
   case VE::LVMyir:
   case VE::LVMyim:
@@ -882,11 +974,11 @@ bool VEInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     MachineInstrBuilder MIB =
         BuildMI(*MBB, MI, DL, get(VE::SVMmi), Dest).addReg(VMZ).addImm(Imm);
     MachineInstr *Inst = MIB.getInstr();
-    MI.eraseFromParent();
     if (KillSrc) {
       const TargetRegisterInfo *TRI = &getRegisterInfo();
       Inst->addRegisterKilled(MI.getOperand(1).getReg(), TRI, true);
     }
+    MI.eraseFromParent();
     return true;
   }
   case VE::VFMKyal:
@@ -896,6 +988,7 @@ bool VEInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case VE::VFMKSyvl:
   case VE::VFMKSyvyl:
     expandPseudoVFMK(*this, MI);
+    return true;
   }
   return false;
 }

@@ -1,7 +1,7 @@
 // This test checks that intersecting ranges does not cause 'system is over constrained' assertions in the case of eg: 32 bits unsigned integers getting their range from 64 bits signed integers.
-// RUN: %clang_analyze_cc1 -triple x86_64-pc-linux-gnu -analyzer-checker=core,debug.ExprInspection -analyzer-store=region -verify %s
+// RUN: %clang_analyze_cc1 -triple x86_64-pc-linux-gnu -analyzer-checker=core,debug.ExprInspection -verify %s
 
-void clang_analyzer_warnIfReached();
+void clang_analyzer_warnIfReached(void);
 
 void f1(long foo)
 {
@@ -153,4 +153,13 @@ void f15(long foo)
     clang_analyzer_warnIfReached(); // expected-warning{{REACHABLE}}
   else
     clang_analyzer_warnIfReached(); // expected-warning{{REACHABLE}}
+}
+
+int *getIntPtr(void) {
+  extern int *intPtr;
+  return intPtr;
+}
+char call_malformed_fptr() {
+  int (*fptr)(void) = (int (*)(void))getIntPtr;
+  return fptr(); // no-crash
 }

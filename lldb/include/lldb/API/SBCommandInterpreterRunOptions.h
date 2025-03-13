@@ -56,6 +56,10 @@ public:
 
   void SetPrintResults(bool);
 
+  bool GetPrintErrors() const;
+
+  void SetPrintErrors(bool);
+
   bool GetAddToHistory() const;
 
   void SetAddToHistory(bool);
@@ -68,6 +72,14 @@ public:
 
   void SetSpawnThread(bool);
 
+  bool GetAllowRepeats() const;
+
+  /// By default, RunCommandInterpreter will discard repeats if the
+  /// IOHandler being used is not interactive.  Setting AllowRepeats to true
+  /// will override this behavior and always process empty lines in the input
+  /// as a repeat command.
+  void SetAllowRepeats(bool);
+
 private:
   lldb_private::CommandInterpreterRunOptions *get() const;
 
@@ -78,6 +90,7 @@ private:
       m_opaque_up;
 };
 
+#ifndef SWIG
 class LLDB_API SBCommandInterpreterRunResult {
   friend class SBDebugger;
   friend class SBCommandInterpreter;
@@ -100,6 +113,7 @@ private:
   // This is set in the constructor and will always be valid.
   std::unique_ptr<lldb_private::CommandInterpreterRunResult> m_opaque_up;
 };
+#endif
 
 } // namespace lldb
 

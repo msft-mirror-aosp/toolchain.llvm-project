@@ -14,6 +14,9 @@ using HostObjectFile = ObjectFileMachO;
 #elif defined(_WIN32)
 #include "Plugins/ObjectFile/PECOFF/ObjectFilePECOFF.h"
 using HostObjectFile = ObjectFilePECOFF;
+#elif defined(_AIX)
+#include "Plugins/ObjectFile/XCOFF/ObjectFileXCOFF.h"
+using HostObjectFile = ObjectFileXCOFF;
 #else
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 using HostObjectFile = ObjectFileELF;
@@ -29,6 +32,11 @@ using HostObjectFile = ObjectFileELF;
 #include "Plugins/Instruction/ARM/EmulateInstructionARM.h"
 #endif
 
+#if defined(__loongarch__)
+#define LLDB_TARGET_LoongArch
+#include "Plugins/Instruction/LoongArch/EmulateInstructionLoongArch.h"
+#endif
+
 #if defined(__mips64__) || defined(mips64) || defined(__mips64) ||             \
     defined(__MIPS64__) || defined(_M_MIPS64)
 #define LLDB_TARGET_MIPS64
@@ -39,6 +47,11 @@ using HostObjectFile = ObjectFileELF;
     defined(__MIPS__) || defined(_M_MIPS) || defined(LLDB_TARGET_MIPS64)
 #define LLDB_TARGET_MIPS
 #include "Plugins/Instruction/MIPS/EmulateInstructionMIPS.h"
+#endif
+
+#if defined(__riscv)
+#define LLDB_TARGET_RISCV
+#include "Plugins/Instruction/RISCV/EmulateInstructionRISCV.h"
 #endif
 
 using namespace lldb_private;
@@ -52,11 +65,17 @@ llvm::Error SystemInitializerLLGS::Initialize() {
 #if defined(LLDB_TARGET_ARM) || defined(LLDB_TARGET_ARM64)
   EmulateInstructionARM::Initialize();
 #endif
+#if defined(LLDB_TARGET_LoongArch)
+  EmulateInstructionLoongArch::Initialize();
+#endif
 #if defined(LLDB_TARGET_MIPS) || defined(LLDB_TARGET_MIPS64)
   EmulateInstructionMIPS::Initialize();
 #endif
 #if defined(LLDB_TARGET_MIPS64)
   EmulateInstructionMIPS64::Initialize();
+#endif
+#if defined(LLDB_TARGET_RISCV)
+  EmulateInstructionRISCV::Initialize();
 #endif
 
   return llvm::Error::success();
@@ -68,11 +87,17 @@ void SystemInitializerLLGS::Terminate() {
 #if defined(LLDB_TARGET_ARM) || defined(LLDB_TARGET_ARM64)
   EmulateInstructionARM::Terminate();
 #endif
+#if defined(LLDB_TARGET_LoongArch)
+  EmulateInstructionLoongArch::Terminate();
+#endif
 #if defined(LLDB_TARGET_MIPS) || defined(LLDB_TARGET_MIPS64)
   EmulateInstructionMIPS::Terminate();
 #endif
 #if defined(LLDB_TARGET_MIPS64)
   EmulateInstructionMIPS64::Terminate();
+#endif
+#if defined(LLDB_TARGET_RISCV)
+  EmulateInstructionRISCV::Terminate();
 #endif
 
   SystemInitializerCommon::Terminate();

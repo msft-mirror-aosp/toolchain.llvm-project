@@ -21,15 +21,11 @@ using namespace lldb_private;
 // I set the completer to "source file" which isn't quite right, but we can
 // only usefully complete in the file name part of it so it should be good
 // enough.
-OptionValueFileColonLine::OptionValueFileColonLine()
-    : OptionValue(), m_file_spec(), m_line_number(LLDB_INVALID_LINE_NUMBER),
-      m_column_number(LLDB_INVALID_COLUMN_NUMBER),
-      m_completion_mask(CommandCompletions::eSourceFileCompletion) {}
+OptionValueFileColonLine::OptionValueFileColonLine() = default;
 
 OptionValueFileColonLine::OptionValueFileColonLine(llvm::StringRef input)
-    : OptionValue(), m_file_spec(), m_line_number(LLDB_INVALID_LINE_NUMBER),
-      m_column_number(LLDB_INVALID_COLUMN_NUMBER),
-      m_completion_mask(CommandCompletions::eSourceFileCompletion) {
+
+{
   SetValueFromString(input, eVarSetOperationAssign);
 }
 
@@ -77,9 +73,10 @@ Status OptionValueFileColonLine::SetValueFromString(llvm::StringRef value,
 
       std::tie(left_of_last_piece, last_piece) = value.rsplit(':');
       if (last_piece.empty()) {
-        error.SetErrorStringWithFormat("Line specifier must include file and "
-                                       "line: '%s'",
-                                       value.str().c_str());
+        error = Status::FromErrorStringWithFormat(
+            "Line specifier must include file and "
+            "line: '%s'",
+            value.str().c_str());
         return error;
       }
 
@@ -92,25 +89,25 @@ Status OptionValueFileColonLine::SetValueFromString(llvm::StringRef value,
       llvm::StringRef middle_piece;
 
       std::tie(file_name, middle_piece) = left_of_last_piece.rsplit(':');
-      if (middle_piece.empty() || !llvm::to_integer(middle_piece, 
-                                                    m_line_number)) {
+      if (middle_piece.empty() ||
+          !llvm::to_integer(middle_piece, m_line_number)) {
         // The middle piece was empty or not an integer, so there were only two
         // legit pieces; our original division was right.  Reassign the file
         // name and pull out the line number:
         file_name = left_of_last_piece;
         if (!llvm::to_integer(last_piece, m_line_number)) {
-          error.SetErrorStringWithFormat("Bad line number value '%s' in: '%s'",
-                                         last_piece.str().c_str(),
-                                         value.str().c_str());
+          error = Status::FromErrorStringWithFormat(
+              "Bad line number value '%s' in: '%s'", last_piece.str().c_str(),
+              value.str().c_str());
           return error;
         }
       } else {
         // There were three pieces, and we've got the line number.  So now
         // we just need to check the column number which was the last peice.
         if (!llvm::to_integer(last_piece, m_column_number)) {
-          error.SetErrorStringWithFormat("Bad column value '%s' in: '%s'",
-                                         last_piece.str().c_str(),
-                                         value.str().c_str());
+          error = Status::FromErrorStringWithFormat(
+              "Bad column value '%s' in: '%s'", last_piece.str().c_str(),
+              value.str().c_str());
           return error;
         }
       }
@@ -119,7 +116,7 @@ Status OptionValueFileColonLine::SetValueFromString(llvm::StringRef value,
       m_file_spec.SetFile(file_name, FileSpec::Style::native);
       NotifyValueChanged();
     } else {
-      error.SetErrorString("invalid value string");
+      error = Status::FromErrorString("invalid value string");
     }
     break;
 
@@ -134,12 +131,8 @@ Status OptionValueFileColonLine::SetValueFromString(llvm::StringRef value,
   return error;
 }
 
-lldb::OptionValueSP OptionValueFileColonLine::DeepCopy() const {
-  return OptionValueSP(new OptionValueFileColonLine(*this));
-}
-
 void OptionValueFileColonLine::AutoComplete(CommandInterpreter &interpreter,
                                             CompletionRequest &request) {
-  CommandCompletions::InvokeCommonCompletionCallbacks(
+  lldb_private::CommandCompletions::InvokeCommonCompletionCallbacks(
       interpreter, m_completion_mask, request, nullptr);
 }

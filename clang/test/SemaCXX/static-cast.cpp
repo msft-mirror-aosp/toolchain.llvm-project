@@ -90,8 +90,8 @@ void t_529_5_8()
   (void)static_cast<B&>(*((const A*)0)); // expected-error {{static_cast from 'const A' to 'B &' casts away qualifiers}}
   (void)static_cast<E*>((A*)0); // expected-error {{cannot cast private base class 'A' to 'E'}}
   (void)static_cast<E&>(*((A*)0)); // expected-error {{cannot cast private base class 'A' to 'E'}}
-  (void)static_cast<H*>((A*)0); // expected-error {{ambiguous cast from base 'A' to derived 'H':\n    struct A -> struct B -> struct G1 -> struct H\n    struct A -> struct B -> struct G2 -> struct H}}
-  (void)static_cast<H&>(*((A*)0)); // expected-error {{ambiguous cast from base 'A' to derived 'H':\n    struct A -> struct B -> struct G1 -> struct H\n    struct A -> struct B -> struct G2 -> struct H}}
+  (void)static_cast<H*>((A*)0); // expected-error {{ambiguous cast from base 'A' to derived 'H':\n    A -> B -> G1 -> struct H\n    struct A -> B -> G2 -> struct H}}
+  (void)static_cast<H&>(*((A*)0)); // expected-error {{ambiguous cast from base 'A' to derived 'H':\n    A -> B -> G1 -> struct H\n    A -> B -> G2 -> struct H}}
   (void)static_cast<E*>((B*)0); // expected-error {{static_cast from 'B *' to 'E *', which are not related by inheritance, is not allowed}}
   (void)static_cast<E&>(*((B*)0)); // expected-error {{non-const lvalue reference to type 'E' cannot bind to a value of unrelated type 'B'}}
 
@@ -199,6 +199,6 @@ namespace PR6072 {
     (void)static_cast<void (A::*)()>(&B::f);
     (void)static_cast<void (B::*)()>(&B::f);
     (void)static_cast<void (C::*)()>(&B::f);
-    (void)static_cast<void (D::*)()>(&B::f); // expected-error-re{{address of overloaded function 'f' cannot be static_cast to type 'void (PR6072::D::*)(){{( __attribute__\(\(thiscall\)\))?}}'}}
+    (void)static_cast<void (D::*)()>(&B::f); // expected-error-re{{address of overloaded function 'f' cannot be static_cast to type 'void (D::*)(){{( __attribute__\(\(thiscall\)\))?}}'}}
   }
 }

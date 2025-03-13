@@ -22,7 +22,7 @@ RegisterContextThreadMemory::RegisterContextThreadMemory(
     : RegisterContext(thread, 0), m_thread_wp(thread.shared_from_this()),
       m_reg_ctx_sp(), m_register_data_addr(register_data_addr), m_stop_id(0) {}
 
-RegisterContextThreadMemory::~RegisterContextThreadMemory() {}
+RegisterContextThreadMemory::~RegisterContextThreadMemory() = default;
 
 void RegisterContextThreadMemory::UpdateRegisterContext() {
   ThreadSP thread_sp(m_thread_wp.lock());
@@ -107,7 +107,7 @@ bool RegisterContextThreadMemory::WriteRegister(
 }
 
 bool RegisterContextThreadMemory::ReadAllRegisterValues(
-    lldb::DataBufferSP &data_sp) {
+    lldb::WritableDataBufferSP &data_sp) {
   UpdateRegisterContext();
   if (m_reg_ctx_sp)
     return m_reg_ctx_sp->ReadAllRegisterValues(data_sp);
@@ -198,9 +198,7 @@ Status RegisterContextThreadMemory::ReadRegisterValueFromMemory(
   if (m_reg_ctx_sp)
     return m_reg_ctx_sp->ReadRegisterValueFromMemory(reg_info, src_addr,
                                                      src_len, reg_value);
-  Status error;
-  error.SetErrorString("invalid register context");
-  return error;
+  return Status::FromErrorString("invalid register context");
 }
 
 Status RegisterContextThreadMemory::WriteRegisterValueToMemory(
@@ -210,7 +208,5 @@ Status RegisterContextThreadMemory::WriteRegisterValueToMemory(
   if (m_reg_ctx_sp)
     return m_reg_ctx_sp->WriteRegisterValueToMemory(reg_info, dst_addr, dst_len,
                                                     reg_value);
-  Status error;
-  error.SetErrorString("invalid register context");
-  return error;
+  return Status::FromErrorString("invalid register context");
 }

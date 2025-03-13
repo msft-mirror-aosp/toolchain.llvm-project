@@ -19,10 +19,10 @@
 #define flexor 7
 
 #ifdef __cplusplus
-constexpr long long operator"" _xor(unsigned long long v) { return v; }
+constexpr long long operator""_xor(unsigned long long v) { return v; }
 
-constexpr long long operator"" _0b(unsigned long long v) { return v; }
-constexpr long long operator"" _0X(unsigned long long v) { return v; }
+constexpr long long operator""_0b(unsigned long long v) { return v; }
+constexpr long long operator""_0X(unsigned long long v) { return v; }
 #else
 #define xor ^ // iso646.h
 #endif
@@ -65,6 +65,7 @@ void test(unsigned a, unsigned b) {
 
   res = 2 ^ 0x4;
   res = 2 ^ 04;
+  res = TWO ^ TEN;
   res = 0x2 ^ 10;
   res = 0X2 ^ 10;
   res = 02 ^ 10;

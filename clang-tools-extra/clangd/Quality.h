@@ -27,14 +27,13 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_QUALITY_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_QUALITY_H
 
-#include "ExpectedTypes.h"
 #include "FileDistance.h"
 #include "clang/Sema/CodeCompleteConsumer.h"
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -45,7 +44,7 @@ namespace clang {
 class CodeCompletionResult;
 
 namespace clangd {
-
+struct ASTSignals;
 struct Symbol;
 class URIDistance;
 
@@ -107,7 +106,7 @@ struct SymbolRelevanceSignals {
 
   // Scope proximity is only considered (both index and sema) when this is set.
   ScopeDistance *ScopeProximityMatch = nullptr;
-  llvm::Optional<llvm::StringRef> SymbolScope;
+  std::optional<llvm::StringRef> SymbolScope;
   // A symbol from sema should be accessible from the current scope.
   bool SemaSaysInScope = false;
 
@@ -140,6 +139,14 @@ struct SymbolRelevanceSignals {
   /// CompletionPrefix.
   unsigned FilterLength = 0;
 
+  const ASTSignals *MainFileSignals = nullptr;
+  /// Number of references to the candidate in the main file.
+  unsigned MainFileRefs = 0;
+  /// Number of unique symbols in the main file which belongs to candidate's
+  /// namespace. This indicates how relevant the namespace is in the current
+  /// file.
+  unsigned ScopeRefsInFile = 0;
+
   /// Set of derived signals computed by calculateDerivedSignals(). Must not be
   /// set explicitly.
   struct DerivedSignals {
@@ -155,6 +162,7 @@ struct SymbolRelevanceSignals {
 
   void merge(const CodeCompletionResult &SemaResult);
   void merge(const Symbol &IndexResult);
+  void computeASTSignals(const CodeCompletionResult &SemaResult);
 
   // Condense these signals down to a single number, higher is better.
   float evaluateHeuristics() const;

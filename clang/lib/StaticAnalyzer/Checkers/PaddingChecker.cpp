@@ -11,12 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/RecordLayout.h"
-#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Driver/DriverDiagnostic.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
@@ -32,7 +32,7 @@ using namespace ento;
 namespace {
 class PaddingChecker : public Checker<check::ASTDecl<TranslationUnitDecl>> {
 private:
-  mutable std::unique_ptr<BugType> PaddingBug;
+  const BugType PaddingBug{this, "Excessive Padding", "Performance"};
   mutable BugReporter *BR;
 
 public:
@@ -45,16 +45,17 @@ public:
     // The calls to checkAST* from AnalysisConsumer don't
     // visit template instantiations or lambda classes. We
     // want to visit those, so we make our own RecursiveASTVisitor.
-    struct LocalVisitor : public RecursiveASTVisitor<LocalVisitor> {
+    struct LocalVisitor : DynamicRecursiveASTVisitor {
       const PaddingChecker *Checker;
-      bool shouldVisitTemplateInstantiations() const { return true; }
-      bool shouldVisitImplicitCode() const { return true; }
-      explicit LocalVisitor(const PaddingChecker *Checker) : Checker(Checker) {}
-      bool VisitRecordDecl(const RecordDecl *RD) {
+      explicit LocalVisitor(const PaddingChecker *Checker) : Checker(Checker) {
+        ShouldVisitTemplateInstantiations = true;
+        ShouldVisitImplicitCode = true;
+      }
+      bool VisitRecordDecl(RecordDecl *RD) override {
         Checker->visitRecord(RD);
         return true;
       }
-      bool VisitVarDecl(const VarDecl *VD) {
+      bool VisitVarDecl(VarDecl *VD) override {
         Checker->visitVariable(VD);
         return true;
       }
@@ -117,7 +118,7 @@ public:
       return;
     uint64_t Elts = 0;
     if (const ConstantArrayType *CArrTy = dyn_cast<ConstantArrayType>(ArrTy))
-      Elts = CArrTy->getSize().getZExtValue();
+      Elts = CArrTy->getZExtSize();
     if (Elts == 0)
       return;
     const RecordType *RT = ArrTy->getElementType()->getAs<RecordType>();
@@ -182,7 +183,7 @@ public:
       return false;
     };
 
-    if (std::any_of(RD->field_begin(), RD->field_end(), IsTrickyField))
+    if (llvm::any_of(RD->fields(), IsTrickyField))
       return true;
     return false;
   }
@@ -193,6 +194,11 @@ public:
     CharUnits PaddingSum;
     CharUnits Offset = ASTContext.toCharUnitsFromBits(RL.getFieldOffset(0));
     for (const FieldDecl *FD : RD->fields()) {
+      // Skip field that is a subobject of zero size, marked with
+      // [[no_unique_address]] or an empty bitfield, because its address can be
+      // set the same as the other fields addresses.
+      if (FD->isZeroSize(ASTContext))
+        continue;
       // This checker only cares about the padded size of the
       // field, and not the data size. If the field is a record
       // with tail padding, then we won't put that number in our
@@ -249,7 +255,7 @@ public:
       RetVal.Field = FD;
       auto &Ctx = FD->getASTContext();
       auto Info = Ctx.getTypeInfoInChars(FD->getType());
-      RetVal.Size = Info.Width;
+      RetVal.Size = FD->isZeroSize(Ctx) ? CharUnits::Zero() : Info.Width;
       RetVal.Align = Info.Align;
       assert(llvm::isPowerOf2_64(RetVal.Align.getQuantity()));
       if (auto Max = FD->getMaxAlignment())
@@ -268,7 +274,7 @@ public:
     SmallVector<const FieldDecl *, 20> OptimalFieldsOrder;
     while (!Fields.empty()) {
       unsigned TrailingZeros =
-          llvm::countTrailingZeros((unsigned long long)NewOffset.getQuantity());
+          llvm::countr_zero((unsigned long long)NewOffset.getQuantity());
       // If NewOffset is zero, then countTrailingZeros will be 64. Shifting
       // 64 will overflow our unsigned long long. Shifting 63 will turn
       // our long long (and CharUnits internal type) negative. So shift 62.
@@ -305,10 +311,6 @@ public:
   void reportRecord(
       const RecordDecl *RD, CharUnits BaselinePad, CharUnits OptimalPad,
       const SmallVector<const FieldDecl *, 20> &OptimalFieldsOrder) const {
-    if (!PaddingBug)
-      PaddingBug =
-          std::make_unique<BugType>(this, "Excessive Padding", "Performance");
-
     SmallString<100> Buf;
     llvm::raw_svector_ostream Os(Buf);
     Os << "Excessive padding in '";
@@ -327,17 +329,16 @@ public:
     }
 
     Os << " (" << BaselinePad.getQuantity() << " padding bytes, where "
-       << OptimalPad.getQuantity() << " is optimal). \n"
-       << "Optimal fields order: \n";
+       << OptimalPad.getQuantity() << " is optimal). "
+       << "Optimal fields order: ";
     for (const auto *FD : OptimalFieldsOrder)
-      Os << FD->getName() << ", \n";
+      Os << FD->getName() << ", ";
     Os << "consider reordering the fields or adding explicit padding "
           "members.";
 
     PathDiagnosticLocation CELoc =
         PathDiagnosticLocation::create(RD, BR->getSourceManager());
-    auto Report =
-        std::make_unique<BasicBugReport>(*PaddingBug, Os.str(), CELoc);
+    auto Report = std::make_unique<BasicBugReport>(PaddingBug, Os.str(), CELoc);
     Report->setDeclWithIssue(RD);
     Report->addRange(RD->getSourceRange());
     BR->emitReport(std::move(Report));

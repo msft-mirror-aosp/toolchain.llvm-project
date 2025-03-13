@@ -14,12 +14,12 @@ define double @sqrt_d(double %a) {
   ret double %1
 }
 
-declare double     @llvm.powi.f64(double %Val, i32 %power)
+declare double     @llvm.powi.f64.i32(double %Val, i32 %power)
 define double @powi_d(double %a, i32 %b) {
 ; CHECK-LABEL: powi_d:
 ; SOFT: {{(bl|b)}} __powidf2
 ; HARD: b __powidf2
-  %1 = call double @llvm.powi.f64(double %a, i32 %b)
+  %1 = call double @llvm.powi.f64.i32(double %a, i32 %b)
   ret double %1
 }
 
@@ -38,6 +38,15 @@ define double @cos_d(double %a) {
 ; SOFT: {{(bl|b)}} cos
 ; HARD: b cos
   %1 = call double @llvm.cos.f64(double %a)
+  ret double %1
+}
+
+declare double     @llvm.tan.f64(double %Val)
+define double @tan_d(double %a) {
+; CHECK-LABEL: tan_d:
+; SOFT: {{(bl|b)}} tan
+; HARD: b tan
+  %1 = call double @llvm.tan.f64(double %a)
   ret double %1
 }
 

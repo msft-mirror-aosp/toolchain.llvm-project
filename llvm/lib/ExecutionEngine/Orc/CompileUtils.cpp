@@ -12,14 +12,12 @@
 #include "llvm/ExecutionEngine/ObjectCache.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
 #include "llvm/Target/TargetMachine.h"
-
-#include <algorithm>
 
 namespace llvm {
 namespace orc {
@@ -53,7 +51,8 @@ Expected<SimpleCompiler::CompileResult> SimpleCompiler::operator()(Module &M) {
   }
 
   auto ObjBuffer = std::make_unique<SmallVectorMemoryBuffer>(
-      std::move(ObjBufferSV), M.getModuleIdentifier() + "-jitted-objectbuffer");
+      std::move(ObjBufferSV), M.getModuleIdentifier() + "-jitted-objectbuffer",
+      /*RequiresNullTerminator=*/false);
 
   auto Obj = object::ObjectFile::createObjectFile(ObjBuffer->getMemBufferRef());
 

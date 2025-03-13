@@ -44,6 +44,8 @@ struct alloc_first
         allocator_constructed = true;
     }
 
+    alloc_first(const alloc_first&) = default;
+    alloc_first& operator=(const alloc_first&) = default;
     ~alloc_first() {data_ = -1;}
 
     friend bool operator==(const alloc_first& x, const alloc_first& y)
@@ -54,4 +56,4 @@ struct alloc_first
 
 bool alloc_first::allocator_constructed = false;
 
-#endif  // ALLOC_FIRST_H
+#endif // ALLOC_FIRST_H

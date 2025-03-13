@@ -18,24 +18,18 @@
 using namespace lldb;
 using namespace lldb_private;
 
-OptionValueFileSpec::OptionValueFileSpec(bool resolve)
-    : OptionValue(), m_current_value(), m_default_value(), m_data_sp(),
-      m_data_mod_time(),
-      m_completion_mask(CommandCompletions::eDiskFileCompletion),
-      m_resolve(resolve) {}
+OptionValueFileSpec::OptionValueFileSpec(bool resolve) : m_resolve(resolve) {}
 
 OptionValueFileSpec::OptionValueFileSpec(const FileSpec &value, bool resolve)
-    : OptionValue(), m_current_value(value), m_default_value(value),
-      m_data_sp(), m_data_mod_time(),
-      m_completion_mask(CommandCompletions::eDiskFileCompletion),
+    : m_current_value(value), m_default_value(value),
+
       m_resolve(resolve) {}
 
 OptionValueFileSpec::OptionValueFileSpec(const FileSpec &current_value,
                                          const FileSpec &default_value,
                                          bool resolve)
-    : OptionValue(), m_current_value(current_value),
-      m_default_value(default_value), m_data_sp(), m_data_mod_time(),
-      m_completion_mask(CommandCompletions::eDiskFileCompletion),
+    : m_current_value(current_value), m_default_value(default_value),
+
       m_resolve(resolve) {}
 
 void OptionValueFileSpec::DumpValue(const ExecutionContext *exe_ctx,
@@ -73,7 +67,7 @@ Status OptionValueFileSpec::SetValueFromString(llvm::StringRef value,
       m_data_mod_time = llvm::sys::TimePoint<>();
       NotifyValueChanged();
     } else {
-      error.SetErrorString("invalid value string");
+      error = Status::FromErrorString("invalid value string");
     }
     break;
 
@@ -88,13 +82,9 @@ Status OptionValueFileSpec::SetValueFromString(llvm::StringRef value,
   return error;
 }
 
-lldb::OptionValueSP OptionValueFileSpec::DeepCopy() const {
-  return OptionValueSP(new OptionValueFileSpec(*this));
-}
-
 void OptionValueFileSpec::AutoComplete(CommandInterpreter &interpreter,
                                        CompletionRequest &request) {
-  CommandCompletions::InvokeCommonCompletionCallbacks(
+  lldb_private::CommandCompletions::InvokeCommonCompletionCallbacks(
       interpreter, m_completion_mask, request, nullptr);
 }
 

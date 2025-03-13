@@ -36,6 +36,12 @@ StringRef SideEffect::getResource() const {
   return def->getValueAsString("resource");
 }
 
+int64_t SideEffect::getStage() const { return def->getValueAsInt("stage"); }
+
+bool SideEffect::getEffectOnfullRegion() const {
+  return def->getValueAsBit("effectOnFullRegion");
+}
+
 bool SideEffect::classof(const Operator::VariableDecorator *var) {
   return var->getDef().isSubClassOf("SideEffect");
 }
@@ -53,6 +59,6 @@ StringRef SideEffectTrait::getBaseEffectName() const {
   return def->getValueAsString("baseEffectName");
 }
 
-bool SideEffectTrait::classof(const OpTrait *t) {
+bool SideEffectTrait::classof(const Trait *t) {
   return t->getDef().isSubClassOf("SideEffectsTraitBase");
 }

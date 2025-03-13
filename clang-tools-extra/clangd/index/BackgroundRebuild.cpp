@@ -1,4 +1,4 @@
-//===-- BackgroundRebuild.cpp - when to rebuild thei background index -----===//
+//===-- BackgroundRebuild.cpp - when to rebuild the background index ------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,33 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "index/BackgroundRebuild.h"
-#include "Compiler.h"
-#include "Headers.h"
-#include "ParsedAST.h"
-#include "SourceCode.h"
-#include "Symbol.h"
-#include "URI.h"
 #include "index/FileIndex.h"
-#include "index/IndexAction.h"
-#include "index/MemIndex.h"
-#include "index/Ref.h"
-#include "index/Relation.h"
-#include "index/Serialization.h"
-#include "index/SymbolCollector.h"
 #include "support/Logger.h"
-#include "support/Path.h"
-#include "support/Threading.h"
 #include "support/Trace.h"
-#include "clang/Basic/SourceLocation.h"
-#include "clang/Basic/SourceManager.h"
-#include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/ScopeExit.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/Support/Error.h"
-#include "llvm/Support/Threading.h"
 
 #include <atomic>
 #include <chrono>

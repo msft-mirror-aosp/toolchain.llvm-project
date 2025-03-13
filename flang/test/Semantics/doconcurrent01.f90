@@ -1,4 +1,4 @@
-! RUN: %S/test_errors.sh %s %t %f18
+! RUN: %python %S/test_errors.py %s %flang_fc1
 ! C1141
 ! A reference to the procedure IEEE_SET_HALTING_MODE ! from the intrinsic 
 ! module IEEE_EXCEPTIONS, shall not ! appear within a DO CONCURRENT construct.
@@ -22,6 +22,11 @@ subroutine do_concurrent_test1(i,n)
      SYNC IMAGES (*)
 !ERROR: An image control statement is not allowed in DO CONCURRENT
      SYNC MEMORY
+!ERROR: An image control statement is not allowed in DO CONCURRENT
+     stop
+!ERROR: An image control statement is not allowed in DO CONCURRENT
+     if (.false.) stop
+     error stop ! ok
 !ERROR: RETURN is not allowed in DO CONCURRENT
      return
 10 continue
@@ -43,25 +48,28 @@ subroutine do_concurrent_test2(i,j,n,flag)
     change team (j)
 !ERROR: An image control statement is not allowed in DO CONCURRENT
       critical
-!ERROR: Call to an impure procedure is not allowed in DO CONCURRENT
-        call ieee_get_status(status)
-!ERROR: IEEE_SET_HALTING_MODE is not allowed in DO CONCURRENT
-        call ieee_set_halting_mode(flag, halting)
       end critical
     end team
 !ERROR: ADVANCE specifier is not allowed in DO CONCURRENT
     write(*,'(a35)',advance='no')
-  end do
-
-! The following is OK
-  do concurrent (i = 1:n)
-        call ieee_set_flag(flag, flagValue)
+!ERROR: 'ieee_get_status' may not be called in DO CONCURRENT
+    call ieee_get_status(status)
+!ERROR: 'ieee_set_status' may not be called in DO CONCURRENT
+    call ieee_set_status(status)
+!ERROR: 'ieee_get_halting_mode' may not be called in DO CONCURRENT
+    call ieee_get_halting_mode(flag, halting)
+!ERROR: 'ieee_set_halting_mode' may not be called in DO CONCURRENT
+    call ieee_set_halting_mode(flag, halting)
+!ERROR: 'ieee_get_flag' may not be called in DO CONCURRENT
+    call ieee_get_flag(flag, flagValue)
+!ERROR: 'ieee_set_flag' may not be called in DO CONCURRENT
+    call ieee_set_flag(flag, flagValue)
   end do
 end subroutine do_concurrent_test2
 
 subroutine s1()
   use iso_fortran_env
-  type(event_type) :: x
+  type(event_type) :: x[*]
   do concurrent (i = 1:n)
 !ERROR: An image control statement is not allowed in DO CONCURRENT
     event post (x)
@@ -70,7 +78,7 @@ end subroutine s1
 
 subroutine s2()
   use iso_fortran_env
-  type(event_type) :: x
+  type(event_type) :: x[*]
   do concurrent (i = 1:n)
 !ERROR: An image control statement is not allowed in DO CONCURRENT
     event wait (x)
@@ -89,7 +97,7 @@ end subroutine s3
 
 subroutine s4()
   use iso_fortran_env
-  type(lock_type) :: l
+  type(lock_type), save :: l[*]
 
   do concurrent (i = 1:n)
 !ERROR: An image control statement is not allowed in DO CONCURRENT
@@ -164,28 +172,20 @@ subroutine s6()
   end do
 
 ! Call to MOVE_ALLOC of a coarray outside a DO CONCURRENT.  This is OK.
-call move_alloc(ca, cb)
+  call move_alloc(ca, cb)
 
-! Note that the errors below relating to MOVE_ALLOC() bing impure are bogus.  
-! They're the result of the fact that access to the move_alloc() instrinsic 
-! is not yet possible.
-
+! Call to MOVE_ALLOC with non-coarray arguments in a DO CONCURRENT.  This is OK.
   allocate(aa)
   do concurrent (i = 1:10)
-!ERROR: Call to an impure procedure is not allowed in DO CONCURRENT
     call move_alloc(aa, ab)
   end do
 
-! Call to MOVE_ALLOC with non-coarray arguments in a DO CONCURRENT.  This is OK.
-
   do concurrent (i = 1:10)
-!ERROR: Call to an impure procedure is not allowed in DO CONCURRENT
 !ERROR: An image control statement is not allowed in DO CONCURRENT
     call move_alloc(ca, cb)
   end do
 
   do concurrent (i = 1:10)
-!ERROR: Call to an impure procedure is not allowed in DO CONCURRENT
 !ERROR: An image control statement is not allowed in DO CONCURRENT
     call move_alloc(pvar%type1_field%coarray_type0_field, qvar%type1_field%coarray_type0_field)
   end do
@@ -195,6 +195,10 @@ subroutine s7()
   interface
     pure integer function pf()
     end function pf
+  end interface
+  interface generic
+    impure integer function ipf()
+    end function ipf
   end interface
 
   type :: procTypeNotPure
@@ -226,8 +230,14 @@ subroutine s7()
 
   ! This should generate an error
   do concurrent (i = 1:10)
-!ERROR: Call to an impure procedure component is not allowed in DO CONCURRENT
+!ERROR: Impure procedure 'notpureproccomponent' may not be referenced in DO CONCURRENT
     ivar = procVarNotPure%notPureProcComponent()
+  end do
+
+  ! This should generate an error
+  do concurrent (i = 1:10)
+!ERROR: Impure procedure 'ipf' may not be referenced in DO CONCURRENT
+    ivar = generic()
   end do
 
   contains
@@ -240,3 +250,34 @@ subroutine s7()
     end function pureFunc
 
 end subroutine s7
+
+module m8
+  type t
+   contains
+    procedure tbpAssign
+    generic :: assignment(=) => tbpAssign
+  end type
+  interface assignment(=)
+    module procedure nonTbpAssign
+  end interface
+ contains
+  impure elemental subroutine tbpAssign(to, from)
+    class(t), intent(out) :: to
+    class(t), intent(in) :: from
+    print *, 'impure due to I/O'
+  end
+  impure elemental subroutine nonTbpAssign(to, from)
+    type(t), intent(out) :: to
+    integer, intent(in) :: from
+    print *, 'impure due to I/O'
+  end
+  subroutine test
+    type(t) x, y
+    do concurrent (j=1:1)
+      !ERROR: The defined assignment subroutine 'tbpassign' is not pure
+      x = y
+      !ERROR: The defined assignment subroutine 'nontbpassign' is not pure
+      x = 666
+    end do
+  end
+end

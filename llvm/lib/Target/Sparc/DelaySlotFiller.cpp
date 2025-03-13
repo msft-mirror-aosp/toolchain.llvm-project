@@ -21,7 +21,6 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
@@ -53,9 +52,8 @@ namespace {
       // instructions to fill delay slot.
       F.getRegInfo().invalidateLiveness();
 
-      for (MachineFunction::iterator FI = F.begin(), FE = F.end();
-           FI != FE; ++FI)
-        Changed |= runOnMachineBasicBlock(*FI);
+      for (MachineBasicBlock &MBB : F)
+        Changed |= runOnMachineBasicBlock(MBB);
       return Changed;
     }
 
@@ -175,17 +173,20 @@ Filler::findDelayInstr(MachineBasicBlock &MBB,
   if (slot == MBB.begin())
     return MBB.end();
 
-  if (slot->getOpcode() == SP::RET || slot->getOpcode() == SP::TLS_CALL)
+  unsigned Opc = slot->getOpcode();
+
+  if (Opc == SP::RET || Opc == SP::TLS_CALL)
     return MBB.end();
 
-  if (slot->getOpcode() == SP::RETL) {
+  if (Opc == SP::RETL || Opc == SP::TAIL_CALL || Opc == SP::TAIL_CALLri) {
     MachineBasicBlock::iterator J = slot;
     --J;
 
     if (J->getOpcode() == SP::RESTORErr
         || J->getOpcode() == SP::RESTOREri) {
       // change retl to ret.
-      slot->setDesc(Subtarget->getInstrInfo()->get(SP::RET));
+      if (Opc == SP::RETL)
+        slot->setDesc(Subtarget->getInstrInfo()->get(SP::RET));
       return J;
     }
   }
@@ -248,8 +249,7 @@ bool Filler::delayHasHazard(MachineBasicBlock::iterator candidate,
       return true;
   }
 
-  for (unsigned i = 0, e = candidate->getNumOperands(); i!= e; ++i) {
-    const MachineOperand &MO = candidate->getOperand(i);
+  for (const MachineOperand &MO : candidate->operands()) {
     if (!MO.isReg())
       continue; // skip
 
@@ -281,6 +281,20 @@ bool Filler::delayHasHazard(MachineBasicBlock::iterator candidate,
       Opcode >=  SP::FDIVD && Opcode <= SP::FSQRTD)
     return true;
 
+  if (Subtarget->fixTN0009() && candidate->mayStore())
+    return true;
+
+  if (Subtarget->fixTN0013()) {
+    switch (Opcode) {
+    case SP::FDIVS:
+    case SP::FDIVD:
+    case SP::FSQRTS:
+    case SP::FSQRTD:
+      return true;
+    default:
+      break;
+    }
+  }
 
   return false;
 }
@@ -295,7 +309,8 @@ void Filler::insertCallDefsUses(MachineBasicBlock::iterator MI,
 
   switch(MI->getOpcode()) {
   default: llvm_unreachable("Unknown opcode.");
-  case SP::CALL: break;
+  case SP::CALL:
+    break;
   case SP::CALLrr:
   case SP::CALLri:
     assert(MI->getNumOperands() >= 2);
@@ -319,8 +334,7 @@ void Filler::insertDefsUses(MachineBasicBlock::iterator MI,
                             SmallSet<unsigned, 32>& RegDefs,
                             SmallSet<unsigned, 32>& RegUses)
 {
-  for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-    const MachineOperand &MO = MI->getOperand(i);
+  for (const MachineOperand &MO : MI->operands()) {
     if (!MO.isReg())
       continue;
 
@@ -358,10 +372,16 @@ bool Filler::needsUnimp(MachineBasicBlock::iterator I, unsigned &StructSize)
   unsigned structSizeOpNum = 0;
   switch (I->getOpcode()) {
   default: llvm_unreachable("Unknown call opcode.");
-  case SP::CALL: structSizeOpNum = 1; break;
+  case SP::CALL:
+    structSizeOpNum = 1;
+    break;
   case SP::CALLrr:
-  case SP::CALLri: structSizeOpNum = 2; break;
+  case SP::CALLri:
+    structSizeOpNum = 2;
+    break;
   case SP::TLS_CALL: return false;
+  case SP::TAIL_CALLri:
+  case SP::TAIL_CALL: return false;
   }
 
   const MachineOperand &MO = I->getOperand(structSizeOpNum);

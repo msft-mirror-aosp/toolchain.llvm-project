@@ -6,14 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REMOTE_INDEX_H
-#define LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REMOTE_INDEX_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REMOTE_CLIENT_H
+#define LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REMOTE_CLIENT_H
 
 #include "index/Index.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <memory>
+
 namespace clang {
 namespace clangd {
+
 namespace remote {
 
 /// Returns an SymbolIndex client that passes requests to remote index located
@@ -33,4 +36,4 @@ std::unique_ptr<clangd::SymbolIndex> getClient(llvm::StringRef Address,
 } // namespace clangd
 } // namespace clang
 
-#endif // LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REMOTE_INDEX_H
+#endif // LLVM_CLANG_TOOLS_EXTRA_CLANGD_INDEX_REMOTE_CLIENT_H

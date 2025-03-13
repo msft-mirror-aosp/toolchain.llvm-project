@@ -9,8 +9,9 @@
 #ifndef LLDB_SOURCE_PLUGINS_OBJECTFILE_ELF_OBJECTFILEELF_H
 #define LLDB_SOURCE_PLUGINS_OBJECTFILE_ELF_OBJECTFILEELF_H
 
-#include <stdint.h>
+#include <cstdint>
 
+#include <optional>
 #include <vector>
 
 #include "lldb/Symbol/ObjectFile.h"
@@ -22,13 +23,13 @@
 #include "ELFHeader.h"
 
 struct ELFNote {
-  elf::elf_word n_namesz;
-  elf::elf_word n_descsz;
-  elf::elf_word n_type;
+  elf::elf_word n_namesz = 0;
+  elf::elf_word n_descsz = 0;
+  elf::elf_word n_type = 0;
 
   std::string n_name;
 
-  ELFNote() : n_namesz(0), n_descsz(0), n_type(0) {}
+  ELFNote() = default;
 
   /// Parse an ELFNote entry from the given DataExtractor starting at position
   /// \p offset.
@@ -61,17 +62,19 @@ public:
 
   static void Terminate();
 
-  static lldb_private::ConstString GetPluginNameStatic();
+  static llvm::StringRef GetPluginNameStatic() { return "elf"; }
 
-  static const char *GetPluginDescriptionStatic();
+  static llvm::StringRef GetPluginDescriptionStatic() {
+    return "ELF object file reader.";
+  }
 
   static lldb_private::ObjectFile *
-  CreateInstance(const lldb::ModuleSP &module_sp, lldb::DataBufferSP &data_sp,
+  CreateInstance(const lldb::ModuleSP &module_sp, lldb::DataBufferSP data_sp,
                  lldb::offset_t data_offset, const lldb_private::FileSpec *file,
                  lldb::offset_t file_offset, lldb::offset_t length);
 
   static lldb_private::ObjectFile *CreateMemoryInstance(
-      const lldb::ModuleSP &module_sp, lldb::DataBufferSP &data_sp,
+      const lldb::ModuleSP &module_sp, lldb::WritableDataBufferSP data_sp,
       const lldb::ProcessSP &process_sp, lldb::addr_t header_addr);
 
   static size_t GetModuleSpecifications(const lldb_private::FileSpec &file,
@@ -85,9 +88,7 @@ public:
                               lldb::addr_t length);
 
   // PluginInterface protocol
-  lldb_private::ConstString GetPluginName() override;
-
-  uint32_t GetPluginVersion() override;
+  llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
   // LLVM RTTI support
   static char ID;
@@ -110,7 +111,7 @@ public:
 
   lldb_private::AddressClass GetAddressClass(lldb::addr_t file_addr) override;
 
-  lldb_private::Symtab *GetSymtab() override;
+  void ParseSymtab(lldb_private::Symtab &symtab) override;
 
   bool IsStripped() override;
 
@@ -123,8 +124,8 @@ public:
   lldb_private::UUID GetUUID() override;
 
   /// Return the contents of the .gnu_debuglink section, if the object file
-  /// contains it. 
-  llvm::Optional<lldb_private::FileSpec> GetDebugLink();
+  /// contains it.
+  std::optional<lldb_private::FileSpec> GetDebugLink();
 
   uint32_t GetDependentModules(lldb_private::FileSpecList &files) override;
 
@@ -159,13 +160,17 @@ protected:
   std::vector<LoadableData>
   GetLoadableData(lldb_private::Target &target) override;
 
+  static lldb::WritableDataBufferSP
+  MapFileDataWritable(const lldb_private::FileSpec &file, uint64_t Size,
+                      uint64_t Offset);
+
 private:
-  ObjectFileELF(const lldb::ModuleSP &module_sp, lldb::DataBufferSP &data_sp,
+  ObjectFileELF(const lldb::ModuleSP &module_sp, lldb::DataBufferSP data_sp,
                 lldb::offset_t data_offset, const lldb_private::FileSpec *file,
                 lldb::offset_t offset, lldb::offset_t length);
 
   ObjectFileELF(const lldb::ModuleSP &module_sp,
-                lldb::DataBufferSP &header_data_sp,
+                lldb::DataBufferSP header_data_sp,
                 const lldb::ProcessSP &process_sp, lldb::addr_t header_addr);
 
   typedef std::vector<elf::ELFProgramHeader> ProgramHeaderColl;
@@ -178,10 +183,17 @@ private:
   typedef SectionHeaderColl::iterator SectionHeaderCollIter;
   typedef SectionHeaderColl::const_iterator SectionHeaderCollConstIter;
 
-  typedef std::vector<elf::ELFDynamic> DynamicSymbolColl;
+  struct ELFDynamicWithName {
+    elf::ELFDynamic symbol;
+    std::string name;
+  };
+  typedef std::vector<ELFDynamicWithName> DynamicSymbolColl;
   typedef DynamicSymbolColl::iterator DynamicSymbolCollIter;
   typedef DynamicSymbolColl::const_iterator DynamicSymbolCollConstIter;
 
+  /// An ordered map of file address to address class. Used on architectures
+  /// like Arm where there is an alternative ISA mode like Thumb. The container
+  /// is ordered so that it can be binary searched.
   typedef std::map<lldb::addr_t, lldb_private::AddressClass>
       FileAddressToAddressClassMap;
 
@@ -204,6 +216,10 @@ private:
 
   /// Collection of section headers.
   SectionHeaderColl m_section_headers;
+
+  /// The file address of the .dynamic section. This can be found in the p_vaddr
+  /// of the PT_DYNAMIC program header.
+  lldb::addr_t m_dynamic_base_addr = LLDB_INVALID_ADDRESS;
 
   /// Collection of symbols from the dynamic table.
   DynamicSymbolColl m_dynamic_symbols;
@@ -278,19 +294,21 @@ private:
   /// number of dynamic symbols parsed.
   size_t ParseDynamicSymbols();
 
-  /// Populates m_symtab_up will all non-dynamic linker symbols.  This method
-  /// will parse the symbols only once.  Returns the number of symbols parsed.
-  unsigned ParseSymbolTable(lldb_private::Symtab *symbol_table,
-                            lldb::user_id_t start_id,
-                            lldb_private::Section *symtab);
+  /// Populates the symbol table with all non-dynamic linker symbols.  This
+  /// method will parse the symbols only once.  Returns the number of symbols
+  /// parsed and a map of address types (used by targets like Arm that have
+  /// an alternative ISA mode like Thumb).
+  std::pair<unsigned, FileAddressToAddressClassMap>
+  ParseSymbolTable(lldb_private::Symtab *symbol_table, lldb::user_id_t start_id,
+                   lldb_private::Section *symtab);
 
   /// Helper routine for ParseSymbolTable().
-  unsigned ParseSymbols(lldb_private::Symtab *symbol_table,
-                        lldb::user_id_t start_id,
-                        lldb_private::SectionList *section_list,
-                        const size_t num_symbols,
-                        const lldb_private::DataExtractor &symtab_data,
-                        const lldb_private::DataExtractor &strtab_data);
+  std::pair<unsigned, FileAddressToAddressClassMap>
+  ParseSymbols(lldb_private::Symtab *symbol_table, lldb::user_id_t start_id,
+               lldb_private::SectionList *section_list,
+               const size_t num_symbols,
+               const lldb_private::DataExtractor &symtab_data,
+               const lldb_private::DataExtractor &strtab_data);
 
   /// Scans the relocation entries and adds a set of artificial symbols to the
   /// given symbol table for each PLT slot.  Returns the number of symbols
@@ -374,6 +392,9 @@ private:
   /// ELF dependent module dump routine.
   void DumpDependentModules(lldb_private::Stream *s);
 
+  /// ELF dump the .dynamic section
+  void DumpELFDynamic(lldb_private::Stream *s);
+
   const elf::ELFDynamic *FindDynamicSymbol(unsigned tag);
 
   unsigned PLTRelocationType();
@@ -384,7 +405,7 @@ private:
                               lldb_private::UUID &uuid);
 
   bool AnySegmentHasPhysicalAddress();
-  
+
   /// Takes the .gnu_debugdata and returns the decompressed object file that is
   /// stored within that section.
   ///
@@ -392,6 +413,68 @@ private:
   /// .gnu_debugdata section or \c nullptr if an error occured or if there's no
   /// section with that name.
   std::shared_ptr<ObjectFileELF> GetGnuDebugDataObjectFile();
+
+  /// Get the bytes that represent the .dynamic section.
+  ///
+  /// This function will fetch the data for the .dynamic section in an ELF file.
+  /// The PT_DYNAMIC program header will be used to extract the data and this
+  /// function will fall back to using the section headers if PT_DYNAMIC isn't
+  /// found.
+  ///
+  /// \return The bytes that represent the string table data or \c std::nullopt
+  ///         if an error occured.
+  std::optional<lldb_private::DataExtractor> GetDynamicData();
+
+  /// Get the bytes that represent the dynamic string table data.
+  ///
+  /// This function will fetch the data for the string table in an ELF file. If
+  /// the ELF file is loaded from a file on disk, it will use the section
+  /// headers to extract the data and fall back to using the DT_STRTAB and
+  /// DT_STRSZ .dynamic entries.
+  ///
+  /// \return The bytes that represent the string table data or \c std::nullopt
+  ///         if an error occured.
+  std::optional<lldb_private::DataExtractor> GetDynstrData();
+
+  /// Read the bytes pointed to by the \a dyn dynamic entry.
+  ///
+  /// ELFDynamic::d_ptr values contain file addresses if we load the ELF file
+  /// form a file on disk, or they contain load addresses if they were read
+  /// from memory. This function will correctly extract the data in both cases
+  /// if it is available.
+  ///
+  /// \param[in] dyn The dynamic entry to use to fetch the data from.
+  ///
+  /// \param[in] length The number of bytes to read.
+  ///
+  /// \param[in] offset The number of bytes to skip after the d_ptr value
+  ///                   before reading data.
+  ///
+  /// \return The bytes that represent the dynanic entries data or
+  ///         \c std::nullopt if an error occured or the data is not available.
+  std::optional<lldb_private::DataExtractor>
+  ReadDataFromDynamic(const elf::ELFDynamic *dyn, uint64_t length,
+                      uint64_t offset = 0);
+
+  /// Get the bytes that represent the dynamic symbol table from the .dynamic
+  /// section from process memory.
+  ///
+  /// This functon uses the DT_SYMTAB value from the .dynamic section to read
+  /// the symbols table data from process memory. The number of symbols in the
+  /// symbol table is calculated by looking at the DT_HASH or DT_GNU_HASH
+  /// values as the symbol count isn't stored in the .dynamic section.
+  ///
+  /// \return The bytes that represent the symbol table data from the .dynamic
+  ///         section or section headers or \c std::nullopt if an error
+  ///         occured or if there is no dynamic symbol data available.
+  std::optional<lldb_private::DataExtractor>
+  GetDynsymDataFromDynamic(uint32_t &num_symbols);
+
+  /// Get the number of symbols from the DT_HASH dynamic entry.
+  std::optional<uint32_t> GetNumSymbolsFromDynamicHash();
+
+  /// Get the number of symbols from the DT_GNU_HASH dynamic entry.
+  std::optional<uint32_t> GetNumSymbolsFromDynamicGnuHash();
 };
 
 #endif // LLDB_SOURCE_PLUGINS_OBJECTFILE_ELF_OBJECTFILEELF_H

@@ -1,7 +1,7 @@
 # REQUIRES: aarch64
-# RUN: llvm-mc -filetype=obj -triple=aarch64-none-linux-gnu %s -o %t.o
+# RUN: llvm-mc -filetype=obj -triple=aarch64 %s -o %t.o
 # RUN: ld.lld -shared %t.o -o %tout
-# RUN: llvm-objdump -D --no-show-raw-insn %tout | FileCheck %s
+# RUN: llvm-objdump --no-print-imm-hex -D --no-show-raw-insn %tout | FileCheck %s
 # RUN: llvm-readobj -r %tout | FileCheck %s --check-prefix=CHECK-RELOCS
 
 # Test that when we take the address of a preemptible ifunc in a shared object
@@ -22,7 +22,7 @@ main:
  ret
 # CHECK:   0000000000010284 <main>:
 ## myfunc's got entry = page(0x20330)-page(0x10284) + 0x330 = 65536 + 816
-# CHECK-NEXT:    10284: adrp    x8, #65536
+# CHECK-NEXT:    10284: adrp    x8, 0x20000
 # CHECK-NEXT:    10288: ldr     x8, [x8, #816]
 # CHECK-NEXT:    1028c: ret
 

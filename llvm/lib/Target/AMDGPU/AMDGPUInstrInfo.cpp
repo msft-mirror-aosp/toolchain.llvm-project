@@ -13,11 +13,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPUInstrInfo.h"
-#include "AMDGPUTargetMachine.h"
-#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
-#include "llvm/CodeGen/MachineFrameInfo.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "AMDGPU.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Value.h"
 
 using namespace llvm;
 
@@ -26,6 +27,9 @@ using namespace llvm;
 
 AMDGPUInstrInfo::AMDGPUInstrInfo(const GCNSubtarget &ST) { }
 
+Intrinsic::ID AMDGPU::getIntrinsicID(const MachineInstr &I) {
+  return I.getOperand(I.getNumExplicitDefs()).getIntrinsicID();
+}
 
 // TODO: Should largely merge with AMDGPUTTIImpl::isSourceOfDivergence.
 bool AMDGPUInstrInfo::isUniformMMO(const MachineMemOperand *MMO) {

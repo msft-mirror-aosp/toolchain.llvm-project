@@ -1,6 +1,5 @@
 add_lldb_library(lldbPluginProcessUtility
   AuxVector.cpp
-  DynamicRegisterInfo.cpp
   FreeBSDSignals.cpp
   GDBRemoteSignals.cpp
   HistoryThread.cpp
@@ -8,10 +7,15 @@ add_lldb_library(lldbPluginProcessUtility
   InferiorCallPOSIX.cpp
   LinuxProcMaps.cpp
   LinuxSignals.cpp
-  MipsLinuxSignals.cpp
+  MemoryTagManagerAArch64MTE.cpp
+  NativeProcessSoftwareSingleStep.cpp
+  NativeRegisterContextDBReg.cpp
+  NativeRegisterContextDBReg_arm64.cpp
+  NativeRegisterContextDBReg_loongarch.cpp
+  NativeRegisterContextDBReg_x86.cpp
   NativeRegisterContextRegisterInfo.cpp
-  NativeRegisterContextWatchpoint_x86.cpp
   NetBSDSignals.cpp
+  OpenBSDSignals.cpp
   RegisterContext_x86.cpp
   RegisterContextDarwin_arm.cpp
   RegisterContextDarwin_arm64.cpp
@@ -25,8 +29,6 @@ add_lldb_library(lldbPluginProcessUtility
   RegisterContextHistory.cpp
   RegisterContextLinux_i386.cpp
   RegisterContextLinux_x86_64.cpp
-  RegisterContextLinux_mips64.cpp
-  RegisterContextLinux_mips.cpp
   RegisterContextLinux_s390x.cpp
   RegisterContextMach_arm.cpp
   RegisterContextMach_i386.cpp
@@ -38,17 +40,23 @@ add_lldb_library(lldbPluginProcessUtility
   RegisterContextOpenBSD_x86_64.cpp
   RegisterContextPOSIX_arm.cpp
   RegisterContextPOSIX_arm64.cpp
+  RegisterContextPOSIX_loongarch64.cpp
   RegisterContextPOSIX_mips64.cpp
   RegisterContextPOSIX_powerpc.cpp
   RegisterContextPOSIX_ppc64le.cpp
+  RegisterContextPOSIX_riscv64.cpp
   RegisterContextPOSIX_s390x.cpp
   RegisterContextPOSIX_x86.cpp
   RegisterContextThreadMemory.cpp
   RegisterContextWindows_i386.cpp
   RegisterContextWindows_x86_64.cpp
+  RegisterFlagsDetector_arm64.cpp
+  RegisterInfos_x86_64_with_base_shared.cpp
   RegisterInfoPOSIX_arm.cpp
   RegisterInfoPOSIX_arm64.cpp
+  RegisterInfoPOSIX_loongarch64.cpp
   RegisterInfoPOSIX_ppc64le.cpp
+  RegisterInfoPOSIX_riscv64.cpp
   StopInfoMachException.cpp
   ThreadMemory.cpp
 
@@ -61,6 +69,8 @@ add_lldb_library(lldbPluginProcessUtility
     lldbSymbol
     lldbTarget
     lldbUtility
+    lldbValueObject
   LINK_COMPONENTS
     Support
+    TargetParser
   )

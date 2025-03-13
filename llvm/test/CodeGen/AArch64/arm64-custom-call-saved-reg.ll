@@ -55,10 +55,10 @@
 ; RUN: --check-prefix=CHECK-SAVED-ALL-GISEL
 
 ; Used to exhaust the supply of GPRs.
-@var = global [30 x i64] zeroinitializer
+@var = dso_local global [30 x i64] zeroinitializer
 
 ; Check that callee preserves additional CSRs.
-define void @callee() {
+define dso_local void @callee() {
 ; CHECK-LABEL: callee
 
 ; CHECK-SAVED-X8: str x8, [sp
@@ -77,8 +77,8 @@ define void @callee() {
 ; CHECK-SAVED-ALL-NEXT: stp x11, x10, [sp
 ; CHECK-SAVED-ALL-NEXT: stp x9, x8, [sp
 
-  %val = load volatile [30 x i64], [30 x i64]* @var
-  store volatile [30 x i64] %val, [30 x i64]* @var
+  %val = load volatile [30 x i64], ptr @var
+  store volatile [30 x i64] %val, ptr @var
 
 ; CHECK-SAVED-ALL: ldp x9, x8, [sp
 ; CHECK-SAVED-ALL-NEXT: ldp x11, x10, [sp
@@ -100,10 +100,10 @@ define void @callee() {
 }
 
 ; Check that caller doesn't shy away from allocating additional CSRs.
-define void @caller() {
+define dso_local void @caller() {
 ; CHECK-LABEL: caller
 
-  %val = load volatile [30 x i64], [30 x i64]* @var
+  %val = load volatile [30 x i64], ptr @var
 ; CHECK-SAVED-X8: adrp x8, var
 ; CHECK-SAVED-X9: adrp x9, var
 ; CHECK-SAVED-X10: adrp x10, var
@@ -138,7 +138,7 @@ define void @caller() {
   call void @callee()
 ; CHECK: bl callee
 
-  store volatile [30 x i64] %val, [30 x i64]* @var
+  store volatile [30 x i64] %val, ptr @var
 ; CHECK-SAVED-ALL-DAG: str x9
 ; CHECK-SAVED-ALL-DAG: str x10
 ; CHECK-SAVED-ALL-DAG: str x11

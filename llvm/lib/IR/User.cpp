@@ -18,8 +18,9 @@ class BasicBlock;
 //                                 User Class
 //===----------------------------------------------------------------------===//
 
-void User::replaceUsesOfWith(Value *From, Value *To) {
-  if (From == To) return;   // Duh what?
+bool User::replaceUsesOfWith(Value *From, Value *To) {
+  bool Changed = false;
+  if (From == To) return Changed;   // Duh what?
 
   assert((!isa<Constant>(this) || isa<GlobalValue>(this)) &&
          "Cannot call User::replaceUsesOfWith on a constant!");
@@ -30,7 +31,16 @@ void User::replaceUsesOfWith(Value *From, Value *To) {
       // "To", adding "this" to the uses list of To, and
       // most importantly, removing "this" from the use list of "From".
       setOperand(i, To);
+      Changed = true;
     }
+  if (auto DVI = dyn_cast_or_null<DbgVariableIntrinsic>(this)) {
+    if (is_contained(DVI->location_ops(), From)) {
+      DVI->replaceVariableLocationOp(From, To);
+      Changed = true;
+    }
+  }
+
+  return Changed;
 }
 
 //===----------------------------------------------------------------------===//
@@ -103,8 +113,16 @@ MutableArrayRef<uint8_t> User::getDescriptor() {
 }
 
 bool User::isDroppable() const {
-  if (const auto *Intr = dyn_cast<IntrinsicInst>(this))
-    return Intr->getIntrinsicID() == Intrinsic::assume;
+  if (auto *II = dyn_cast<IntrinsicInst>(this)) {
+    switch (II->getIntrinsicID()) {
+    default:
+      return false;
+    case Intrinsic::assume:
+    case Intrinsic::pseudoprobe:
+    case Intrinsic::experimental_noalias_scope_decl:
+      return true;
+    }
+  }
   return false;
 }
 
@@ -127,10 +145,7 @@ void *User::allocateFixedOperandUser(size_t Size, unsigned Us,
       ::operator new(Size + sizeof(Use) * Us + DescBytesToAllocate));
   Use *Start = reinterpret_cast<Use *>(Storage + DescBytesToAllocate);
   Use *End = Start + Us;
-  User *Obj = reinterpret_cast<User*>(End);
-  Obj->NumUserOperands = Us;
-  Obj->HasHungOffUses = false;
-  Obj->HasDescriptor = DescBytes != 0;
+  User *Obj = reinterpret_cast<User *>(End);
   for (; Start != End; Start++)
     new (Start) Use(Obj);
 
@@ -142,22 +157,21 @@ void *User::allocateFixedOperandUser(size_t Size, unsigned Us,
   return Obj;
 }
 
-void *User::operator new(size_t Size, unsigned Us) {
-  return allocateFixedOperandUser(Size, Us, 0);
+void *User::operator new(size_t Size, IntrusiveOperandsAllocMarker allocTrait) {
+  return allocateFixedOperandUser(Size, allocTrait.NumOps, 0);
 }
 
-void *User::operator new(size_t Size, unsigned Us, unsigned DescBytes) {
-  return allocateFixedOperandUser(Size, Us, DescBytes);
+void *User::operator new(size_t Size,
+                         IntrusiveOperandsAndDescriptorAllocMarker allocTrait) {
+  return allocateFixedOperandUser(Size, allocTrait.NumOps,
+                                  allocTrait.DescBytes);
 }
 
-void *User::operator new(size_t Size) {
+void *User::operator new(size_t Size, HungOffOperandsAllocMarker) {
   // Allocate space for a single Use*
   void *Storage = ::operator new(Size + sizeof(Use *));
   Use **HungOffOperandList = static_cast<Use **>(Storage);
   User *Obj = reinterpret_cast<User *>(HungOffOperandList + 1);
-  Obj->NumUserOperands = 0;
-  Obj->HasHungOffUses = true;
-  Obj->HasDescriptor = false;
   *HungOffOperandList = nullptr;
   return Obj;
 }

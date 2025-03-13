@@ -1,5 +1,5 @@
 --- |
-  ; RUN: llc %s -march=x86-64 -run-pass=livedebugvalues -o - | FileCheck %s -implicit-check-not=DBG_VALUE
+ ; RUN: llc %s -mtriple=x86_64 -run-pass=livedebugvalues -o - | FileCheck %s -implicit-check-not=DBG_VALUE
 
   ; Check that DBG_VALUE instructions are not propagated into a successor block
   ; of a diamond CFG that moves its location.
@@ -64,5 +64,5 @@ body:  |
     successors: %bb.3
     $eax = MOV32ri 0, debug-location !17
   bb.3.bb3:
-    RETQ $eax, debug-location !17
+    RET64 $eax, debug-location !17
 ...

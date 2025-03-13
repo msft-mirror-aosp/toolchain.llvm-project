@@ -13,8 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "WebAssemblyTargetTransformInfo.h"
+
 #include "llvm/CodeGen/CostTable.h"
-#include "llvm/Support/Debug.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "wasmtti"
@@ -36,22 +36,28 @@ unsigned WebAssemblyTTIImpl::getNumberOfRegisters(unsigned ClassID) const {
   return Result;
 }
 
-unsigned WebAssemblyTTIImpl::getRegisterBitWidth(bool Vector) const {
-  if (Vector && getST()->hasSIMD128())
-    return 128;
+TypeSize WebAssemblyTTIImpl::getRegisterBitWidth(
+    TargetTransformInfo::RegisterKind K) const {
+  switch (K) {
+  case TargetTransformInfo::RGK_Scalar:
+    return TypeSize::getFixed(64);
+  case TargetTransformInfo::RGK_FixedWidthVector:
+    return TypeSize::getFixed(getST()->hasSIMD128() ? 128 : 64);
+  case TargetTransformInfo::RGK_ScalableVector:
+    return TypeSize::getScalable(0);
+  }
 
-  return 64;
+  llvm_unreachable("Unsupported register kind");
 }
 
-unsigned WebAssemblyTTIImpl::getArithmeticInstrCost(
+InstructionCost WebAssemblyTTIImpl::getArithmeticInstrCost(
     unsigned Opcode, Type *Ty, TTI::TargetCostKind CostKind,
-    TTI::OperandValueKind Opd1Info,
-    TTI::OperandValueKind Opd2Info, TTI::OperandValueProperties Opd1PropInfo,
-    TTI::OperandValueProperties Opd2PropInfo, ArrayRef<const Value *> Args,
-    const Instruction *CxtI) {
+    TTI::OperandValueInfo Op1Info, TTI::OperandValueInfo Op2Info,
+    ArrayRef<const Value *> Args, const Instruction *CxtI) {
 
-  unsigned Cost = BasicTTIImplBase<WebAssemblyTTIImpl>::getArithmeticInstrCost(
-      Opcode, Ty, CostKind, Opd1Info, Opd2Info, Opd1PropInfo, Opd2PropInfo);
+  InstructionCost Cost =
+      BasicTTIImplBase<WebAssemblyTTIImpl>::getArithmeticInstrCost(
+          Opcode, Ty, CostKind, Op1Info, Op2Info);
 
   if (auto *VTy = dyn_cast<VectorType>(Ty)) {
     switch (Opcode) {
@@ -60,9 +66,8 @@ unsigned WebAssemblyTTIImpl::getArithmeticInstrCost(
     case Instruction::Shl:
       // SIMD128's shifts currently only accept a scalar shift count. For each
       // element, we'll need to extract, op, insert. The following is a rough
-      // approxmation.
-      if (Opd2Info != TTI::OK_UniformValue &&
-          Opd2Info != TTI::OK_UniformConstantValue)
+      // approximation.
+      if (!Op2Info.isUniform())
         Cost =
             cast<FixedVectorType>(VTy)->getNumElements() *
             (TargetTransformInfo::TCC_Basic +
@@ -74,9 +79,115 @@ unsigned WebAssemblyTTIImpl::getArithmeticInstrCost(
   return Cost;
 }
 
-unsigned WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
-                                                unsigned Index) {
-  unsigned Cost = BasicTTIImplBase::getVectorInstrCost(Opcode, Val, Index);
+InstructionCost WebAssemblyTTIImpl::getCastInstrCost(
+    unsigned Opcode, Type *Dst, Type *Src, TTI::CastContextHint CCH,
+    TTI::TargetCostKind CostKind, const Instruction *I) {
+  int ISD = TLI->InstructionOpcodeToISD(Opcode);
+  auto SrcTy = TLI->getValueType(DL, Src);
+  auto DstTy = TLI->getValueType(DL, Dst);
+
+  if (!SrcTy.isSimple() || !DstTy.isSimple()) {
+    return BaseT::getCastInstrCost(Opcode, Dst, Src, CCH, CostKind, I);
+  }
+
+  if (!ST->hasSIMD128()) {
+    return BaseT::getCastInstrCost(Opcode, Dst, Src, CCH, CostKind, I);
+  }
+
+  auto DstVT = DstTy.getSimpleVT();
+  auto SrcVT = SrcTy.getSimpleVT();
+
+  if (I && I->hasOneUser()) {
+    auto *SingleUser = cast<Instruction>(*I->user_begin());
+    int UserISD = TLI->InstructionOpcodeToISD(SingleUser->getOpcode());
+
+    // extmul_low support
+    if (UserISD == ISD::MUL &&
+        (ISD == ISD::ZERO_EXTEND || ISD == ISD::SIGN_EXTEND)) {
+      // Free low extensions.
+      if ((SrcVT == MVT::v8i8 && DstVT == MVT::v8i16) ||
+          (SrcVT == MVT::v4i16 && DstVT == MVT::v4i32) ||
+          (SrcVT == MVT::v2i32 && DstVT == MVT::v2i64)) {
+        return 0;
+      }
+      // Will require an additional extlow operation for the intermediate
+      // i16/i32 value.
+      if ((SrcVT == MVT::v4i8 && DstVT == MVT::v4i32) ||
+          (SrcVT == MVT::v2i16 && DstVT == MVT::v2i64)) {
+        return 1;
+      }
+    }
+  }
+
+  // extend_low
+  static constexpr TypeConversionCostTblEntry ConversionTbl[] = {
+      {ISD::SIGN_EXTEND, MVT::v2i64, MVT::v2i32, 1},
+      {ISD::ZERO_EXTEND, MVT::v2i64, MVT::v2i32, 1},
+      {ISD::SIGN_EXTEND, MVT::v4i32, MVT::v4i16, 1},
+      {ISD::ZERO_EXTEND, MVT::v4i32, MVT::v4i16, 1},
+      {ISD::SIGN_EXTEND, MVT::v8i16, MVT::v8i8, 1},
+      {ISD::ZERO_EXTEND, MVT::v8i16, MVT::v8i8, 1},
+      {ISD::SIGN_EXTEND, MVT::v2i64, MVT::v2i16, 2},
+      {ISD::ZERO_EXTEND, MVT::v2i64, MVT::v2i16, 2},
+      {ISD::SIGN_EXTEND, MVT::v4i32, MVT::v4i8, 2},
+      {ISD::ZERO_EXTEND, MVT::v4i32, MVT::v4i8, 2},
+  };
+
+  if (const auto *Entry =
+          ConvertCostTableLookup(ConversionTbl, ISD, DstVT, SrcVT)) {
+    return Entry->Cost;
+  }
+
+  return BaseT::getCastInstrCost(Opcode, Dst, Src, CCH, CostKind, I);
+}
+
+InstructionCost WebAssemblyTTIImpl::getMemoryOpCost(
+    unsigned Opcode, Type *Ty, MaybeAlign Alignment, unsigned AddressSpace,
+    TTI::TargetCostKind CostKind, TTI::OperandValueInfo OpInfo,
+    const Instruction *I) {
+  if (!ST->hasSIMD128() || !isa<FixedVectorType>(Ty)) {
+    return BaseT::getMemoryOpCost(Opcode, Ty, Alignment, AddressSpace,
+                                  CostKind);
+  }
+
+  int ISD = TLI->InstructionOpcodeToISD(Opcode);
+  if (ISD != ISD::LOAD) {
+    return BaseT::getMemoryOpCost(Opcode, Ty, Alignment, AddressSpace,
+                                  CostKind);
+  }
+
+  EVT VT = TLI->getValueType(DL, Ty, true);
+  // Type legalization can't handle structs
+  if (VT == MVT::Other)
+    return BaseT::getMemoryOpCost(Opcode, Ty, Alignment, AddressSpace,
+                                  CostKind);
+
+  auto LT = getTypeLegalizationCost(Ty);
+  if (!LT.first.isValid())
+    return InstructionCost::getInvalid();
+
+  // 128-bit loads are a single instruction. 32-bit and 64-bit vector loads can
+  // be lowered to load32_zero and load64_zero respectively. Assume SIMD loads
+  // are twice as expensive as scalar.
+  unsigned width = VT.getSizeInBits();
+  switch (width) {
+  default:
+    break;
+  case 32:
+  case 64:
+  case 128:
+    return 2;
+  }
+
+  return BaseT::getMemoryOpCost(Opcode, Ty, Alignment, AddressSpace, CostKind);
+}
+
+InstructionCost
+WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
+                                       TTI::TargetCostKind CostKind,
+                                       unsigned Index, Value *Op0, Value *Op1) {
+  InstructionCost Cost = BasicTTIImplBase::getVectorInstrCost(
+      Opcode, Val, CostKind, Index, Op0, Op1);
 
   // SIMD128's insert/extract currently only take constant indices.
   if (Index == -1u)
@@ -85,20 +196,69 @@ unsigned WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
   return Cost;
 }
 
-bool WebAssemblyTTIImpl::areInlineCompatible(const Function *Caller,
-                                             const Function *Callee) const {
-  // Allow inlining only when the Callee has a subset of the Caller's
-  // features. In principle, we should be able to inline regardless of any
-  // features because WebAssembly supports features at module granularity, not
-  // function granularity, but without this restriction it would be possible for
-  // a module to "forget" about features if all the functions that used them
-  // were inlined.
-  const TargetMachine &TM = getTLI()->getTargetMachine();
+TTI::ReductionShuffle WebAssemblyTTIImpl::getPreferredExpandedReductionShuffle(
+    const IntrinsicInst *II) const {
 
-  const FeatureBitset &CallerBits =
-      TM.getSubtargetImpl(*Caller)->getFeatureBits();
-  const FeatureBitset &CalleeBits =
-      TM.getSubtargetImpl(*Callee)->getFeatureBits();
+  switch (II->getIntrinsicID()) {
+  default:
+    break;
+  case Intrinsic::vector_reduce_fadd:
+    return TTI::ReductionShuffle::Pairwise;
+  }
+  return TTI::ReductionShuffle::SplitHalf;
+}
 
-  return (CallerBits & CalleeBits) == CalleeBits;
+void WebAssemblyTTIImpl::getUnrollingPreferences(
+    Loop *L, ScalarEvolution &SE, TTI::UnrollingPreferences &UP,
+    OptimizationRemarkEmitter *ORE) const {
+  // Scan the loop: don't unroll loops with calls. This is a standard approach
+  // for most (all?) targets.
+  for (BasicBlock *BB : L->blocks())
+    for (Instruction &I : *BB)
+      if (isa<CallInst>(I) || isa<InvokeInst>(I))
+        if (const Function *F = cast<CallBase>(I).getCalledFunction())
+          if (isLoweredToCall(F))
+            return;
+
+  // The chosen threshold is within the range of 'LoopMicroOpBufferSize' of
+  // the various microarchitectures that use the BasicTTI implementation and
+  // has been selected through heuristics across multiple cores and runtimes.
+  UP.Partial = UP.Runtime = UP.UpperBound = true;
+  UP.PartialThreshold = 30;
+
+  // Avoid unrolling when optimizing for size.
+  UP.OptSizeThreshold = 0;
+  UP.PartialOptSizeThreshold = 0;
+
+  // Set number of instructions optimized when "back edge"
+  // becomes "fall through" to default value of 2.
+  UP.BEInsns = 2;
+}
+
+bool WebAssemblyTTIImpl::supportsTailCalls() const {
+  return getST()->hasTailCall();
+}
+
+bool WebAssemblyTTIImpl::isProfitableToSinkOperands(
+    Instruction *I, SmallVectorImpl<Use *> &Ops) const {
+  using namespace llvm::PatternMatch;
+
+  if (!I->getType()->isVectorTy() || !I->isShift())
+    return false;
+
+  Value *V = I->getOperand(1);
+  // We dont need to sink constant splat.
+  if (dyn_cast<Constant>(V))
+    return false;
+
+  if (match(V, m_Shuffle(m_InsertElt(m_Value(), m_Value(), m_ZeroInt()),
+                         m_Value(), m_ZeroMask()))) {
+    // Sink insert
+    Ops.push_back(&cast<Instruction>(V)->getOperandUse(0));
+    // Sink shuffle
+    Ops.push_back(&I->getOperandUse(1));
+    return true;
+  }
+
+  return false;
 }

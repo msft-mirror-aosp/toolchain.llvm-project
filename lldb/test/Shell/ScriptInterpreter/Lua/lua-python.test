@@ -1,6 +1,4 @@
-# REQUIRES: lua
 # REQUIRES: python
-# UNSUPPORTED: lldb-repro
 
 # RUN: mkdir -p %t
 # RUN: cd %t

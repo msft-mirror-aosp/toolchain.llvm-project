@@ -16,9 +16,9 @@
 
 #include <machine/elf.h>
 
+#include <cstdio>
 #include <dlfcn.h>
 #include <execinfo.h>
-#include <stdio.h>
 
 #include "lldb/Host/Host.h"
 #include "lldb/Host/HostInfo.h"
@@ -31,11 +31,7 @@
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StreamString.h"
 
-#include "llvm/Support/Host.h"
-
-extern "C" {
-extern char **environ;
-}
+#include "llvm/TargetParser/Host.h"
 
 namespace lldb_private {
 class ProcessLaunchInfo;
@@ -241,8 +237,6 @@ bool Host::GetProcessInfo(lldb::pid_t pid, ProcessInstanceInfo &process_info) {
   return false;
 }
 
-Environment Host::GetEnvironment() { return Environment(environ); }
-
 Status Host::ShellExpandArguments(ProcessLaunchInfo &launch_info) {
-  return Status("unimplemented");
+  return Status::FromErrorString("unimplemented");
 }

@@ -14,11 +14,12 @@
 #ifndef LLVM_MC_MCINSTRDESC_H
 #define LLVM_MC_MCINSTRDESC_H
 
-#include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/DataTypes.h"
-#include <string>
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/MC/MCRegister.h"
 
 namespace llvm {
+class MCRegisterInfo;
 
 class MCInst;
 
@@ -27,11 +28,21 @@ class MCInst;
 //===----------------------------------------------------------------------===//
 
 namespace MCOI {
-// Operand constraints
+/// Operand constraints. These are encoded in 16 bits with one of the
+/// low-order 3 bits specifying that a constraint is present and the
+/// corresponding high-order hex digit specifying the constraint value.
+/// This allows for a maximum of 3 constraints.
 enum OperandConstraint {
-  TIED_TO = 0,  // Must be allocated the same register as.
-  EARLY_CLOBBER // Operand is an early clobber register operand
+  TIED_TO = 0,  // Must be allocated the same register as specified value.
+  EARLY_CLOBBER // If present, operand is an early clobber register.
 };
+
+// Define a macro to produce each constraint value.
+#define MCOI_TIED_TO(op) \
+  ((1 << MCOI::TIED_TO) | ((op) << (4 + MCOI::TIED_TO * 4)))
+
+#define MCOI_EARLY_CLOBBER \
+  (1 << MCOI::EARLY_CLOBBER)
 
 /// These are flags set on operands, but should be considered
 /// private, all access should go through the MCOperandInfo accessors.
@@ -67,7 +78,7 @@ enum OperandType {
   OPERAND_FIRST_TARGET = 13,
 };
 
-}
+} // namespace MCOI
 
 /// This holds information about one operand of a machine instruction,
 /// indicating the register class for register operands, etc.
@@ -84,10 +95,9 @@ public:
 
   /// Information about the type of the operand.
   uint8_t OperandType;
-  /// The lower 16 bits are used to specify which constraints are set.
-  /// The higher 16 bits are used to specify the value of constraints (4 bits
-  /// each).
-  uint32_t Constraints;
+
+  /// Operand constraints (see OperandConstraint enum).
+  uint16_t Constraints;
 
   /// Set if this operand is a pointer value and it requires a callback
   /// to look up its register class.
@@ -140,6 +150,7 @@ enum Flag {
   Variadic,
   HasOptionalDef,
   Pseudo,
+  Meta,
   Return,
   EHScopeReturn,
   Call,
@@ -177,7 +188,7 @@ enum Flag {
   VariadicOpsAreDefs,
   Authenticated,
 };
-}
+} // namespace MCID
 
 /// Describe properties that are true of each instruction in the target
 /// description file.  This captures information about side effects, register
@@ -186,25 +197,31 @@ enum Flag {
 /// directly to describe itself.
 class MCInstrDesc {
 public:
+  // FIXME: Disable copies and moves.
+  // Do not allow MCInstrDescs to be copied or moved. They should only exist in
+  // the <Target>Insts table because they rely on knowing their own address to
+  // find other information elsewhere in the same table.
+
   unsigned short Opcode;         // The opcode number
   unsigned short NumOperands;    // Num of args (may be more if variable_ops)
   unsigned char NumDefs;         // Num of args that are definitions
   unsigned char Size;            // Number of bytes in encoding.
   unsigned short SchedClass;     // enum identifying instr sched class
+  unsigned char NumImplicitUses; // Num of regs implicitly used
+  unsigned char NumImplicitDefs; // Num of regs implicitly defined
+  unsigned short ImplicitOffset; // Offset to start of implicit op list
+  unsigned short OpInfoOffset;   // Offset to info about operands
   uint64_t Flags;                // Flags identifying machine instr class
   uint64_t TSFlags;              // Target Specific Flag values
-  const MCPhysReg *ImplicitUses; // Registers implicitly read by this instr
-  const MCPhysReg *ImplicitDefs; // Registers implicitly defined by this instr
-  const MCOperandInfo *OpInfo;   // 'NumOperands' entries about operands
 
-  /// Returns the value of the specific constraint if
-  /// it is set. Returns -1 if it is not set.
+  /// Returns the value of the specified operand constraint if
+  /// it is present. Returns -1 if it is not present.
   int getOperandConstraint(unsigned OpNum,
                            MCOI::OperandConstraint Constraint) const {
     if (OpNum < NumOperands &&
-        (OpInfo[OpNum].Constraints & (1 << Constraint))) {
-      unsigned Pos = 16 + Constraint * 4;
-      return (int)(OpInfo[OpNum].Constraints >> Pos) & 0xf;
+        (operands()[OpNum].Constraints & (1 << Constraint))) {
+      unsigned ValuePos = 4 + Constraint * 4;
+      return (int)(operands()[OpNum].Constraints >> ValuePos) & 0x0f;
     }
     return -1;
   }
@@ -219,13 +236,9 @@ public:
   /// well.
   unsigned getNumOperands() const { return NumOperands; }
 
-  using const_opInfo_iterator = const MCOperandInfo *;
-
-  const_opInfo_iterator opInfo_begin() const { return OpInfo; }
-  const_opInfo_iterator opInfo_end() const { return OpInfo + NumOperands; }
-
-  iterator_range<const_opInfo_iterator> operands() const {
-    return make_range(opInfo_begin(), opInfo_end());
+  ArrayRef<MCOperandInfo> operands() const {
+    auto OpInfo = reinterpret_cast<const MCOperandInfo *>(this + Opcode + 1);
+    return ArrayRef(OpInfo + OpInfoOffset, NumOperands);
   }
 
   /// Return the number of MachineOperands that are register
@@ -254,6 +267,10 @@ public:
   /// Return true if this is a pseudo instruction that doesn't
   /// correspond to a real machine instruction.
   bool isPseudo() const { return Flags & (1ULL << MCID::Pseudo); }
+
+  /// Return true if this is a meta instruction that doesn't
+  /// produce any output in the form of executable instructions.
+  bool isMetaInstruction() const { return Flags & (1ULL << MCID::Meta); }
 
   /// Return true if the instruction is a return.
   bool isReturn() const { return Flags & (1ULL << MCID::Return); }
@@ -502,9 +519,8 @@ public:
   /// Returns true if this instruction is a candidate for remat. This
   /// flag is only used in TargetInstrInfo method isTriviallyRematerializable.
   ///
-  /// If this flag is set, the isReallyTriviallyReMaterializable()
-  /// or isReallyTriviallyReMaterializableGeneric methods are called to verify
-  /// the instruction is really rematable.
+  /// If this flag is set, the isReallyTriviallyReMaterializable() method is
+  /// called to verify the instruction is really rematerializable.
   bool isRematerializable() const {
     return Flags & (1ULL << MCID::Rematerializable);
   }
@@ -546,18 +562,10 @@ public:
   /// flags register.  In this case, the instruction is marked as implicitly
   /// reading the flags.  Likewise, the variable shift instruction on X86 is
   /// marked as implicitly reading the 'CL' register, which it always does.
-  ///
-  /// This method returns null if the instruction has no implicit uses.
-  const MCPhysReg *getImplicitUses() const { return ImplicitUses; }
-
-  /// Return the number of implicit uses this instruction has.
-  unsigned getNumImplicitUses() const {
-    if (!ImplicitUses)
-      return 0;
-    unsigned i = 0;
-    for (; ImplicitUses[i]; ++i) /*empty*/
-      ;
-    return i;
+  ArrayRef<MCPhysReg> implicit_uses() const {
+    auto ImplicitOps =
+        reinterpret_cast<const MCPhysReg *>(this + Opcode + 1) + ImplicitOffset;
+    return {ImplicitOps, NumImplicitUses};
   }
 
   /// Return a list of registers that are potentially written by any
@@ -568,33 +576,21 @@ public:
   /// instruction always deposits the quotient and remainder in the EAX/EDX
   /// registers.  For that instruction, this will return a list containing the
   /// EAX/EDX/EFLAGS registers.
-  ///
-  /// This method returns null if the instruction has no implicit defs.
-  const MCPhysReg *getImplicitDefs() const { return ImplicitDefs; }
-
-  /// Return the number of implicit defs this instruct has.
-  unsigned getNumImplicitDefs() const {
-    if (!ImplicitDefs)
-      return 0;
-    unsigned i = 0;
-    for (; ImplicitDefs[i]; ++i) /*empty*/
-      ;
-    return i;
+  ArrayRef<MCPhysReg> implicit_defs() const {
+    auto ImplicitOps =
+        reinterpret_cast<const MCPhysReg *>(this + Opcode + 1) + ImplicitOffset;
+    return {ImplicitOps + NumImplicitUses, NumImplicitDefs};
   }
 
   /// Return true if this instruction implicitly
   /// uses the specified physical register.
-  bool hasImplicitUseOfPhysReg(unsigned Reg) const {
-    if (const MCPhysReg *ImpUses = ImplicitUses)
-      for (; *ImpUses; ++ImpUses)
-        if (*ImpUses == Reg)
-          return true;
-    return false;
+  bool hasImplicitUseOfPhysReg(MCRegister Reg) const {
+    return is_contained(implicit_uses(), Reg);
   }
 
   /// Return true if this instruction implicitly
   /// defines the specified physical register.
-  bool hasImplicitDefOfPhysReg(unsigned Reg,
+  bool hasImplicitDefOfPhysReg(MCRegister Reg,
                                const MCRegisterInfo *MRI = nullptr) const;
 
   /// Return the scheduling class for this instruction.  The
@@ -613,7 +609,7 @@ public:
   int findFirstPredOperandIdx() const {
     if (isPredicable()) {
       for (unsigned i = 0, e = getNumOperands(); i != e; ++i)
-        if (OpInfo[i].isPredicate())
+        if (operands()[i].isPredicate())
           return i;
     }
     return -1;
@@ -621,7 +617,7 @@ public:
 
   /// Return true if this instruction defines the specified physical
   /// register, either explicitly or implicitly.
-  bool hasDefOfPhysReg(const MCInst &MI, unsigned Reg,
+  bool hasDefOfPhysReg(const MCInst &MI, MCRegister Reg,
                        const MCRegisterInfo &RI) const;
 };
 

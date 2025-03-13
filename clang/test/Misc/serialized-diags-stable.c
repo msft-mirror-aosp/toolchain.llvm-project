@@ -1,10 +1,10 @@
 // RUN: rm -f %t
-// RUN: not %clang -Wall -fsyntax-only %s --serialize-diagnostics %t.dia > /dev/null 2>&1
+// RUN: not %clang -Wno-error=return-type -Wall -fsyntax-only %s --serialize-diagnostics %t.dia > /dev/null 2>&1
 // RUN: c-index-test -read-diagnostics %t.dia 2>&1 | FileCheck %s
 
 // RUN: c-index-test -read-diagnostics %S/Inputs/serialized-diags-stable.dia 2>&1 | FileCheck %s
 
-int foo() {
+int foo(void) {
   // CHECK: serialized-diags-stable.c:[[@LINE+2]]:1: warning: non-void function does not return a value [-Wreturn-type] [Semantic Issue]
   // CHECK-NEXT: Number FIXITs = 0
 }
@@ -13,7 +13,7 @@ int foo() {
 // CHECK-NEXT: Number FIXITs = 0
 // CHECK-NEXT: +-{{.*}}serialized-diags-stable.c:[[@LINE+2]]:6: note: previous definition is here [] []
 // CHECK-NEXT: Number FIXITs = 0
-void bar() {}
+void bar(void) {}
 typedef int bar;
 
 

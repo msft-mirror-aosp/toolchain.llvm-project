@@ -1,4 +1,4 @@
-; RUN: llc -filetype=obj %s -o %t.o
+; RUN: llc -mcpu=mvp -filetype=obj %s -o %t.o
 ; RUN: yaml2obj %S/Inputs/globals.yaml -o %t_globals.o
 ; RUN: wasm-ld -print-gc-sections -o %t1.wasm %t.o %t_globals.o | \
 ; RUN:     FileCheck %s -check-prefix=PRINT-GC
@@ -15,12 +15,12 @@ target triple = "wasm32-unknown-unknown"
 @used_data = hidden global i32 2, align 4
 
 define hidden i64 @unused_function(i64 %arg) {
-  %1 = load i64, i64* @unused_data, align 4
+  %1 = load i64, ptr @unused_data, align 4
   ret i64 %1
 }
 
 define hidden i32 @used_function() {
-  %1 = load i32, i32* @used_data, align 4
+  %1 = load i32, ptr @used_data, align 4
   ret i32 %1
 }
 
@@ -87,6 +87,9 @@ entry:
 ; CHECK-NEXT:         Name:            __stack_pointer
 ; CHECK-NEXT:       - Index:           1
 ; CHECK-NEXT:         Name:            used_global
+; CHECK-NEXT:     DataSegmentNames:
+; CHECK-NEXT:       - Index:           0
+; CHECK-NEXT:         Name:            .data
 ; CHECK-NEXT: ...
 
 ; RUN: wasm-ld -print-gc-sections --no-gc-sections -o %t1.no-gc.wasm \
@@ -162,6 +165,9 @@ entry:
 ; NO-GC-NEXT:         Name:            unused_global
 ; NO-GC-NEXT:       - Index:           2
 ; NO-GC-NEXT:         Name:            used_global
+; NO-GC-NEXT:     DataSegmentNames:
+; NO-GC-NEXT:       - Index:           0
+; NO-GC-NEXT:         Name:            .data
 ; NO-GC-NEXT: ...
 
 ; RUN: not wasm-ld --gc-sections --relocatable -o %t1.no-gc.wasm %t.o 2>&1 | FileCheck %s -check-prefix=CHECK-ERROR

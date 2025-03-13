@@ -752,7 +752,7 @@ yield
 # CHECK-NEXT:  1      3     1.00           *            strb	r0, [r1, r2]
 # CHECK-NEXT:  1      3     1.00           *            strb.w	r0, [r1, r2]
 # CHECK-NEXT:  1      3     1.00           *            strb.w	r0, [r1, r2, lsl #1]
-# CHECK-NEXT:  1      3     1.00                  U     strbt	r0, [r1, #1]
+# CHECK-NEXT:  1      3     1.00           *            strbt	r0, [r1, #1]
 # CHECK-NEXT:  1      3     1.00           *            strd	r0, r1, [r2, #4]
 # CHECK-NEXT:  1      3     1.00           *            strd	r0, r1, [r2], #4
 # CHECK-NEXT:  1      3     1.00           *            strd	r0, r1, [r2, #4]!
@@ -769,8 +769,8 @@ yield
 # CHECK-NEXT:  1      3     1.00           *            strh	r0, [r1, r2]
 # CHECK-NEXT:  1      3     1.00           *            strh.w	r0, [r1, r2]
 # CHECK-NEXT:  1      3     1.00           *            strh.w	r0, [r1, r2, lsl #1]
-# CHECK-NEXT:  1      3     1.00                  U     strht	r0, [r1, #1]
-# CHECK-NEXT:  1      3     1.00                  U     strt	r0, [r1, #1]
+# CHECK-NEXT:  1      3     1.00           *            strht	r0, [r1, #1]
+# CHECK-NEXT:  1      3     1.00           *            strt	r0, [r1, #1]
 # CHECK-NEXT:  1      1     0.50                        subs	r0, r1, #1
 # CHECK-NEXT:  1      1     0.50                        subs	r0, #1
 # CHECK-NEXT:  1      1     0.50                        sub.w	r0, r1, #1
@@ -862,23 +862,23 @@ yield
 # CHECK-NEXT: [0.0] - M7UnitALU
 # CHECK-NEXT: [0.1] - M7UnitALU
 # CHECK-NEXT: [1]   - M7UnitBranch
-# CHECK-NEXT: [2.0] - M7UnitLoad
-# CHECK-NEXT: [2.1] - M7UnitLoad
-# CHECK-NEXT: [3]   - M7UnitMAC
-# CHECK-NEXT: [4]   - M7UnitSIMD
-# CHECK-NEXT: [5]   - M7UnitShift1
-# CHECK-NEXT: [6]   - M7UnitShift2
-# CHECK-NEXT: [7]   - M7UnitStore
-# CHECK-NEXT: [8]   - M7UnitVFP
-# CHECK-NEXT: [9.0] - M7UnitVPort
-# CHECK-NEXT: [9.1] - M7UnitVPort
+# CHECK-NEXT: [2]   - M7UnitLoadH
+# CHECK-NEXT: [3]   - M7UnitLoadL
+# CHECK-NEXT: [4]   - M7UnitMAC
+# CHECK-NEXT: [5]   - M7UnitSIMD
+# CHECK-NEXT: [6]   - M7UnitShift1
+# CHECK-NEXT: [7]   - M7UnitShift2
+# CHECK-NEXT: [8]   - M7UnitStore
+# CHECK-NEXT: [9]   - M7UnitVFP
+# CHECK-NEXT: [10]  - M7UnitVPortH
+# CHECK-NEXT: [11]  - M7UnitVPortL
 
 # CHECK:      Resource pressure per iteration:
-# CHECK-NEXT: [0.0]  [0.1]  [1]    [2.0]  [2.1]  [3]    [4]    [5]    [6]    [7]    [8]    [9.0]  [9.1]
+# CHECK-NEXT: [0.0]  [0.1]  [1]    [2]    [3]    [4]    [5]    [6]    [7]    [8]    [9]    [10]   [11]
 # CHECK-NEXT: 125.00 125.00  -     35.00  35.00  43.00  90.00  88.00  2.00   45.00   -      -      -
 
 # CHECK:      Resource pressure by instruction:
-# CHECK-NEXT: [0.0]  [0.1]  [1]    [2.0]  [2.1]  [3]    [4]    [5]    [6]    [7]    [8]    [9.0]  [9.1]  Instructions:
+# CHECK-NEXT: [0.0]  [0.1]  [1]    [2]    [3]    [4]    [5]    [6]    [7]    [8]    [9]    [10]   [11]   Instructions:
 # CHECK-NEXT: 0.50   0.50    -      -      -      -      -      -      -      -      -      -      -     adc	r0, r1, #0
 # CHECK-NEXT: 0.50   0.50    -      -      -      -      -      -      -      -      -      -      -     adcs	r0, r1, #0
 # CHECK-NEXT: 0.50   0.50    -      -      -      -      -      -      -      -      -      -      -     adcs	r0, r1

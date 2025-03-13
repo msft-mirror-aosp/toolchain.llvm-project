@@ -1,4 +1,4 @@
-# RUN: llc -march=hexagon -run-pass hwloops %s -o - | FileCheck %s
+# RUN: llc -mtriple=hexagon -run-pass hwloops %s -o - | FileCheck %s
 
 # Normally, if the registers holding the induction variable's bounds
 # are redefined inside of the loop's body, the loop cannot be converted
@@ -10,7 +10,7 @@
 # CHECK:  [[R0:%[0-9]+]]:intregs = A2_tfrsi 1920
 # CHECK:  J2_loop0r %bb.1, [[R0]]
 #
-# CHECK: bb.1.b1 (address-taken):
+# CHECK: bb.1.b1 (machine-block-address-taken):
 # CHECK:   ENDLOOP0 %bb.1
 
 

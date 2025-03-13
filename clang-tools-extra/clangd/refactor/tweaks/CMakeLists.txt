@@ -17,14 +17,19 @@ add_clang_library(clangDaemonTweaks OBJECT
   DumpAST.cpp
   DefineInline.cpp
   DefineOutline.cpp
-  ExpandAutoType.cpp
+  ExpandDeducedType.cpp
   ExpandMacro.cpp
   ExtractFunction.cpp
   ExtractVariable.cpp
+  MemberwiseConstructor.cpp
   ObjCLocalizeStringLiteral.cpp
+  ObjCMemberwiseInitializer.cpp
   PopulateSwitch.cpp
   RawStringLiteral.cpp
   RemoveUsingNamespace.cpp
+  ScopifyEnum.cpp
+  SpecialMembers.cpp
+  SwapBinaryOperands.cpp
   SwapIfBranches.cpp
 
   LINK_LIBS
@@ -34,10 +39,12 @@ add_clang_library(clangDaemonTweaks OBJECT
   clangdSupport
   clangFormat
   clangLex
+  clangSema
   clangToolingCore
   clangToolingRefactoring
   clangToolingSyntax
 
   DEPENDS
   omp_gen
+  ClangDriverOptions
   )

@@ -4,6 +4,7 @@ set(LLVM_LINK_COMPONENTS
   Core
   IPO
   Support
+  TargetParser
   TransformUtils
   )
 
@@ -11,4 +12,7 @@ add_llvm_unittest(IPOTests
   LowerTypeTests.cpp
   WholeProgramDevirt.cpp
   AttributorTest.cpp
+  FunctionSpecializationTest.cpp
+  ImportIDTableTests.cpp
+  MergeFunctionsTest.cpp
   )

@@ -1,4 +1,4 @@
-! RUN: llvm-mc %s -arch=sparcv9 -show-encoding | FileCheck %s
+! RUN: llvm-mc %s -triple=sparcv9 -show-encoding | FileCheck %s
 
         ! CHECK: ta %icc, %i5           ! encoding: [0x91,0xd0,0x00,0x1d]
         ! CHECK: ta %icc, 82            ! encoding: [0x91,0xd0,0x20,0x52]
@@ -300,4 +300,8 @@
         tvs %xcc, 82
         tvs %xcc, %g1 + %i2
         tvs %xcc, %i5 + 41
-      
+
+        ! CHECK: sir 0                  ! encoding: [0x9f,0x80,0x20,0x00]
+        ! CHECK: sir 123                ! encoding: [0x9f,0x80,0x20,0x7b]
+        sir
+        sir 123

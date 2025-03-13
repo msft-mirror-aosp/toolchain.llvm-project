@@ -13,15 +13,12 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
@@ -39,7 +36,6 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
@@ -52,6 +48,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <assert.h>
@@ -140,23 +137,26 @@ static bool partitionOuterLoopBlocks(Loop *L, Loop *SubLoop,
 template <typename T>
 static bool processHeaderPhiOperands(BasicBlock *Header, BasicBlock *Latch,
                                      BasicBlockSet &AftBlocks, T Visit) {
-  SmallVector<Instruction *, 8> Worklist;
-  for (auto &Phi : Header->phis()) {
-    Value *V = Phi.getIncomingValueForBlock(Latch);
-    if (Instruction *I = dyn_cast<Instruction>(V))
-      Worklist.push_back(I);
-  }
+  SmallPtrSet<Instruction *, 8> VisitedInstr;
 
-  while (!Worklist.empty()) {
-    Instruction *I = Worklist.back();
-    Worklist.pop_back();
-    if (!Visit(I))
-      return false;
+  std::function<bool(Instruction * I)> ProcessInstr = [&](Instruction *I) {
+    if (!VisitedInstr.insert(I).second)
+      return true;
 
     if (AftBlocks.count(I->getParent()))
       for (auto &U : I->operands())
         if (Instruction *II = dyn_cast<Instruction>(U))
-          Worklist.push_back(II);
+          if (!ProcessInstr(II))
+            return false;
+
+    return Visit(I);
+  };
+
+  for (auto &Phi : Header->phis()) {
+    Value *V = Phi.getIncomingValueForBlock(Latch);
+    if (Instruction *I = dyn_cast<Instruction>(V))
+      if (!ProcessInstr(I))
+        return false;
   }
 
   return true;
@@ -165,24 +165,16 @@ static bool processHeaderPhiOperands(BasicBlock *Header, BasicBlock *Latch,
 // Move the phi operands of Header from Latch out of AftBlocks to InsertLoc.
 static void moveHeaderPhiOperandsToForeBlocks(BasicBlock *Header,
                                               BasicBlock *Latch,
-                                              Instruction *InsertLoc,
+                                              BasicBlock::iterator InsertLoc,
                                               BasicBlockSet &AftBlocks) {
   // We need to ensure we move the instructions in the correct order,
   // starting with the earliest required instruction and moving forward.
-  std::vector<Instruction *> Visited;
   processHeaderPhiOperands(Header, Latch, AftBlocks,
-                           [&Visited, &AftBlocks](Instruction *I) {
+                           [&AftBlocks, &InsertLoc](Instruction *I) {
                              if (AftBlocks.count(I->getParent()))
-                               Visited.push_back(I);
+                               I->moveBefore(InsertLoc);
                              return true;
                            });
-
-  // Move all instructions in program order to before the InsertLoc
-  BasicBlock *InsertLocBB = InsertLoc->getParent();
-  for (Instruction *I : reverse(Visited)) {
-    if (I->getParent() != InsertLocBB)
-      I->moveBefore(InsertLoc);
-  }
 }
 
 /*
@@ -246,11 +238,12 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   bool CompletelyUnroll = (Count == TripCount);
 
   // We use the runtime remainder in cases where we don't know trip multiple
-  if (TripMultiple == 1 || TripMultiple % Count != 0) {
+  if (TripMultiple % Count != 0) {
     if (!UnrollRuntimeLoopRemainder(L, Count, /*AllowExpensiveTripCount*/ false,
                                     /*UseEpilogRemainder*/ true,
                                     UnrollRemainder, /*ForgetAllSCEV*/ false,
-                                    LI, SE, DT, AC, TTI, true, EpilogueLoop)) {
+                                    LI, SE, DT, AC, TTI, true,
+                                    SCEVCheapExpansionBudget, EpilogueLoop)) {
       LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; remainder loop could not be "
                            "generated when assuming runtime trip count\n");
       return LoopUnrollResult::Unmodified;
@@ -261,7 +254,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   // if not outright eliminated.
   if (SE) {
     SE->forgetLoop(L);
-    SE->forgetLoop(SubLoop);
+    SE->forgetBlockAndLoopDispositions();
   }
 
   using namespace ore;
@@ -336,7 +329,8 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
 
   // Move any instructions from fore phi operands from AftBlocks into Fore.
   moveHeaderPhiOperandsToForeBlocks(
-      Header, LatchBlock, ForeBlocksLast[0]->getTerminator(), AftBlocks);
+      Header, LatchBlock, ForeBlocksLast[0]->getTerminator()->getIterator(),
+      AftBlocks);
 
   // The current on-the-fly SSA update requires blocks to be processed in
   // reverse postorder so that LastValueMap contains the correct value at each
@@ -347,14 +341,17 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   LoopBlocksDFS::RPOIterator BlockBegin = DFS.beginRPO();
   LoopBlocksDFS::RPOIterator BlockEnd = DFS.endRPO();
 
-  if (Header->getParent()->isDebugInfoForProfiling())
+  // When a FSDiscriminator is enabled, we don't need to add the multiply
+  // factors to the discriminators.
+  if (Header->getParent()->shouldEmitDebugInfoForProfiling() &&
+      !EnableFSDiscriminator)
     for (BasicBlock *BB : L->getBlocks())
       for (Instruction &I : *BB)
-        if (!isa<DbgInfoIntrinsic>(&I))
+        if (!I.isDebugOrPseudoInst())
           if (const DILocation *DIL = I.getDebugLoc()) {
             auto NewDIL = DIL->cloneByMultiplyingDuplicationFactor(Count);
             if (NewDIL)
-              I.setDebugLoc(NewDIL.getValue());
+              I.setDebugLoc(*NewDIL);
             else
               LLVM_DEBUG(dbgs()
                          << "Failed to create new discriminator: "
@@ -373,7 +370,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     for (LoopBlocksDFS::RPOIterator BB = BlockBegin; BB != BlockEnd; ++BB) {
       ValueToValueMapTy VMap;
       BasicBlock *New = CloneBasicBlock(*BB, VMap, "." + Twine(It));
-      Header->getParent()->getBasicBlockList().push_back(New);
+      Header->getParent()->insert(Header->getParent()->end(), New);
 
       // Tell LI about New.
       addClonedBlockToLoopInfo(*BB, New, LI, NewLoops);
@@ -433,9 +430,8 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     remapInstructionsInBlocks(NewBlocks, LastValueMap);
     for (BasicBlock *NewBlock : NewBlocks) {
       for (Instruction &I : *NewBlock) {
-        if (auto *II = dyn_cast<IntrinsicInst>(&I))
-          if (II->getIntrinsicID() == Intrinsic::assume)
-            AC->registerAssumption(II);
+        if (auto *II = dyn_cast<AssumeInst>(&I))
+          AC->registerAssumption(II);
       }
     }
 
@@ -478,9 +474,9 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   };
   // Move all the phis from Src into Dest
   auto movePHIs = [](BasicBlock *Src, BasicBlock *Dest) {
-    Instruction *insertPoint = Dest->getFirstNonPHI();
+    BasicBlock::iterator insertPoint = Dest->getFirstNonPHIIt();
     while (PHINode *Phi = dyn_cast<PHINode>(Src->begin()))
-      Phi->moveBefore(insertPoint);
+      Phi->moveBefore(*Dest, insertPoint);
   };
 
   // Update the PHI values outside the loop to point to the last block
@@ -496,7 +492,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   if (CompletelyUnroll) {
     while (PHINode *Phi = dyn_cast<PHINode>(ForeBlocksFirst[0]->begin())) {
       Phi->replaceAllUsesWith(Phi->getIncomingValueForBlock(Preheader));
-      Phi->getParent()->getInstList().erase(Phi);
+      Phi->eraseFromParent();
     }
   } else {
     // Update the PHI values to point to the last aft block
@@ -527,7 +523,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     // unconditional one to this one
     BranchInst *SubTerm =
         cast<BranchInst>(SubLoopBlocksLast[It - 1]->getTerminator());
-    BranchInst::Create(SubLoopBlocksFirst[It], SubTerm);
+    BranchInst::Create(SubLoopBlocksFirst[It], SubTerm->getIterator());
     SubTerm->eraseFromParent();
 
     SubLoopBlocksFirst[It]->replacePhiUsesWith(ForeBlocksLast[It],
@@ -540,7 +536,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   // Aft blocks successors and phis
   BranchInst *AftTerm = cast<BranchInst>(AftBlocksLast.back()->getTerminator());
   if (CompletelyUnroll) {
-    BranchInst::Create(LoopExit, AftTerm);
+    BranchInst::Create(LoopExit, AftTerm->getIterator());
     AftTerm->eraseFromParent();
   } else {
     AftTerm->setSuccessor(!ContinueOnTrue, ForeBlocksFirst[0]);
@@ -555,7 +551,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     // unconditional one to this one
     BranchInst *AftTerm =
         cast<BranchInst>(AftBlocksLast[It - 1]->getTerminator());
-    BranchInst::Create(AftBlocksFirst[It], AftTerm);
+    BranchInst::Create(AftBlocksFirst[It], AftTerm->getIterator());
     AftTerm->eraseFromParent();
 
     AftBlocksFirst[It]->replacePhiUsesWith(SubLoopBlocksLast[It],
@@ -761,11 +757,11 @@ checkDependencies(Loop &Root, const BasicBlockSet &SubLoopBlocks,
                   DependenceInfo &DI, LoopInfo &LI) {
   SmallVector<BasicBlockSet, 8> AllBlocks;
   for (Loop *L : Root.getLoopsInPreorder())
-    if (ForeBlocksMap.find(L) != ForeBlocksMap.end())
+    if (ForeBlocksMap.contains(L))
       AllBlocks.push_back(ForeBlocksMap.lookup(L));
   AllBlocks.push_back(SubLoopBlocks);
   for (Loop *L : Root.getLoopsInPreorder())
-    if (AftBlocksMap.find(L) != AftBlocksMap.end())
+    if (AftBlocksMap.contains(L))
       AllBlocks.push_back(AftBlocksMap.lookup(L));
 
   unsigned LoopDepth = Root.getLoopDepth();
@@ -831,6 +827,23 @@ static bool isEligibleLoopForm(const Loop &Root) {
     // Only one child is allowed.
     if (SubLoopsSize != 1)
       return false;
+
+    // Only loops with a single exit block can be unrolled and jammed.
+    // The function getExitBlock() is used for this check, rather than
+    // getUniqueExitBlock() to ensure loops with mulitple exit edges are
+    // disallowed.
+    if (!L->getExitBlock()) {
+      LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; only loops with single exit "
+                           "blocks can be unrolled and jammed.\n");
+      return false;
+    }
+
+    // Only loops with a single exiting block can be unrolled and jammed.
+    if (!L->getExitingBlock()) {
+      LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; only loops with single "
+                           "exiting blocks can be unrolled and jammed.\n");
+      return false;
+    }
 
     L = L->getSubLoops()[0];
   } while (L);

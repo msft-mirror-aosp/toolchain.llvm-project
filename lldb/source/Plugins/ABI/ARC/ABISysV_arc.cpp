@@ -15,16 +15,13 @@
 #include <type_traits>
 
 // Other libraries and framework includes
-#include "llvm/ADT/Triple.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Value.h"
-#include "lldb/Core/ValueObjectConstResult.h"
-#include "lldb/Core/ValueObjectMemory.h"
-#include "lldb/Core/ValueObjectRegister.h"
 #include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -34,6 +31,9 @@
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
+#include "lldb/ValueObject/ValueObjectConstResult.h"
+#include "lldb/ValueObject/ValueObjectMemory.h"
+#include "lldb/ValueObject/ValueObjectRegister.h"
 
 #define DEFINE_REG_NAME(reg_num)      ConstString(#reg_num).GetCString()
 #define DEFINE_REG_NAME_STR(reg_name) ConstString(reg_name).GetCString()
@@ -46,7 +46,7 @@
     DEFINE_REG_NAME(dwarf_num), DEFINE_REG_NAME_STR(str_name),                \
     0, 0, eEncodingInvalid, eFormatDefault,                                   \
     { dwarf_num, dwarf_num, generic_num, LLDB_INVALID_REGNUM, dwarf_num },    \
-    nullptr, nullptr, nullptr, 0                                              \
+    nullptr, nullptr, nullptr,                                                \
   }
 
 #define DEFINE_REGISTER_STUB(dwarf_num, str_name) \
@@ -151,10 +151,10 @@ bool ABISysV_arc::IsRegisterFileReduced(RegisterContext &reg_ctx) const {
                                                           /*fail_value*/ 0);
     // RF_BUILD "Number of Entries" bit.
     const uint32_t rf_entries_bit = 1U << 9U;
-    m_is_reg_file_reduced = (reg_value | rf_entries_bit) != 0;
+    m_is_reg_file_reduced = (reg_value & rf_entries_bit) != 0;
   }
 
-  return m_is_reg_file_reduced.getValueOr(false);
+  return m_is_reg_file_reduced.value_or(false);
 }
 
 //------------------------------------------------------------------
@@ -167,15 +167,15 @@ ABISP ABISysV_arc::CreateInstance(ProcessSP process_sp, const ArchSpec &arch) {
       ABISP();
 }
 
-namespace {
-const size_t word_size = 4U;
-const size_t reg_size = word_size;
+static const size_t word_size = 4U;
+static const size_t reg_size = word_size;
 
-inline size_t AugmentArgSize(size_t size_in_bytes) {
+static inline size_t AugmentArgSize(size_t size_in_bytes) {
   return llvm::alignTo(size_in_bytes, word_size);
 }
 
-size_t TotalArgsSizeInWords(const llvm::ArrayRef<ABI::CallArgument> &args) {
+static size_t
+TotalArgsSizeInWords(const llvm::ArrayRef<ABI::CallArgument> &args) {
   size_t total_size = 0;
   for (const auto &arg : args)
     total_size +=
@@ -185,7 +185,6 @@ size_t TotalArgsSizeInWords(const llvm::ArrayRef<ABI::CallArgument> &args) {
 
   return total_size;
 }
-} // namespace
 
 bool ABISysV_arc::PrepareTrivialCall(Thread &thread, addr_t sp,
                                      addr_t func_addr, addr_t return_addr,
@@ -272,7 +271,7 @@ bool ABISysV_arc::PrepareTrivialCall(Thread &thread, addr_t sp, addr_t pc,
         reg_value[byte_index++] = 0;
       }
 
-      RegisterValue reg_val_obj(llvm::makeArrayRef(reg_value, reg_size),
+      RegisterValue reg_val_obj(llvm::ArrayRef(reg_value, reg_size),
                                 eByteOrderLittle);
       if (!reg_ctx->WriteRegister(
             reg_ctx->GetRegisterInfo(eRegisterKindGeneric, reg_index),
@@ -313,13 +312,13 @@ Status ABISysV_arc::SetReturnValueObject(StackFrameSP &frame_sp,
                                          ValueObjectSP &new_value_sp) {
   Status result;
   if (!new_value_sp) {
-    result.SetErrorString("Empty value object for return value.");
+    result = Status::FromErrorString("Empty value object for return value.");
     return result;
   }
 
   CompilerType compiler_type = new_value_sp->GetCompilerType();
   if (!compiler_type) {
-    result.SetErrorString("Null clang type for return value.");
+    result = Status::FromErrorString("Null clang type for return value.");
     return result;
   }
 
@@ -328,7 +327,8 @@ Status ABISysV_arc::SetReturnValueObject(StackFrameSP &frame_sp,
   bool is_signed = false;
   if (!compiler_type.IsIntegerOrEnumerationType(is_signed) &&
       !compiler_type.IsPointerType()) {
-    result.SetErrorString("We don't support returning other types at present");
+    result = Status::FromErrorString(
+        "We don't support returning other types at present");
     return result;
   }
 
@@ -336,7 +336,7 @@ Status ABISysV_arc::SetReturnValueObject(StackFrameSP &frame_sp,
   size_t num_bytes = new_value_sp->GetData(data, result);
 
   if (result.Fail()) {
-    result.SetErrorStringWithFormat(
+    result = Status::FromErrorStringWithFormat(
         "Couldn't convert return value to raw data: %s", result.AsCString());
     return result;
   }
@@ -348,8 +348,8 @@ Status ABISysV_arc::SetReturnValueObject(StackFrameSP &frame_sp,
     auto reg_info =
         reg_ctx.GetRegisterInfo(eRegisterKindGeneric, LLDB_REGNUM_GENERIC_ARG1);
     if (!reg_ctx.WriteRegisterFromUnsigned(reg_info, raw_value)) {
-      result.SetErrorStringWithFormat("Couldn't write value to register %s",
-                                      reg_info->name);
+      result = Status::FromErrorStringWithFormat(
+          "Couldn't write value to register %s", reg_info->name);
       return result;
     }
 
@@ -360,21 +360,20 @@ Status ABISysV_arc::SetReturnValueObject(StackFrameSP &frame_sp,
     reg_info =
         reg_ctx.GetRegisterInfo(eRegisterKindGeneric, LLDB_REGNUM_GENERIC_ARG2);
     if (!reg_ctx.WriteRegisterFromUnsigned(reg_info, raw_value)) {
-      result.SetErrorStringWithFormat("Couldn't write value to register %s",
-                                      reg_info->name);
+      result = Status::FromErrorStringWithFormat(
+          "Couldn't write value to register %s", reg_info->name);
     }
 
     return result;
   }
 
-  result.SetErrorString(
+  result = Status::FromErrorString(
       "We don't support returning large integer values at present.");
   return result;
 }
 
-namespace {
 template <typename T>
-void SetInteger(Scalar &scalar, uint64_t raw_value, bool is_signed) {
+static void SetInteger(Scalar &scalar, uint64_t raw_value, bool is_signed) {
   raw_value &= std::numeric_limits<T>::max();
   if (is_signed)
     scalar = static_cast<typename std::make_signed<T>::type>(raw_value);
@@ -382,8 +381,8 @@ void SetInteger(Scalar &scalar, uint64_t raw_value, bool is_signed) {
     scalar = static_cast<T>(raw_value);
 }
 
-bool SetSizedInteger(Scalar &scalar, uint64_t raw_value, uint8_t size_in_bytes,
-                     bool is_signed) {
+static bool SetSizedInteger(Scalar &scalar, uint64_t raw_value,
+                            uint8_t size_in_bytes, bool is_signed) {
   switch (size_in_bytes) {
   default:
     return false;
@@ -408,7 +407,8 @@ bool SetSizedInteger(Scalar &scalar, uint64_t raw_value, uint8_t size_in_bytes,
   return true;
 }
 
-bool SetSizedFloat(Scalar &scalar, uint64_t raw_value, uint8_t size_in_bytes) {
+static bool SetSizedFloat(Scalar &scalar, uint64_t raw_value,
+                          uint8_t size_in_bytes) {
   switch (size_in_bytes) {
   default:
     return false;
@@ -425,7 +425,8 @@ bool SetSizedFloat(Scalar &scalar, uint64_t raw_value, uint8_t size_in_bytes) {
   return true;
 }
 
-uint64_t ReadRawValue(const RegisterContextSP &reg_ctx, uint8_t size_in_bytes) {
+static uint64_t ReadRawValue(const RegisterContextSP &reg_ctx,
+                             uint8_t size_in_bytes) {
   auto reg_info_r0 =
       reg_ctx->GetRegisterInfo(eRegisterKindGeneric, LLDB_REGNUM_GENERIC_ARG1);
 
@@ -441,7 +442,6 @@ uint64_t ReadRawValue(const RegisterContextSP &reg_ctx, uint8_t size_in_bytes) {
 
   return raw_value;
 }
-} // namespace
 
 ValueObjectSP
 ABISysV_arc::GetReturnValueObjectSimple(Thread &thread,
@@ -459,14 +459,14 @@ ABISysV_arc::GetReturnValueObjectSimple(Thread &thread,
   const uint32_t type_flags = compiler_type.GetTypeInfo();
   // Integer return type.
   if (type_flags & eTypeIsInteger) {
-    const size_t byte_size = compiler_type.GetByteSize(&thread).getValueOr(0);
+    const size_t byte_size = compiler_type.GetByteSize(&thread).value_or(0);
     auto raw_value = ReadRawValue(reg_ctx, byte_size);
 
     const bool is_signed = (type_flags & eTypeIsSigned) != 0;
     if (!SetSizedInteger(value.GetScalar(), raw_value, byte_size, is_signed))
       return ValueObjectSP();
 
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
   }
   // Pointer return type.
   else if (type_flags & eTypeIsPointer) {
@@ -474,7 +474,7 @@ ABISysV_arc::GetReturnValueObjectSimple(Thread &thread,
                                                 LLDB_REGNUM_GENERIC_ARG1);
     value.GetScalar() = reg_ctx->ReadRegisterAsUnsigned(reg_info_r0, 0);
 
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
   }
   // Floating point return type.
   else if (type_flags & eTypeIsFloat) {
@@ -483,7 +483,7 @@ ABISysV_arc::GetReturnValueObjectSimple(Thread &thread,
 
     if (compiler_type.IsFloatingPointType(float_count, is_complex) &&
         1 == float_count && !is_complex) {
-      const size_t byte_size = compiler_type.GetByteSize(&thread).getValueOr(0);
+      const size_t byte_size = compiler_type.GetByteSize(&thread).value_or(0);
       auto raw_value = ReadRawValue(reg_ctx, byte_size);
 
       if (!SetSizedFloat(value.GetScalar(), raw_value, byte_size))
@@ -537,7 +537,7 @@ ValueObjectSP ABISysV_arc::GetReturnValueObjectImpl(Thread &thread,
     auto reg_info_r0 = reg_ctx->GetRegisterInfo(eRegisterKindGeneric,
                                                 LLDB_REGNUM_GENERIC_ARG1);
     value.GetScalar() = reg_ctx->ReadRegisterAsUnsigned(reg_info_r0, 0);
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
   }
   // Floating point return type.
   else if (retType.isFloatingPointTy()) {
@@ -600,18 +600,3 @@ void ABISysV_arc::Initialize() {
 void ABISysV_arc::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
 }
-
-ConstString ABISysV_arc::GetPluginNameStatic() {
-  static ConstString g_name("sysv-arc");
-  return g_name;
-}
-
-//------------------------------------------------------------------
-// PluginInterface protocol
-//------------------------------------------------------------------
-
-ConstString ABISysV_arc::GetPluginName() {
-  return GetPluginNameStatic();
-}
-
-uint32_t ABISysV_arc::GetPluginVersion() { return 1; }

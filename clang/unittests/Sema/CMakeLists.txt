@@ -6,7 +6,10 @@ set(LLVM_LINK_COMPONENTS
 add_clang_unittest(SemaTests
   ExternalSemaSourceTest.cpp
   CodeCompleteTest.cpp
+  HeuristicResolverTest.cpp
   GslOwnerPointerInference.cpp
+  SemaLookupTest.cpp
+  SemaNoloadLookupTest.cpp
   )
 
 clang_target_link_libraries(SemaTests
@@ -18,11 +21,12 @@ clang_target_link_libraries(SemaTests
   clangParse
   clangSema
   clangSerialization
-  clangTesting
   clangTooling
   )
 
 target_link_libraries(SemaTests
   PRIVATE
+  LLVMTestingAnnotations
   LLVMTestingSupport
-)
+  clangTesting
+  )

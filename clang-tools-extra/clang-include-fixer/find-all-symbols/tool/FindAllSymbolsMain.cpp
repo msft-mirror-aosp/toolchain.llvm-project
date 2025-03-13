@@ -89,7 +89,7 @@ bool Merge(llvm::StringRef MergeDir, llvm::StringRef OutputFile) {
 
   // Load all symbol files in MergeDir.
   {
-    llvm::ThreadPool Pool;
+    llvm::DefaultThreadPool Pool;
     for (llvm::sys::fs::directory_iterator Dir(MergeDir, EC), DirEnd;
          Dir != DirEnd && !EC; Dir.increment(EC)) {
       // Parse YAML files in parallel.
@@ -128,7 +128,14 @@ bool Merge(llvm::StringRef MergeDir, llvm::StringRef OutputFile) {
 } // namespace find_all_symbols
 
 int main(int argc, const char **argv) {
-  CommonOptionsParser OptionsParser(argc, argv, FindAllSymbolsCategory);
+  auto ExpectedParser =
+      CommonOptionsParser::create(argc, argv, FindAllSymbolsCategory);
+  if (!ExpectedParser) {
+    llvm::errs() << ExpectedParser.takeError();
+    return 1;
+  }
+
+  CommonOptionsParser &OptionsParser = ExpectedParser.get();
   ClangTool Tool(OptionsParser.getCompilations(),
                  OptionsParser.getSourcePathList());
 

@@ -17,20 +17,17 @@
 #include "TargetInfo/VETargetInfo.h"
 #include "VE.h"
 #include "VEInstrInfo.h"
-#include "VETargetMachine.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
@@ -57,12 +54,14 @@ public:
 
   void emitInstruction(const MachineInstr *MI) override;
 
-  static const char *getRegisterName(unsigned RegNo) {
-    return VEInstPrinter::getRegisterName(RegNo);
+  static const char *getRegisterName(MCRegister Reg) {
+    return VEInstPrinter::getRegisterName(Reg);
   }
   void printOperand(const MachineInstr *MI, int OpNum, raw_ostream &OS);
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                        const char *ExtraCode, raw_ostream &O) override;
+  bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
+                             const char *ExtraCode, raw_ostream &O) override;
 };
 } // end of anonymous namespace
 
@@ -206,7 +205,7 @@ void VEAsmPrinter::lowerGETGOTAndEmitMCInsts(const MachineInstr *MI,
   // lea %got, _GLOBAL_OFFSET_TABLE_@PC_LO(-24)
   // and %got, %got, (32)0
   // sic %plt
-  // lea.sl %got, _GLOBAL_OFFSET_TABLE_@PC_HI(%got, %plt)
+  // lea.sl %got, _GLOBAL_OFFSET_TABLE_@PC_HI(%plt, %got)
   MCOperand cim24 = MCOperand::createImm(-24);
   MCOperand loImm =
       createGOTRelExprOp(VEMCExpr::VK_VE_PC_LO32, GOTLabel, OutContext);
@@ -251,10 +250,10 @@ void VEAsmPrinter::lowerGETFunPLTAndEmitMCInsts(const MachineInstr *MI,
 
   MCOperand RegPLT = MCOperand::createReg(VE::SX16); // PLT
 
-  // lea %dst, %plt_lo(func)(-24)
+  // lea %dst, func@plt_lo(-24)
   // and %dst, %dst, (32)0
   // sic %plt                            ; FIXME: is it safe to use %plt here?
-  // lea.sl %dst, %plt_hi(func)(%dst, %plt)
+  // lea.sl %dst, func@plt_hi(%plt, %dst)
   MCOperand cim24 = MCOperand::createImm(-24);
   MCOperand loImm =
       createGOTRelExprOp(VEMCExpr::VK_VE_PLT_LO32, AddrSym, OutContext);
@@ -298,7 +297,7 @@ void VEAsmPrinter::lowerGETTLSAddrAndEmitMCInsts(const MachineInstr *MI,
   // lea %s0, sym@tls_gd_lo(-24)
   // and %s0, %s0, (32)0
   // sic %lr
-  // lea.sl %s0, sym@tls_gd_hi(%s0, %lr)
+  // lea.sl %s0, sym@tls_gd_hi(%lr, %s0)
   // lea %s12, __tls_get_addr@plt_lo(8)
   // and %s12, %s12, (32)0
   // lea.sl %s12, __tls_get_addr@plt_hi(%s12, %lr)
@@ -325,6 +324,8 @@ void VEAsmPrinter::lowerGETTLSAddrAndEmitMCInsts(const MachineInstr *MI,
 }
 
 void VEAsmPrinter::emitInstruction(const MachineInstr *MI) {
+  VE_MC::verifyInstructionPredicates(MI->getOpcode(),
+                                     getSubtargetInfo().getFeatureBits());
 
   switch (MI->getOpcode()) {
   default:
@@ -360,6 +361,9 @@ void VEAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
   case MachineOperand::MO_Register:
     O << "%" << StringRef(getRegisterName(MO.getReg())).lower();
     break;
+  case MachineOperand::MO_Immediate:
+    O << (int)MO.getImm();
+    break;
   default:
     llvm_unreachable("<unknown operand type>");
   }
@@ -384,6 +388,34 @@ bool VEAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
 
   printOperand(MI, OpNo, O);
 
+  return false;
+}
+
+bool VEAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
+                                         const char *ExtraCode,
+                                         raw_ostream &O) {
+  if (ExtraCode && ExtraCode[0])
+    return true;  // Unknown modifier
+
+  if (MI->getOperand(OpNo+1).isImm() &&
+      MI->getOperand(OpNo+1).getImm() == 0) {
+    // don't print "+0"
+  } else {
+    printOperand(MI, OpNo+1, O);
+  }
+  if (MI->getOperand(OpNo).isImm() &&
+      MI->getOperand(OpNo).getImm() == 0) {
+    if (MI->getOperand(OpNo+1).isImm() &&
+        MI->getOperand(OpNo+1).getImm() == 0) {
+      O << "0";
+    } else {
+      // don't print "(0)"
+    }
+  } else {
+    O << "(";
+    printOperand(MI, OpNo, O);
+    O << ")";
+  }
   return false;
 }
 

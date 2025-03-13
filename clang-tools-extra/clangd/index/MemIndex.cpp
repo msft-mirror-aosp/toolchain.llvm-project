@@ -9,9 +9,8 @@
 #include "MemIndex.h"
 #include "FuzzyMatch.h"
 #include "Quality.h"
-#include "support/Logger.h"
+#include "index/Index.h"
 #include "support/Trace.h"
-#include "clang/Index/IndexSymbol.h"
 
 namespace clang {
 namespace clangd {
@@ -33,7 +32,7 @@ bool MemIndex::fuzzyFind(
   trace::Span Tracer("MemIndex fuzzyFind");
 
   TopN<std::pair<float, const Symbol *>> Top(
-      Req.Limit ? *Req.Limit : std::numeric_limits<size_t>::max());
+      Req.Limit.value_or(std::numeric_limits<size_t>::max()));
   FuzzyMatcher Filter(Req.Query);
   bool More = false;
   for (const auto &Pair : Index) {
@@ -70,8 +69,7 @@ void MemIndex::lookup(const LookupRequest &Req,
 bool MemIndex::refs(const RefsRequest &Req,
                     llvm::function_ref<void(const Ref &)> Callback) const {
   trace::Span Tracer("MemIndex refs");
-  uint32_t Remaining =
-      Req.Limit.getValueOr(std::numeric_limits<uint32_t>::max());
+  uint32_t Remaining = Req.Limit.value_or(std::numeric_limits<uint32_t>::max());
   for (const auto &ReqID : Req.IDs) {
     auto SymRefs = Refs.find(ReqID);
     if (SymRefs == Refs.end())
@@ -88,11 +86,29 @@ bool MemIndex::refs(const RefsRequest &Req,
   return false; // We reported all refs.
 }
 
+bool MemIndex::containedRefs(
+    const ContainedRefsRequest &Req,
+    llvm::function_ref<void(const ContainedRefsResult &)> Callback) const {
+  trace::Span Tracer("MemIndex refersTo");
+  uint32_t Remaining = Req.Limit.value_or(std::numeric_limits<uint32_t>::max());
+  for (const auto &Pair : Refs) {
+    for (const auto &R : Pair.second) {
+      if (!static_cast<int>(ContainedRefsRequest::SupportedRefKinds & R.Kind) ||
+          Req.ID != R.Container)
+        continue;
+      if (Remaining == 0)
+        return true; // More refs were available.
+      --Remaining;
+      Callback({R.Location, R.Kind, Pair.first});
+    }
+  }
+  return false; // We reported all refs.
+}
+
 void MemIndex::relations(
     const RelationsRequest &Req,
     llvm::function_ref<void(const SymbolID &, const Symbol &)> Callback) const {
-  uint32_t Remaining =
-      Req.Limit.getValueOr(std::numeric_limits<uint32_t>::max());
+  uint32_t Remaining = Req.Limit.value_or(std::numeric_limits<uint32_t>::max());
   for (const SymbolID &Subject : Req.Subjects) {
     LookupRequest LookupReq;
     auto It = Relations.find(
@@ -107,6 +123,13 @@ void MemIndex::relations(
     }
     lookup(LookupReq, [&](const Symbol &Object) { Callback(Subject, Object); });
   }
+}
+
+llvm::unique_function<IndexContents(llvm::StringRef) const>
+MemIndex::indexedFiles() const {
+  return [this](llvm::StringRef FileURI) {
+    return Files.contains(FileURI) ? IdxContents : IndexContents::None;
+  };
 }
 
 size_t MemIndex::estimateMemoryUsage() const {

@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "TestDialect.h"
+#include "TestOps.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
@@ -14,6 +14,12 @@ using namespace mlir;
 namespace {
 struct SideEffectsPass
     : public PassWrapper<SideEffectsPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SideEffectsPass)
+
+  StringRef getArgument() const final { return "test-side-effects"; }
+  StringRef getDescription() const final {
+    return "Test side effects interfaces";
+  }
   void runOnOperation() override {
     auto module = getOperation();
 
@@ -22,6 +28,10 @@ struct SideEffectsPass
     module.walk([&](MemoryEffectOpInterface op) {
       effects.clear();
       op.getEffects(effects);
+
+      if (op->hasTrait<OpTrait::IsTerminator>()) {
+        return;
+      }
 
       // Check to see if this operation has any memory effects.
       if (effects.empty()) {
@@ -41,9 +51,14 @@ struct SideEffectsPass
         else if (isa<MemoryEffects::Write>(instance.getEffect()))
           diag << "'write'";
 
-        if (instance.getValue())
-          diag << " on a value,";
-        else if (SymbolRefAttr symbolRef = instance.getSymbolRef())
+        if (instance.getValue()) {
+          if (instance.getEffectValue<OpOperand *>())
+            diag << " on a op operand,";
+          else if (instance.getEffectValue<OpResult>())
+            diag << " on a op result,";
+          else if (instance.getEffectValue<BlockArgument>())
+            diag << " on a block argument,";
+        } else if (SymbolRefAttr symbolRef = instance.getSymbolRef())
           diag << " on a symbol '" << symbolRef << "',";
 
         diag << " on resource '" << instance.getResource()->getName() << "'";
@@ -65,11 +80,8 @@ struct SideEffectsPass
     });
   }
 };
-} // end anonymous namespace
+} // namespace
 
 namespace mlir {
-void registerSideEffectTestPasses() {
-  PassRegistration<SideEffectsPass>("test-side-effects",
-                                    "Test side effects interfaces");
-}
+void registerSideEffectTestPasses() { PassRegistration<SideEffectsPass>(); }
 } // namespace mlir

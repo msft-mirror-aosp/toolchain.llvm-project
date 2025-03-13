@@ -15,6 +15,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
@@ -40,22 +41,33 @@ static const size_t TabStop = 8;
 unsigned SourceMgr::AddIncludeFile(const std::string &Filename,
                                    SMLoc IncludeLoc,
                                    std::string &IncludedFile) {
-  IncludedFile = Filename;
   ErrorOr<std::unique_ptr<MemoryBuffer>> NewBufOrErr =
-      MemoryBuffer::getFile(IncludedFile);
-
-  // If the file didn't exist directly, see if it's in an include path.
-  for (unsigned i = 0, e = IncludeDirectories.size(); i != e && !NewBufOrErr;
-       ++i) {
-    IncludedFile =
-        IncludeDirectories[i] + sys::path::get_separator().data() + Filename;
-    NewBufOrErr = MemoryBuffer::getFile(IncludedFile);
-  }
-
+      OpenIncludeFile(Filename, IncludedFile);
   if (!NewBufOrErr)
     return 0;
 
   return AddNewSourceBuffer(std::move(*NewBufOrErr), IncludeLoc);
+}
+
+ErrorOr<std::unique_ptr<MemoryBuffer>>
+SourceMgr::OpenIncludeFile(const std::string &Filename,
+                           std::string &IncludedFile) {
+  ErrorOr<std::unique_ptr<MemoryBuffer>> NewBufOrErr =
+      MemoryBuffer::getFile(Filename);
+
+  SmallString<64> Buffer(Filename);
+  // If the file didn't exist directly, see if it's in an include path.
+  for (unsigned i = 0, e = IncludeDirectories.size(); i != e && !NewBufOrErr;
+       ++i) {
+    Buffer = IncludeDirectories[i];
+    sys::path::append(Buffer, Filename);
+    NewBufOrErr = MemoryBuffer::getFile(Buffer);
+  }
+
+  if (NewBufOrErr)
+    IncludedFile = static_cast<std::string>(Buffer);
+
+  return NewBufOrErr;
 }
 
 unsigned SourceMgr::FindBufferContainingLoc(SMLoc Loc) const {
@@ -105,7 +117,7 @@ unsigned SourceMgr::SrcBuffer::getLineNumberSpecialized(const char *Ptr) const {
   return llvm::lower_bound(Offsets, PtrOffset) - Offsets.begin() + 1;
 }
 
-/// Look up a given \p Ptr in in the buffer, determining which line it came
+/// Look up a given \p Ptr in the buffer, determining which line it came
 /// from.
 unsigned SourceMgr::SrcBuffer::getLineNumber(const char *Ptr) const {
   size_t Sz = Buffer->getBufferSize();
@@ -267,7 +279,7 @@ SMDiagnostic SourceMgr::GetMessage(SMLoc Loc, SourceMgr::DiagKind Kind,
   SmallVector<std::pair<unsigned, unsigned>, 4> ColRanges;
   std::pair<unsigned, unsigned> LineAndCol;
   StringRef BufferID = "<unknown>";
-  std::string LineStr;
+  StringRef LineStr;
 
   if (Loc.isValid()) {
     unsigned CurBuf = FindBufferContainingLoc(Loc);
@@ -288,12 +300,11 @@ SMDiagnostic SourceMgr::GetMessage(SMLoc Loc, SourceMgr::DiagKind Kind,
     const char *BufEnd = CurMB->getBufferEnd();
     while (LineEnd != BufEnd && LineEnd[0] != '\n' && LineEnd[0] != '\r')
       ++LineEnd;
-    LineStr = std::string(LineStart, LineEnd);
+    LineStr = StringRef(LineStart, LineEnd - LineStart);
 
     // Convert any ranges to column ranges that only intersect the line of the
     // location.
-    for (unsigned i = 0, e = Ranges.size(); i != e; ++i) {
-      SMRange R = Ranges[i];
+    for (SMRange R : Ranges) {
       if (!R.isValid())
         continue;
 
@@ -370,8 +381,8 @@ SMDiagnostic::SMDiagnostic(const SourceMgr &sm, SMLoc L, StringRef FN, int Line,
                            ArrayRef<std::pair<unsigned, unsigned>> Ranges,
                            ArrayRef<SMFixIt> Hints)
     : SM(&sm), Loc(L), Filename(std::string(FN)), LineNo(Line), ColumnNo(Col),
-      Kind(Kind), Message(std::string(Msg)), LineContents(std::string(LineStr)),
-      Ranges(Ranges.vec()), FixIts(Hints.begin(), Hints.end()) {
+      Kind(Kind), Message(Msg), LineContents(LineStr), Ranges(Ranges.vec()),
+      FixIts(Hints) {
   llvm::sort(FixIts);
 }
 
@@ -386,13 +397,12 @@ static void buildFixItLine(std::string &CaretLine, std::string &FixItLine,
 
   size_t PrevHintEndCol = 0;
 
-  for (ArrayRef<SMFixIt>::iterator I = FixIts.begin(), E = FixIts.end(); I != E;
-       ++I) {
+  for (const llvm::SMFixIt &Fixit : FixIts) {
     // If the fixit contains a newline or tab, ignore it.
-    if (I->getText().find_first_of("\n\r\t") != StringRef::npos)
+    if (Fixit.getText().find_first_of("\n\r\t") != StringRef::npos)
       continue;
 
-    SMRange R = I->getRange();
+    SMRange R = Fixit.getRange();
 
     // If the line doesn't contain any part of the range, then ignore it.
     if (R.Start.getPointer() > LineEnd || R.End.getPointer() < LineStart)
@@ -421,16 +431,15 @@ static void buildFixItLine(std::string &CaretLine, std::string &FixItLine,
     // FIXME: This assertion is intended to catch unintended use of multibyte
     // characters in fixits. If we decide to do this, we'll have to track
     // separate byte widths for the source and fixit lines.
-    assert((size_t)sys::locale::columnWidth(I->getText()) ==
-           I->getText().size());
+    assert((size_t)sys::locale::columnWidth(Fixit.getText()) ==
+           Fixit.getText().size());
 
     // This relies on one byte per column in our fixit hints.
-    unsigned LastColumnModified = HintCol + I->getText().size();
+    unsigned LastColumnModified = HintCol + Fixit.getText().size();
     if (LastColumnModified > FixItLine.size())
       FixItLine.resize(LastColumnModified, ' ');
 
-    std::copy(I->getText().begin(), I->getText().end(),
-              FixItLine.begin() + HintCol);
+    llvm::copy(Fixit.getText(), FixItLine.begin() + HintCol);
 
     PrevHintEndCol = LastColumnModified;
 
@@ -473,7 +482,7 @@ static void printSourceLine(raw_ostream &S, StringRef LineContents) {
 static bool isNonASCII(char c) { return c & 0x80; }
 
 void SMDiagnostic::print(const char *ProgName, raw_ostream &OS, bool ShowColors,
-                         bool ShowKindLabel) const {
+                         bool ShowKindLabel, bool ShowLocation) const {
   ColorMode Mode = ShowColors ? ColorMode::Auto : ColorMode::Disable;
 
   {
@@ -482,7 +491,7 @@ void SMDiagnostic::print(const char *ProgName, raw_ostream &OS, bool ShowColors,
     if (ProgName && ProgName[0])
       S << ProgName << ": ";
 
-    if (!Filename.empty()) {
+    if (ShowLocation && !Filename.empty()) {
       if (Filename == "-")
         S << "<stdin>";
       else
@@ -524,7 +533,7 @@ void SMDiagnostic::print(const char *ProgName, raw_ostream &OS, bool ShowColors,
   // map like Clang's TextDiagnostic. For now, we'll just handle tabs by
   // expanding them later, and bail out rather than show incorrect ranges and
   // misaligned fixits for any other odd characters.
-  if (find_if(LineContents, isNonASCII) != LineContents.end()) {
+  if (any_of(LineContents, isNonASCII)) {
     printSourceLine(OS, LineContents);
     return;
   }
@@ -534,18 +543,15 @@ void SMDiagnostic::print(const char *ProgName, raw_ostream &OS, bool ShowColors,
   std::string CaretLine(NumColumns + 1, ' ');
 
   // Expand any ranges.
-  for (unsigned r = 0, e = Ranges.size(); r != e; ++r) {
-    std::pair<unsigned, unsigned> R = Ranges[r];
+  for (const std::pair<unsigned, unsigned> &R : Ranges)
     std::fill(&CaretLine[R.first],
               &CaretLine[std::min((size_t)R.second, CaretLine.size())], '~');
-  }
 
   // Add any fix-its.
   // FIXME: Find the beginning of the line properly for multibyte characters.
   std::string FixItInsertionLine;
-  buildFixItLine(
-      CaretLine, FixItInsertionLine, FixIts,
-      makeArrayRef(Loc.getPointer() - ColumnNo, LineContents.size()));
+  buildFixItLine(CaretLine, FixItInsertionLine, FixIts,
+                 ArrayRef(Loc.getPointer() - ColumnNo, LineContents.size()));
 
   // Finally, plop on the caret.
   if (unsigned(ColumnNo) <= NumColumns)

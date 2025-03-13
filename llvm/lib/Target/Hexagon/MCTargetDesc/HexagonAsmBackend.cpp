@@ -14,16 +14,16 @@
 #include "MCTargetDesc/HexagonMCShuffler.h"
 #include "MCTargetDesc/HexagonMCTargetDesc.h"
 #include "llvm/MC/MCAsmBackend.h"
-#include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCFixupKindInfo.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/EndianStream.h"
-#include "llvm/Support/TargetRegistry.h"
 
 #include <sstream>
 
@@ -50,22 +50,20 @@ class HexagonAsmBackend : public MCAsmBackend {
                           MCInst &HMB) const {
     SmallVector<MCFixup, 4> Fixups;
     SmallString<256> Code;
-    raw_svector_ostream VecOS(Code);
-    E.encodeInstruction(HMB, VecOS, Fixups, *RF.getSubtargetInfo());
+    E.encodeInstruction(HMB, Code, Fixups, *RF.getSubtargetInfo());
 
     // Update the fragment.
     RF.setInst(HMB);
-    RF.getContents() = Code;
+    RF.setContents(Code);
     RF.getFixups() = Fixups;
   }
 
 public:
   HexagonAsmBackend(const Target &T, const Triple &TT, uint8_t OSABI,
                     StringRef CPU)
-      : MCAsmBackend(support::little), OSABI(OSABI), CPU(CPU), relaxedCnt(0),
-        MCII(T.createMCInstrInfo()), RelaxTarget(new MCInst *),
-        Extender(nullptr), MaxPacketSize(HexagonMCInstrInfo::packetSize(CPU))
-        {}
+      : MCAsmBackend(llvm::endianness::little), OSABI(OSABI), CPU(CPU),
+        relaxedCnt(0), MCII(T.createMCInstrInfo()), RelaxTarget(new MCInst *),
+        Extender(nullptr), MaxPacketSize(HexagonMCInstrInfo::packetSize(CPU)) {}
 
   std::unique_ptr<MCObjectTargetWriter>
   createObjectTargetWriter() const override {
@@ -203,7 +201,8 @@ public:
   }
 
   bool shouldForceRelocation(const MCAssembler &Asm, const MCFixup &Fixup,
-                             const MCValue &Target) override {
+                             const MCValue &Target, const uint64_t,
+                             const MCSubtargetInfo *STI) override {
     switch(Fixup.getTargetKind()) {
       default:
         llvm_unreachable("Unknown Fixup Kind!");
@@ -444,7 +443,7 @@ public:
       case fixup_Hexagon_B7_PCREL:
         if (!(isIntN(7, sValue)))
           HandleFixupError(7, 2, (int64_t)FixupValue, "B7_PCREL");
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       case fixup_Hexagon_B7_PCREL_X:
         InstMask = 0x00001f18;  // Word32_B7
         Reloc = (((Value >> 2) & 0x1f) << 8) |    // Value 6-2 = Target 12-8
@@ -454,7 +453,7 @@ public:
       case fixup_Hexagon_B9_PCREL:
         if (!(isIntN(9, sValue)))
           HandleFixupError(9, 2, (int64_t)FixupValue, "B9_PCREL");
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       case fixup_Hexagon_B9_PCREL_X:
         InstMask = 0x003000fe;  // Word32_B9
         Reloc = (((Value >> 7) & 0x3) << 20) |    // Value 8-7 = Target 21-20
@@ -466,7 +465,7 @@ public:
       case fixup_Hexagon_B13_PCREL:
         if (!(isIntN(13, sValue)))
           HandleFixupError(13, 2, (int64_t)FixupValue, "B13_PCREL");
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       case fixup_Hexagon_B13_PCREL_X:
         InstMask = 0x00202ffe;  // Word32_B13
         Reloc = (((Value >> 12) & 0x1) << 21) |    // Value 12   = Target 21
@@ -477,7 +476,7 @@ public:
       case fixup_Hexagon_B15_PCREL:
         if (!(isIntN(15, sValue)))
           HandleFixupError(15, 2, (int64_t)FixupValue, "B15_PCREL");
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       case fixup_Hexagon_B15_PCREL_X:
         InstMask = 0x00df20fe;  // Word32_B15
         Reloc = (((Value >> 13) & 0x3) << 22) |    // Value 14-13 = Target 23-22
@@ -489,7 +488,7 @@ public:
       case fixup_Hexagon_B22_PCREL:
         if (!(isIntN(22, sValue)))
           HandleFixupError(22, 2, (int64_t)FixupValue, "B22_PCREL");
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       case fixup_Hexagon_B22_PCREL_X:
         InstMask = 0x01ff3ffe;  // Word32_B22
         Reloc = (((Value >> 13) & 0x1ff) << 16) |  // Value 21-13 = Target 24-16
@@ -568,10 +567,10 @@ public:
 
   /// fixupNeedsRelaxation - Target specific predicate for whether a given
   /// fixup requires the associated instruction to be relaxed.
-  bool fixupNeedsRelaxationAdvanced(const MCFixup &Fixup, bool Resolved,
+  bool fixupNeedsRelaxationAdvanced(const MCAssembler &Asm,
+                                    const MCFixup &Fixup, bool Resolved,
                                     uint64_t Value,
                                     const MCRelaxableFragment *DF,
-                                    const MCAsmLayout &Layout,
                                     const bool WasForced) const override {
     MCInst const &MCB = DF->getInst();
     assert(HexagonMCInstrInfo::isBundle(MCB));
@@ -587,7 +586,7 @@ public:
       switch (Fixup.getTargetKind()) {
       case fixup_Hexagon_B22_PCREL:
         // GetFixupCount assumes B22 won't relax
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       default:
         return false;
         break;
@@ -598,7 +597,7 @@ public:
         if (HexagonMCInstrInfo::bundleSize(MCB) < HEXAGON_PACKET_SIZE) {
           ++relaxedCnt;
           *RelaxTarget = &MCI;
-          setExtender(Layout.getAssembler().getContext());
+          setExtender(Asm.getContext());
           return true;
         } else {
           return false;
@@ -636,19 +635,12 @@ public:
       if (HexagonMCInstrInfo::bundleSize(MCB) < HEXAGON_PACKET_SIZE) {
         ++relaxedCnt;
         *RelaxTarget = &MCI;
-        setExtender(Layout.getAssembler().getContext());
+        setExtender(Asm.getContext());
         return true;
       }
     }
 
     return false;
-  }
-
-  /// Simple predicate for targets where !Resolved implies requiring relaxation
-  bool fixupNeedsRelaxation(const MCFixup &Fixup, uint64_t Value,
-                            const MCRelaxableFragment *DF,
-                            const MCAsmLayout &Layout) const override {
-    llvm_unreachable("Handled by fixupNeedsRelaxationAdvanced");
   }
 
   void relaxInstruction(MCInst &Inst,
@@ -686,10 +678,11 @@ public:
     assert(Update && "Didn't find relaxation target");
   }
 
-  bool writeNopData(raw_ostream &OS, uint64_t Count) const override {
-    static const uint32_t Nopcode  = 0x7f000000, // Hard-coded NOP.
-                          ParseIn  = 0x00004000, // In packet parse-bits.
-                          ParseEnd = 0x0000c000; // End of packet parse-bits.
+  bool writeNopData(raw_ostream &OS, uint64_t Count,
+                    const MCSubtargetInfo *STI) const override {
+    static const uint32_t Nopcode = 0x7f000000, // Hard-coded NOP.
+        ParseIn = 0x00004000,                   // In packet parse-bits.
+        ParseEnd = 0x0000c000;                  // End of packet parse-bits.
 
     while (Count % HEXAGON_INSTR_SIZE) {
       LLVM_DEBUG(dbgs() << "Alignment not a multiple of the instruction size:"
@@ -709,20 +702,21 @@ public:
     return true;
   }
 
-  void finishLayout(MCAssembler const &Asm,
-                    MCAsmLayout &Layout) const override {
-    for (auto I : Layout.getSectionOrder()) {
-      auto &Fragments = I->getFragmentList();
-      for (auto &J : Fragments) {
-        switch (J.getKind()) {
+  void finishLayout(MCAssembler const &Asm) const override {
+    SmallVector<MCFragment *> Frags;
+    for (MCSection &Sec : Asm) {
+      Frags.clear();
+      for (MCFragment &F : Sec)
+        Frags.push_back(&F);
+      for (size_t J = 0, E = Frags.size(); J != E; ++J) {
+        switch (Frags[J]->getKind()) {
         default:
           break;
         case MCFragment::FT_Align: {
-          auto Size = Asm.computeFragmentSize(Layout, J);
-          for (auto K = J.getIterator();
-               K != Fragments.begin() && Size >= HEXAGON_PACKET_SIZE;) {
+          auto Size = Asm.computeFragmentSize(*Frags[J]);
+          for (auto K = J; K != 0 && Size >= HEXAGON_PACKET_SIZE;) {
             --K;
-            switch (K->getKind()) {
+            switch (Frags[K]->getKind()) {
             default:
               break;
             case MCFragment::FT_Align: {
@@ -732,7 +726,7 @@ public:
             }
             case MCFragment::FT_Relaxable: {
               MCContext &Context = Asm.getContext();
-              auto &RF = cast<MCRelaxableFragment>(*K);
+              auto &RF = cast<MCRelaxableFragment>(*Frags[K]);
               auto &Inst = const_cast<MCInst &>(RF.getInst());
               while (Size > 0 &&
                      HexagonMCInstrInfo::bundleSize(Inst) < MaxPacketSize) {
@@ -753,7 +747,7 @@ public:
               //assert(!Error);
               (void)Error;
               ReplaceInstruction(Asm.getEmitter(), RF, Inst);
-              Layout.invalidateFragmentsFrom(&RF);
+              Sec.setHasLayout(false);
               Size = 0; // Only look back one instruction
               break;
             }

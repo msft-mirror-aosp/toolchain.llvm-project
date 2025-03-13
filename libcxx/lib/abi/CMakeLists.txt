@@ -31,18 +31,23 @@ function(cxx_abi_list_identifier result triple abi_library abi_version unstable 
     list(APPEND abi_properties "noexceptions")
   endif()
   if (${new_delete_in_libcxx})
-    list(APPEND abi_properties "new_in_libcxx")
+    list(APPEND abi_properties "new")
   else()
-    list(APPEND abi_properties "no_new_in_libcxx")
+    list(APPEND abi_properties "nonew")
   endif()
 
   list(JOIN abi_properties "." tmp)
   set(${result} "${tmp}" PARENT_SCOPE)
 endfunction()
 
+if (CMAKE_CXX_COMPILER_TARGET)
+  set(triple "${CMAKE_CXX_COMPILER_TARGET}")
+else()
+  set(triple "${LLVM_DEFAULT_TARGET_TRIPLE}")
+endif()
 cxx_abi_list_identifier(abi_list_identifier
-  "${TARGET_TRIPLE}"
-  "${LIBCXX_CXX_ABI_LIBNAME}"
+  "${triple}"
+  "${LIBCXX_CXX_ABI}"
   "${LIBCXX_ABI_VERSION}"
   "${LIBCXX_ABI_UNSTABLE}"
   "${LIBCXX_ENABLE_EXCEPTIONS}"
@@ -57,7 +62,7 @@ if (TARGET cxx_shared)
       "${Python3_EXECUTABLE}" "${LIBCXX_SOURCE_DIR}/utils/sym_diff.py"
           --only-stdlib-symbols
           --strict "${abi_list_file}"
-          $<TARGET_SONAME_FILE:cxx_shared>
+          $<TARGET_FILE:cxx_shared>
       DEPENDS cxx_shared
       COMMENT "Testing libc++'s exported symbols against the ABI list")
   else()
@@ -67,7 +72,7 @@ if (TARGET cxx_shared)
   add_custom_target(generate-cxx-abilist
     COMMAND "${Python3_EXECUTABLE}" "${LIBCXX_SOURCE_DIR}/utils/generate_abi_list.py"
             --output "${abi_list_file}"
-            "$<TARGET_SONAME_FILE:cxx_shared>"
+            "$<TARGET_FILE:cxx_shared>"
     DEPENDS cxx_shared
     COMMENT "Generating the ABI list file for configuration ${abi_list_identifier}")
 else()

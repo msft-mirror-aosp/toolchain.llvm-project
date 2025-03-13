@@ -230,3 +230,40 @@ namespace within_template_arg_list {
 
   template<int ...N> struct Z { Y<X(N)...> y; };
 }
+
+namespace PR49735 {
+// Ensure that we do not crash when parsing code which looks like an invalid
+// deduction guide declaration.
+template<class> struct B; // expected-note 2{{template is declared here}}
+struct A1 {
+  B() noexcept(false); // expected-error {{deduction guide must be declared in the same scope as template 'PR49735::B'}} \
+                       // expected-error {{deduction guide declaration without trailing return type}}
+};
+
+struct A2 {
+  template <typename Ty>
+  B() noexcept(false); // expected-error {{deduction guide must be declared in the same scope as template 'PR49735::B'}} \
+                       // expected-error {{deduction guide declaration without trailing return type}}
+};
+
+}
+
+namespace GH57495 {
+template <typename T> struct vector{};
+
+void f() {
+  GH57495::vector.d; // expected-error {{cannot use dot operator on a type}}
+}
+}
+
+namespace GH107887 {
+
+namespace a {
+template <class> struct pair; // expected-note 3{{declared here}}
+}
+template <class T2> pair() -> pair<T2>;   // expected-error 2{{no template named 'pair'}} \
+                                          // expected-error {{deduction guide must be declared in the same scope}} \
+                                          // expected-error {{cannot be deduced}} \
+                                          // expected-note {{non-deducible template parameter 'T2'}}
+
+}

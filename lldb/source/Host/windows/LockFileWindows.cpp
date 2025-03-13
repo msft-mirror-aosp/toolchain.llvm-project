@@ -13,12 +13,11 @@
 using namespace lldb;
 using namespace lldb_private;
 
-namespace {
-
-Status fileLock(HANDLE file_handle, DWORD flags, const uint64_t start,
-                const uint64_t len) {
+static Status fileLock(HANDLE file_handle, DWORD flags, const uint64_t start,
+                       const uint64_t len) {
   if (start != 0)
-    return Status("Non-zero start lock regions are not supported");
+    return Status::FromErrorString(
+        "Non-zero start lock regions are not supported");
 
   OVERLAPPED overlapped = {};
 
@@ -32,8 +31,6 @@ Status fileLock(HANDLE file_handle, DWORD flags, const uint64_t start,
 
   return Status();
 }
-
-} // namespace
 
 LockFileWindows::LockFileWindows(int fd)
     : LockFileBase(fd), m_file(reinterpret_cast<HANDLE>(_get_osfhandle(fd))) {}

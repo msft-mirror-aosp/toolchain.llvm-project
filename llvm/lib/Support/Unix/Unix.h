@@ -36,18 +36,12 @@
 #include <unistd.h>
 #endif
 
-#ifdef HAVE_SYS_TIME_H
-# include <sys/time.h>
-#endif
+#include <sys/time.h>
 #include <time.h>
 
-#ifdef HAVE_DLFCN_H
-# include <dlfcn.h>
-#endif
+#include <dlfcn.h>
 
-#ifdef HAVE_FCNTL_H
 # include <fcntl.h>
-#endif
 
 /// This function builds an error message into \p ErrMsg using the \p prefix
 /// string and the Unix error number given by \p errnum. If errnum is -1, the
@@ -67,11 +61,10 @@ static inline bool MakeErrMsg(
 }
 
 // Include StrError(errnum) in a fatal error message.
-LLVM_ATTRIBUTE_NORETURN static inline void ReportErrnumFatal(const char *Msg,
-                                                             int errnum) {
+[[noreturn]] static inline void ReportErrnumFatal(const char *Msg, int errnum) {
   std::string ErrMsg;
   MakeErrMsg(&ErrMsg, Msg, errnum);
-  llvm::report_fatal_error(ErrMsg);
+  llvm::report_fatal_error(llvm::Twine(ErrMsg));
 }
 
 namespace llvm {

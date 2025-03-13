@@ -1,4 +1,4 @@
-// RUN: llvm-mc -arch=amdgcn -mcpu=gfx900 -show-encoding %s | FileCheck --check-prefix=GFX9 %s
+// RUN: llvm-mc -triple=amdgcn -mcpu=gfx900 -show-encoding %s | FileCheck --check-prefix=GFX9 %s
 
 //===----------------------------------------------------------------------===//
 // s_waitcnt
@@ -74,6 +74,30 @@ s_waitcnt vmcnt(62) expcnt(6) lgkmcnt(14)
 // s_sendmsg
 //===----------------------------------------------------------------------===//
 
+s_sendmsg 5
+// GFX9: s_sendmsg sendmsg(MSG_STALL_WAVE_GEN) ; encoding: [0x05,0x00,0x90,0xbf]
+
+s_sendmsg sendmsg(MSG_STALL_WAVE_GEN)
+// GFX9: s_sendmsg sendmsg(MSG_STALL_WAVE_GEN) ; encoding: [0x05,0x00,0x90,0xbf]
+
+s_sendmsg 6
+// GFX9: s_sendmsg sendmsg(MSG_HALT_WAVES) ; encoding: [0x06,0x00,0x90,0xbf]
+
+s_sendmsg sendmsg(MSG_HALT_WAVES)
+// GFX9: s_sendmsg sendmsg(MSG_HALT_WAVES) ; encoding: [0x06,0x00,0x90,0xbf]
+
+s_sendmsg 7
+// GFX9: s_sendmsg sendmsg(MSG_ORDERED_PS_DONE) ; encoding: [0x07,0x00,0x90,0xbf]
+
+s_sendmsg sendmsg(MSG_ORDERED_PS_DONE)
+// GFX9: s_sendmsg sendmsg(MSG_ORDERED_PS_DONE) ; encoding: [0x07,0x00,0x90,0xbf]
+
+s_sendmsg 8
+// GFX9: s_sendmsg sendmsg(MSG_EARLY_PRIM_DEALLOC) ; encoding: [0x08,0x00,0x90,0xbf]
+
+s_sendmsg sendmsg(MSG_EARLY_PRIM_DEALLOC)
+// GFX9: s_sendmsg sendmsg(MSG_EARLY_PRIM_DEALLOC) ; encoding: [0x08,0x00,0x90,0xbf]
+
 s_sendmsg 9
 // GFX9: s_sendmsg sendmsg(MSG_GS_ALLOC_REQ) ; encoding: [0x09,0x00,0x90,0xbf]
 
@@ -85,3 +109,6 @@ s_sendmsg 10
 
 s_sendmsg sendmsg(MSG_GET_DOORBELL)
 // GFX9: s_sendmsg sendmsg(MSG_GET_DOORBELL) ; encoding: [0x0a,0x00,0x90,0xbf]
+
+s_sendmsg sendmsg(15, 3, 0)
+// GFX9: s_sendmsg sendmsg(15, 3, 0) ; encoding: [0x3f,0x00,0x90,0xbf]

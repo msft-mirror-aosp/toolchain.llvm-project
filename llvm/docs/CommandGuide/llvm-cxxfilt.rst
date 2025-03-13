@@ -48,14 +48,18 @@ OPTIONS
 
   Print a summary of command line options.
 
-.. option:: --help-list
+.. option:: --no-params, -p
 
-  Print an uncategorized summary of command line options.
+  Do not demangle function parameters or return types.
 
 .. option:: --no-strip-underscore, -n
 
   Do not strip a leading underscore. This is the default for all platforms
   except Mach-O based hosts.
+
+.. option:: --quote
+
+  Add `"` `"` around demangled names. Do not quote already quoted names.
 
 .. option:: --strip-underscore, -_
 
@@ -64,7 +68,7 @@ OPTIONS
 
 .. option:: --types, -t
 
-  Attempt to demangle names as type names as well as function names.
+  Attempt to demangle names as type names as well as symbol names.
 
 .. option:: --version
 

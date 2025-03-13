@@ -15,11 +15,11 @@
 #ifndef HEADER_INCLUDED
 #define HEADER_INCLUDED
 
-// CHECK-DAG: @a = global i8 1,
-// CHECK-DAG: @b = constant i8 1,
-// CXX11-DAG: @c = constant i8 1,
-// CHECK-DAG: @d = global float 1.000000e+00
-// CHECK-DAG: @e = constant float 1.000000e+00
+// CHECK-DAG: @a ={{.*}} global i8 1,
+// CHECK-DAG: @b ={{.*}} constant i8 1,
+// CXX11-DAG: @c ={{.*}} constant i8 1,
+// CHECK-DAG: @d ={{.*}} global float 1.000000e+00
+// CHECK-DAG: @e ={{.*}} constant float 1.000000e+00
 
 bool a = __builtin_is_constant_evaluated();
 extern const bool b = __builtin_is_constant_evaluated();
@@ -32,15 +32,15 @@ extern const float e = __builtin_is_constant_evaluated();
 void g(...);
 
 // CHECK-LABEL: define {{.*}} @_Z1fv(
-// CHECK:       store i8 0, i8* %[[A:.*]],
-// CHECK:       store i8 1, i8* %[[B:.*]],
-// CXX11:       store i8 1, i8* %[[C:.*]],
-// CHECK:       store float 0.000000e+00, float* %[[D:.*]],
-// CHECK:       store float 0.000000e+00, float* %[[E:.*]],
-// CHECK:       load i8, i8* %[[A]],
-// CHECK:       call {{.*}} @_Z1gz(i32 %{{[^,]+}}, i32 1
-// CXX11-SAME:  , i32 1
-// CHECK-SAME:  , double %{{[^,]+}}, double 0.000000e+00)
+// CHECK:       store i8 0, ptr %[[A:.*]],
+// CHECK:       store i8 1, ptr %[[B:.*]],
+// CXX11:       store i8 1, ptr %[[C:.*]],
+// CHECK:       store float 0.000000e+00, ptr %[[D:.*]],
+// CHECK:       store float 0.000000e+00, ptr %[[E:.*]],
+// CHECK:       load i8, ptr %[[A]],
+// CHECK:       call {{.*}} @_Z1gz(i32 noundef %{{[^,]+}}, i32 noundef 1
+// CXX11-SAME:  , i32 noundef 1
+// CHECK-SAME:  , double noundef %{{[^,]+}}, double noundef 0.000000e+00)
 void f() {
   bool a = __builtin_is_constant_evaluated();
   const bool b = __builtin_is_constant_evaluated();

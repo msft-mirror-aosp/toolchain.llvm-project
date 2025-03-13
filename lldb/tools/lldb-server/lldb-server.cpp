@@ -7,8 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "SystemInitializerLLGS.h"
+#include "lldb/Host/Config.h"
 #include "lldb/Initialization/SystemLifetimeManager.h"
-#include "lldb/lldb-private.h"
+#include "lldb/Version/Version.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -17,8 +18,8 @@
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
 
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdio>
+#include <cstdlib>
 
 static llvm::ManagedStatic<lldb_private::SystemLifetimeManager>
     g_debugger_lifetime;
@@ -50,9 +51,8 @@ static void terminate_debugger() { g_debugger_lifetime->Terminate(); }
 // main
 int main(int argc, char *argv[]) {
   llvm::InitLLVM IL(argc, argv, /*InstallPipeSignalExitHandler=*/false);
-  llvm::StringRef ToolName = argv[0];
-  llvm::sys::PrintStackTraceOnErrorSignal(ToolName);
-  llvm::PrettyStackTraceProgram X(argc, argv);
+  llvm::setBugReportMsg("PLEASE submit a bug report to " LLDB_BUG_REPORT_URL
+                        " and include the crash backtrace.\n");
 
   int option_error = 0;
   const char *progname = argv[0];

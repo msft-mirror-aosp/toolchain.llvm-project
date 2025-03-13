@@ -8,7 +8,7 @@
 
 #include "NativeThreadLinux.h"
 
-#include <signal.h>
+#include <csignal>
 #include <sstream>
 
 #include "NativeProcessLinux.h"
@@ -19,6 +19,7 @@
 #include "lldb/Host/linux/Ptrace.h"
 #include "lldb/Host/linux/Support.h"
 #include "lldb/Utility/LLDBAssert.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/State.h"
 #include "lldb/lldb-enumerations.h"
@@ -26,6 +27,7 @@
 #include "llvm/ADT/SmallString.h"
 
 #include "Plugins/Process/POSIX/CrashReason.h"
+#include "Plugins/Process/Utility/MemoryTagManagerAArch64MTE.h"
 
 #include <sys/syscall.h>
 // Try to define a macro to encapsulate the tgkill syscall
@@ -46,19 +48,19 @@ void LogThreadStopInfo(Log &log, const ThreadStopInfo &stop_info,
     return;
   case eStopReasonTrace:
     log.Printf("%s: %s trace, stopping signal 0x%" PRIx32, __FUNCTION__, header,
-               stop_info.details.signal.signo);
+               stop_info.signo);
     return;
   case eStopReasonBreakpoint:
     log.Printf("%s: %s breakpoint, stopping signal 0x%" PRIx32, __FUNCTION__,
-               header, stop_info.details.signal.signo);
+               header, stop_info.signo);
     return;
   case eStopReasonWatchpoint:
     log.Printf("%s: %s watchpoint, stopping signal 0x%" PRIx32, __FUNCTION__,
-               header, stop_info.details.signal.signo);
+               header, stop_info.signo);
     return;
   case eStopReasonSignal:
     log.Printf("%s: %s signal 0x%02" PRIx32, __FUNCTION__, header,
-               stop_info.details.signal.signo);
+               stop_info.signo);
     return;
   case eStopReasonException:
     log.Printf("%s: %s exception type 0x%02" PRIx64, __FUNCTION__, header,
@@ -66,7 +68,7 @@ void LogThreadStopInfo(Log &log, const ThreadStopInfo &stop_info,
     return;
   case eStopReasonExec:
     log.Printf("%s: %s exec, stopping signal 0x%" PRIx32, __FUNCTION__, header,
-               stop_info.details.signal.signo);
+               stop_info.signo);
     return;
   case eStopReasonPlanComplete:
     log.Printf("%s: %s plan complete", __FUNCTION__, header);
@@ -76,6 +78,9 @@ void LogThreadStopInfo(Log &log, const ThreadStopInfo &stop_info,
     return;
   case eStopReasonInstrumentation:
     log.Printf("%s: %s instrumentation", __FUNCTION__, header);
+    return;
+  case eStopReasonProcessorTrace:
+    log.Printf("%s: %s processor trace", __FUNCTION__, header);
     return;
   default:
     log.Printf("%s: %s invalid stop reason %" PRIu32, __FUNCTION__, header,
@@ -106,7 +111,7 @@ lldb::StateType NativeThreadLinux::GetState() { return m_state; }
 
 bool NativeThreadLinux::GetStopReason(ThreadStopInfo &stop_info,
                                       std::string &description) {
-  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
+  Log *log = GetLog(LLDBLog::Thread);
 
   description.clear();
 
@@ -146,7 +151,7 @@ bool NativeThreadLinux::GetStopReason(ThreadStopInfo &stop_info,
 Status NativeThreadLinux::SetWatchpoint(lldb::addr_t addr, size_t size,
                                         uint32_t watch_flags, bool hardware) {
   if (!hardware)
-    return Status("not implemented");
+    return Status::FromErrorString("not implemented");
   if (m_state == eStateLaunching)
     return Status();
   Status error = RemoveWatchpoint(addr);
@@ -155,7 +160,7 @@ Status NativeThreadLinux::SetWatchpoint(lldb::addr_t addr, size_t size,
   uint32_t wp_index =
       m_reg_context_up->SetHardwareWatchpoint(addr, size, watch_flags);
   if (wp_index == LLDB_INVALID_INDEX32)
-    return Status("Setting hardware watchpoint failed.");
+    return Status::FromErrorString("Setting hardware watchpoint failed.");
   m_watchpoint_index_map.insert({addr, wp_index});
   return Status();
 }
@@ -168,7 +173,7 @@ Status NativeThreadLinux::RemoveWatchpoint(lldb::addr_t addr) {
   m_watchpoint_index_map.erase(wp);
   if (m_reg_context_up->ClearHardwareWatchpoint(wp_index))
     return Status();
-  return Status("Clearing hardware watchpoint failed.");
+  return Status::FromErrorString("Clearing hardware watchpoint failed.");
 }
 
 Status NativeThreadLinux::SetHardwareBreakpoint(lldb::addr_t addr,
@@ -183,7 +188,7 @@ Status NativeThreadLinux::SetHardwareBreakpoint(lldb::addr_t addr,
   uint32_t bp_index = m_reg_context_up->SetHardwareBreakpoint(addr, size);
 
   if (bp_index == LLDB_INVALID_INDEX32)
-    return Status("Setting hardware breakpoint failed.");
+    return Status::FromErrorString("Setting hardware breakpoint failed.");
 
   m_hw_break_index_map.insert({addr, bp_index});
   return Status();
@@ -200,7 +205,7 @@ Status NativeThreadLinux::RemoveHardwareBreakpoint(lldb::addr_t addr) {
     return Status();
   }
 
-  return Status("Clearing hardware breakpoint failed.");
+  return Status::FromErrorString("Clearing hardware breakpoint failed.");
 }
 
 Status NativeThreadLinux::Resume(uint32_t signo) {
@@ -273,14 +278,14 @@ Status NativeThreadLinux::SingleStep(uint32_t signo) {
 
 void NativeThreadLinux::SetStoppedBySignal(uint32_t signo,
                                            const siginfo_t *info) {
-  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
+  Log *log = GetLog(LLDBLog::Thread);
   LLDB_LOGF(log, "NativeThreadLinux::%s called with signal 0x%02" PRIx32,
             __FUNCTION__, signo);
 
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonSignal;
-  m_stop_info.details.signal.signo = signo;
+  m_stop_info.signo = signo;
 
   m_stop_description.clear();
   if (info) {
@@ -289,16 +294,68 @@ void NativeThreadLinux::SetStoppedBySignal(uint32_t signo,
     case SIGBUS:
     case SIGFPE:
     case SIGILL:
-      // In case of MIPS64 target, SI_KERNEL is generated for invalid 64bit
-      // address.
-      const auto reason =
-          (info->si_signo == SIGBUS && info->si_code == SI_KERNEL)
-              ? CrashReason::eInvalidAddress
-              : GetCrashReason(*info);
-      m_stop_description = GetCrashReasonString(reason, *info);
+      m_stop_description = GetCrashReasonString(*info);
+#ifndef SEGV_MTESERR
+#define SEGV_MTESERR 9
+#endif
+      if (info->si_signo == SIGSEGV && info->si_code == SEGV_MTESERR)
+        AnnotateSyncTagCheckFault(
+            reinterpret_cast<lldb::addr_t>(info->si_addr));
       break;
     }
   }
+}
+
+void NativeThreadLinux::AnnotateSyncTagCheckFault(lldb::addr_t fault_addr) {
+  int32_t allocation_tag_type = 0;
+  switch (GetProcess().GetArchitecture().GetMachine()) {
+  // aarch64_32 deliberately not here because there's no 32 bit MTE
+  case llvm::Triple::aarch64:
+  case llvm::Triple::aarch64_be:
+    allocation_tag_type = MemoryTagManagerAArch64MTE::eMTE_allocation;
+    break;
+  default:
+    return;
+  }
+
+  auto details =
+      GetRegisterContext().GetMemoryTaggingDetails(allocation_tag_type);
+  if (!details) {
+    llvm::consumeError(details.takeError());
+    return;
+  }
+
+  // We assume that the stop description is currently:
+  // signal SIGSEGV: sync tag check fault (fault address=<addr>)
+  // Remove the closing )
+  m_stop_description.pop_back();
+
+  std::stringstream ss;
+  std::unique_ptr<MemoryTagManager> manager(std::move(details->manager));
+
+  ss << " logical tag=0x" << std::hex << manager->GetLogicalTag(fault_addr);
+
+  std::vector<uint8_t> allocation_tag_data;
+  // The fault address may not be granule aligned. ReadMemoryTags will granule
+  // align any range you give it, potentially making it larger.
+  // To prevent this set len to 1. This always results in a range that is at
+  // most 1 granule in size and includes fault_addr.
+  Status status = GetProcess().ReadMemoryTags(allocation_tag_type, fault_addr,
+                                              1, allocation_tag_data);
+
+  if (status.Success()) {
+    llvm::Expected<std::vector<lldb::addr_t>> allocation_tag =
+        manager->UnpackTagsData(allocation_tag_data, 1);
+    if (allocation_tag) {
+      ss << " allocation tag=0x" << std::hex << allocation_tag->front() << ")";
+    } else {
+      llvm::consumeError(allocation_tag.takeError());
+      ss << ")";
+    }
+  } else
+    ss << ")";
+
+  m_stop_description += ss.str();
 }
 
 bool NativeThreadLinux::IsStopped(int *signo) {
@@ -308,7 +365,7 @@ bool NativeThreadLinux::IsStopped(int *signo) {
   // If we are stopped by a signal, return the signo.
   if (signo && m_state == StateType::eStateStopped &&
       m_stop_info.reason == StopReason::eStopReasonSignal) {
-    *signo = m_stop_info.details.signal.signo;
+    *signo = m_stop_info.signo;
   }
 
   // Regardless, we are stopped.
@@ -329,20 +386,20 @@ void NativeThreadLinux::SetStopped() {
 }
 
 void NativeThreadLinux::SetStoppedByExec() {
-  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
+  Log *log = GetLog(LLDBLog::Thread);
   LLDB_LOGF(log, "NativeThreadLinux::%s()", __FUNCTION__);
 
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonExec;
-  m_stop_info.details.signal.signo = SIGSTOP;
+  m_stop_info.signo = SIGSTOP;
 }
 
 void NativeThreadLinux::SetStoppedByBreakpoint() {
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonBreakpoint;
-  m_stop_info.details.signal.signo = SIGTRAP;
+  m_stop_info.signo = SIGTRAP;
   m_stop_description.clear();
 }
 
@@ -371,7 +428,7 @@ void NativeThreadLinux::SetStoppedByWatchpoint(uint32_t wp_index) {
   m_stop_description = ostr.str();
 
   m_stop_info.reason = StopReason::eStopReasonWatchpoint;
-  m_stop_info.details.signal.signo = SIGTRAP;
+  m_stop_info.signo = SIGTRAP;
 }
 
 bool NativeThreadLinux::IsStoppedAtBreakpoint() {
@@ -388,14 +445,43 @@ void NativeThreadLinux::SetStoppedByTrace() {
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonTrace;
-  m_stop_info.details.signal.signo = SIGTRAP;
+  m_stop_info.signo = SIGTRAP;
+}
+
+void NativeThreadLinux::SetStoppedByFork(bool is_vfork, lldb::pid_t child_pid) {
+  SetStopped();
+
+  m_stop_info.reason =
+      is_vfork ? StopReason::eStopReasonVFork : StopReason::eStopReasonFork;
+  m_stop_info.signo = SIGTRAP;
+  m_stop_info.details.fork.child_pid = child_pid;
+  m_stop_info.details.fork.child_tid = child_pid;
+  m_stop_description = std::to_string(child_pid);
+  m_stop_description += " ";
+  m_stop_description += std::to_string(child_pid);
+}
+
+void NativeThreadLinux::SetStoppedByVForkDone() {
+  SetStopped();
+
+  m_stop_info.reason = StopReason::eStopReasonVForkDone;
+  m_stop_info.signo = SIGTRAP;
 }
 
 void NativeThreadLinux::SetStoppedWithNoReason() {
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonNone;
-  m_stop_info.details.signal.signo = 0;
+  m_stop_info.signo = 0;
+}
+
+void NativeThreadLinux::SetStoppedByProcessorTrace(
+    llvm::StringRef description) {
+  SetStopped();
+
+  m_stop_info.reason = StopReason::eStopReasonProcessorTrace;
+  m_stop_info.signo = 0;
+  m_stop_description = description.str();
 }
 
 void NativeThreadLinux::SetExited() {
@@ -407,7 +493,7 @@ void NativeThreadLinux::SetExited() {
 }
 
 Status NativeThreadLinux::RequestStop() {
-  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
+  Log *log = GetLog(LLDBLog::Thread);
 
   NativeProcessLinux &process = GetProcess();
 
@@ -422,7 +508,7 @@ Status NativeThreadLinux::RequestStop() {
   Status err;
   errno = 0;
   if (::tgkill(pid, tid, SIGSTOP) != 0) {
-    err.SetErrorToErrno();
+    err = Status::FromErrno();
     LLDB_LOGF(log,
               "NativeThreadLinux::%s tgkill(%" PRIu64 ", %" PRIu64
               ", SIGSTOP) failed: %s",
@@ -433,7 +519,7 @@ Status NativeThreadLinux::RequestStop() {
 }
 
 void NativeThreadLinux::MaybeLogStateChange(lldb::StateType new_state) {
-  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
+  Log *log = GetLog(LLDBLog::Thread);
   // If we're not logging, we're done.
   if (!log)
     return;
@@ -449,4 +535,19 @@ void NativeThreadLinux::MaybeLogStateChange(lldb::StateType new_state) {
 
 NativeProcessLinux &NativeThreadLinux::GetProcess() {
   return static_cast<NativeProcessLinux &>(m_process);
+}
+
+const NativeProcessLinux &NativeThreadLinux::GetProcess() const {
+  return static_cast<const NativeProcessLinux &>(m_process);
+}
+
+llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
+NativeThreadLinux::GetSiginfo() const {
+  auto siginfo_buf =
+      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(sizeof(siginfo_t));
+  Status error =
+      GetProcess().GetSignalInfo(GetID(), siginfo_buf->getBufferStart());
+  if (!error.Success())
+    return error.ToError();
+  return std::move(siginfo_buf);
 }

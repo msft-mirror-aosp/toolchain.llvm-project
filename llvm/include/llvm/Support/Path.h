@@ -19,13 +19,34 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/Support/DataTypes.h"
 #include <iterator>
-#include <system_error>
 
 namespace llvm {
 namespace sys {
 namespace path {
 
-enum class Style { windows, posix, native };
+enum class Style {
+  native,
+  posix,
+  windows_slash,
+  windows_backslash,
+  windows = windows_backslash, // deprecated
+};
+
+/// Check if \p S uses POSIX path rules.
+constexpr bool is_style_posix(Style S) {
+  if (S == Style::posix)
+    return true;
+  if (S != Style::native)
+    return false;
+#if defined(_WIN32)
+  return false;
+#else
+  return true;
+#endif
+}
+
+/// Check if \p S uses Windows path rules.
+constexpr bool is_style_windows(Style S) { return !is_style_posix(S); }
 
 /// @name Lexical Component Iterator
 /// @{
@@ -98,22 +119,24 @@ public:
 /// Get begin iterator over \a path.
 /// @param path Input path.
 /// @returns Iterator initialized with the first component of \a path.
-const_iterator begin(StringRef path, Style style = Style::native);
+const_iterator begin(StringRef path LLVM_LIFETIME_BOUND,
+                     Style style = Style::native);
 
 /// Get end iterator over \a path.
 /// @param path Input path.
 /// @returns Iterator initialized to the end of \a path.
-const_iterator end(StringRef path);
+const_iterator end(StringRef path LLVM_LIFETIME_BOUND);
 
 /// Get reverse begin iterator over \a path.
 /// @param path Input path.
 /// @returns Iterator initialized with the first reverse component of \a path.
-reverse_iterator rbegin(StringRef path, Style style = Style::native);
+reverse_iterator rbegin(StringRef path LLVM_LIFETIME_BOUND,
+                        Style style = Style::native);
 
 /// Get reverse end iterator over \a path.
 /// @param path Input path.
 /// @returns Iterator initialized to the reverse end of \a path.
-reverse_iterator rend(StringRef path);
+reverse_iterator rend(StringRef path LLVM_LIFETIME_BOUND);
 
 /// @}
 /// @name Lexical Modifiers
@@ -174,6 +197,22 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path, StringRef OldPrefix,
                          StringRef NewPrefix,
                          Style style = Style::native);
 
+/// Remove redundant leading "./" pieces and consecutive separators.
+///
+/// @param path Input path.
+/// @result The cleaned-up \a path.
+StringRef remove_leading_dotslash(StringRef path LLVM_LIFETIME_BOUND,
+                                  Style style = Style::native);
+
+/// In-place remove any './' and optionally '../' components from a path.
+///
+/// @param path processed path
+/// @param remove_dot_dot specify if '../' (except for leading "../") should be
+/// removed
+/// @result True if path was changed
+bool remove_dots(SmallVectorImpl<char> &path, bool remove_dot_dot = false,
+                 Style style = Style::native);
+
 /// Append to path.
 ///
 /// @code
@@ -212,7 +251,7 @@ void append(SmallVectorImpl<char> &path, const_iterator begin,
 
 /// Convert path to the native form. This is used to give paths to users and
 /// operating system calls in the platform's normal way. For example, on Windows
-/// all '/' are converted to '\'.
+/// all '/' are converted to '\'. On Unix, it converts all '\' to '/'.
 ///
 /// @param path A path that is transformed to native format.
 /// @param result Holds the result of the transformation.
@@ -225,6 +264,17 @@ void native(const Twine &path, SmallVectorImpl<char> &result,
 ///
 /// @param path A path that is transformed to native format.
 void native(SmallVectorImpl<char> &path, Style style = Style::native);
+
+/// For Windows path styles, convert path to use the preferred path separators.
+/// For other styles, do nothing.
+///
+/// @param path A path that is transformed to preferred format.
+inline void make_preferred(SmallVectorImpl<char> &path,
+                           Style style = Style::native) {
+  if (!is_style_windows(style))
+    return;
+  native(path, style);
+}
 
 /// Replaces backslashes with slashes if Windows.
 ///
@@ -248,7 +298,8 @@ std::string convert_to_slash(StringRef path, Style style = Style::native);
 ///
 /// @param path Input path.
 /// @result The root name of \a path if it has one, otherwise "".
-StringRef root_name(StringRef path, Style style = Style::native);
+StringRef root_name(StringRef path LLVM_LIFETIME_BOUND,
+                    Style style = Style::native);
 
 /// Get root directory.
 ///
@@ -261,7 +312,8 @@ StringRef root_name(StringRef path, Style style = Style::native);
 /// @param path Input path.
 /// @result The root directory of \a path if it has one, otherwise
 ///               "".
-StringRef root_directory(StringRef path, Style style = Style::native);
+StringRef root_directory(StringRef path LLVM_LIFETIME_BOUND,
+                         Style style = Style::native);
 
 /// Get root path.
 ///
@@ -269,7 +321,8 @@ StringRef root_directory(StringRef path, Style style = Style::native);
 ///
 /// @param path Input path.
 /// @result The root path of \a path if it has one, otherwise "".
-StringRef root_path(StringRef path, Style style = Style::native);
+StringRef root_path(StringRef path LLVM_LIFETIME_BOUND,
+                    Style style = Style::native);
 
 /// Get relative path.
 ///
@@ -281,7 +334,8 @@ StringRef root_path(StringRef path, Style style = Style::native);
 ///
 /// @param path Input path.
 /// @result The path starting after root_path if one exists, otherwise "".
-StringRef relative_path(StringRef path, Style style = Style::native);
+StringRef relative_path(StringRef path LLVM_LIFETIME_BOUND,
+                        Style style = Style::native);
 
 /// Get parent path.
 ///
@@ -293,7 +347,8 @@ StringRef relative_path(StringRef path, Style style = Style::native);
 ///
 /// @param path Input path.
 /// @result The parent path of \a path if one exists, otherwise "".
-StringRef parent_path(StringRef path, Style style = Style::native);
+StringRef parent_path(StringRef path LLVM_LIFETIME_BOUND,
+                      Style style = Style::native);
 
 /// Get filename.
 ///
@@ -307,7 +362,8 @@ StringRef parent_path(StringRef path, Style style = Style::native);
 /// @param path Input path.
 /// @result The filename part of \a path. This is defined as the last component
 ///         of \a path. Similar to the POSIX "basename" utility.
-StringRef filename(StringRef path, Style style = Style::native);
+StringRef filename(StringRef path LLVM_LIFETIME_BOUND,
+                   Style style = Style::native);
 
 /// Get stem.
 ///
@@ -325,7 +381,7 @@ StringRef filename(StringRef path, Style style = Style::native);
 ///
 /// @param path Input path.
 /// @result The stem of \a path.
-StringRef stem(StringRef path, Style style = Style::native);
+StringRef stem(StringRef path LLVM_LIFETIME_BOUND, Style style = Style::native);
 
 /// Get extension.
 ///
@@ -341,7 +397,8 @@ StringRef stem(StringRef path, Style style = Style::native);
 ///
 /// @param path Input path.
 /// @result The extension of \a path.
-StringRef extension(StringRef path, Style style = Style::native);
+StringRef extension(StringRef path LLVM_LIFETIME_BOUND,
+                    Style style = Style::native);
 
 /// Check whether the given char is a path separator on the host OS.
 ///
@@ -498,21 +555,6 @@ bool is_absolute_gnu(const Twine &path, Style style = Style::native);
 /// @param path Input path.
 /// @result True if the path is relative, false if it is not.
 bool is_relative(const Twine &path, Style style = Style::native);
-
-/// Remove redundant leading "./" pieces and consecutive separators.
-///
-/// @param path Input path.
-/// @result The cleaned-up \a path.
-StringRef remove_leading_dotslash(StringRef path, Style style = Style::native);
-
-/// In-place remove any './' and optionally '../' components from a path.
-///
-/// @param path processed path
-/// @param remove_dot_dot specify if '../' (except for leading "../") should be
-/// removed
-/// @result True if path was changed
-bool remove_dots(SmallVectorImpl<char> &path, bool remove_dot_dot = false,
-                 Style style = Style::native);
 
 } // end namespace path
 } // end namespace sys

@@ -7,8 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestFS.h"
-#include "TestTU.h"
-#include "TweakTesting.h"
 #include "refactor/Tweak.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticIDs.h"
@@ -18,11 +16,8 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
-#include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
-#include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -53,7 +48,7 @@ TEST(FileEdits, AbsolutePath) {
   SourceManager SM(DE, FM);
 
   for (const auto *Path : RelPaths) {
-    auto FID = SM.createFileID(*FM.getFile(Path), SourceLocation(),
+    auto FID = SM.createFileID(*FM.getOptionalFileRef(Path), SourceLocation(),
                                clang::SrcMgr::C_User);
     auto Res = Tweak::Effect::fileEdit(SM, FID, tooling::Replacements());
     ASSERT_THAT_EXPECTED(Res, llvm::Succeeded());

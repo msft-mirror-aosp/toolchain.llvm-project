@@ -14,8 +14,10 @@ following types of bugs:
 
 * Out-of-bounds accesses to heap, stack and globals
 * Use-after-free
-* Use-after-return (runtime flag `ASAN_OPTIONS=detect_stack_use_after_return=1`)
-* Use-after-scope (clang flag `-fsanitize-address-use-after-scope`)
+* Use-after-return (clang flag ``-fsanitize-address-use-after-return=(never|runtime|always)`` default: ``runtime``)
+    * Enable with: ``ASAN_OPTIONS=detect_stack_use_after_return=1`` (already enabled on Linux).
+    * Disable with: ``ASAN_OPTIONS=detect_stack_use_after_return=0``.
+* Use-after-scope (clang flag ``-fsanitize-address-use-after-scope``)
 * Double-free, invalid free
 * Memory leaks (experimental)
 
@@ -24,7 +26,13 @@ Typical slowdown introduced by AddressSanitizer is **2x**.
 How to build
 ============
 
-Build LLVM/Clang with `CMake <https://llvm.org/docs/CMake.html>`_.
+Build LLVM/Clang with `CMake <https://llvm.org/docs/CMake.html>`_ and enable
+the ``compiler-rt`` runtime. An example CMake configuration that will allow
+for the use/testing of AddressSanitizer:
+
+.. code-block:: console
+
+   $ cmake -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="clang" -DLLVM_ENABLE_RUNTIMES="compiler-rt" <path to source>/llvm
 
 Usage
 =====
@@ -136,6 +144,26 @@ you should set environment variable
 
 Note that this option is not supported on macOS.
 
+Stack Use After Return (UAR)
+----------------------------
+
+AddressSanitizer can optionally detect stack use after return problems.
+This is available by default, or explicitly
+(``-fsanitize-address-use-after-return=runtime``).
+To disable this check at runtime, set the environment variable
+``ASAN_OPTIONS=detect_stack_use_after_return=0``.
+
+Enabling this check (``-fsanitize-address-use-after-return=always``) will
+reduce code size.  The code size may be reduced further by completely
+eliminating this check (``-fsanitize-address-use-after-return=never``).
+
+To summarize: ``-fsanitize-address-use-after-return=<mode>``
+  * ``never``: Completely disables detection of UAR errors (reduces code size).
+  * ``runtime``: Adds the code for detection, but it can be disable via the
+    runtime environment (``ASAN_OPTIONS=detect_stack_use_after_return=0``).
+  * ``always``: Enables detection of UAR errors in all cases. (reduces code
+    size, but not as much as ``never``).
+
 Memory leak detection
 ---------------------
 
@@ -208,8 +236,14 @@ compilers, so we suggest to use it together with
 The same attribute used on a global variable prevents AddressSanitizer
 from adding redzones around it and detecting out of bounds accesses.
 
-Suppressing Errors in Recompiled Code (Blacklist)
--------------------------------------------------
+
+AddressSanitizer also supports
+``__attribute__((disable_sanitizer_instrumentation))``. This attribute
+works similar to ``__attribute__((no_sanitize("address")))``, but it also
+prevents instrumentation performed by other sanitizers.
+
+Suppressing Errors in Recompiled Code (Ignorelist)
+--------------------------------------------------
 
 AddressSanitizer supports ``src`` and ``fun`` entity types in
 :doc:`SanitizerSpecialCaseList`, that can be used to suppress error reports
@@ -255,6 +289,18 @@ library name in the symbolized stack trace of the leak report. See
 <https://github.com/google/sanitizers/wiki/AddressSanitizerLeakSanitizer#suppressions>`_
 for more details.
 
+Code generation control
+=======================
+
+Instrumentation code outlining
+------------------------------
+
+By default AddressSanitizer inlines the instrumentation code to improve the
+run-time performance, which leads to increased binary size. Using the
+(clang flag ``-fsanitize-address-outline-instrumentation` default: ``false``)
+flag forces all code instrumentation to be outlined, which reduces the size
+of the generated code, but also reduces the run-time performance.
+
 Limitations
 ===========
 
@@ -267,20 +313,26 @@ Limitations
   usually expected.
 * Static linking of executables is not supported.
 
+Security Considerations
+=======================
+
+AddressSanitizer is a bug detection tool and its runtime is not meant to be
+linked against production executables. While it may be useful for testing,
+AddressSanitizer's runtime was not developed with security-sensitive
+constraints in mind and may compromise the security of the resulting executable.
+
 Supported Platforms
 ===================
 
 AddressSanitizer is supported on:
 
-* Linux i386/x86\_64 (tested on Ubuntu 12.04)
-* macOS 10.7 - 10.11 (i386/x86\_64)
+* Linux
+* macOS
 * iOS Simulator
-* Android ARM
-* NetBSD i386/x86\_64
-* FreeBSD i386/x86\_64 (tested on FreeBSD 11-current)
-* Windows 8.1+ (i386/x86\_64)
-
-Ports to various other platforms are in progress.
+* Android
+* NetBSD
+* FreeBSD
+* Windows 8.1+
 
 Current Status
 ==============

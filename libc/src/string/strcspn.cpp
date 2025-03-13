@@ -9,12 +9,13 @@
 #include "src/string/strcspn.h"
 
 #include "src/__support/common.h"
+#include "src/__support/macros/config.h"
 #include "src/string/string_utils.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
-size_t LLVM_LIBC_ENTRYPOINT(strcspn)(const char *src, const char *segment) {
+LLVM_LIBC_FUNCTION(size_t, strcspn, (const char *src, const char *segment)) {
   return internal::complementary_span(src, segment);
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

@@ -16,17 +16,7 @@
 using namespace lldb;
 using namespace lldb_private;
 
-OptionGroupFormat::OptionGroupFormat(lldb::Format default_format,
-                                     uint64_t default_byte_size,
-                                     uint64_t default_count)
-    : m_format(default_format, default_format),
-      m_byte_size(default_byte_size, default_byte_size),
-      m_count(default_count, default_count), m_prev_gdb_format('x'),
-      m_prev_gdb_size('w') {}
-
-OptionGroupFormat::~OptionGroupFormat() {}
-
-static constexpr OptionDefinition g_option_table[] = {
+static constexpr OptionDefinition g_default_option_definitions[] = {
     {LLDB_OPT_SET_1, false, "format", 'f', OptionParser::eRequiredArgument,
      nullptr, {}, 0, eArgTypeFormat,
      "Specify a format to be used for display."},
@@ -41,8 +31,34 @@ static constexpr OptionDefinition g_option_table[] = {
      "The number of total items to display."},
 };
 
+OptionGroupFormat::OptionGroupFormat(
+    lldb::Format default_format, uint64_t default_byte_size,
+    uint64_t default_count, OptionGroupFormatUsageTextVector usage_text_vector)
+    : m_format(default_format, default_format),
+      m_byte_size(default_byte_size, default_byte_size),
+      m_count(default_count, default_count), m_prev_gdb_format('x'),
+      m_prev_gdb_size('w'), m_has_gdb_format(false) {
+  // Copy the default option definitions.
+  std::copy(std::begin(g_default_option_definitions),
+            std::end(g_default_option_definitions),
+            std::begin(m_option_definitions));
+
+  for (auto usage_text_tuple : usage_text_vector) {
+    switch (std::get<0>(usage_text_tuple)) {
+    case eArgTypeFormat:
+      m_option_definitions[0].usage_text = std::get<1>(usage_text_tuple);
+      break;
+    case eArgTypeByteSize:
+      m_option_definitions[2].usage_text = std::get<1>(usage_text_tuple);
+      break;
+    default:
+      llvm_unreachable("Unimplemented option");
+    }
+  }
+}
+
 llvm::ArrayRef<OptionDefinition> OptionGroupFormat::GetDefinitions() {
-  auto result = llvm::makeArrayRef(g_option_table);
+  auto result = llvm::ArrayRef(m_option_definitions);
   if (m_byte_size.GetDefaultValue() < UINT64_MAX) {
     if (m_count.GetDefaultValue() < UINT64_MAX)
       return result;
@@ -56,7 +72,7 @@ Status OptionGroupFormat::SetOptionValue(uint32_t option_idx,
                                          llvm::StringRef option_arg,
                                          ExecutionContext *execution_context) {
   Status error;
-  const int short_option = g_option_table[option_idx].short_option;
+  const int short_option = m_option_definitions[option_idx].short_option;
 
   switch (short_option) {
   case 'f':
@@ -65,23 +81,23 @@ Status OptionGroupFormat::SetOptionValue(uint32_t option_idx,
 
   case 'c':
     if (m_count.GetDefaultValue() == 0) {
-      error.SetErrorString("--count option is disabled");
+      error = Status::FromErrorString("--count option is disabled");
     } else {
       error = m_count.SetValueFromString(option_arg);
       if (m_count.GetCurrentValue() == 0)
-        error.SetErrorStringWithFormat("invalid --count option value '%s'",
-                                       option_arg.str().c_str());
+        error = Status::FromErrorStringWithFormat(
+            "invalid --count option value '%s'", option_arg.str().c_str());
     }
     break;
 
   case 's':
     if (m_byte_size.GetDefaultValue() == 0) {
-      error.SetErrorString("--size option is disabled");
+      error = Status::FromErrorString("--size option is disabled");
     } else {
       error = m_byte_size.SetValueFromString(option_arg);
       if (m_byte_size.GetCurrentValue() == 0)
-        error.SetErrorStringWithFormat("invalid --size option value '%s'",
-                                       option_arg.str().c_str());
+        error = Status::FromErrorStringWithFormat(
+            "invalid --size option value '%s'", option_arg.str().c_str());
     }
     break;
 
@@ -106,8 +122,8 @@ Status OptionGroupFormat::SetOptionValue(uint32_t option_idx,
     if (!gdb_format_str.empty() ||
         (format == eFormatInvalid && byte_size == 0 && count == 0)) {
       // Nothing got set correctly
-      error.SetErrorStringWithFormat("invalid gdb format string '%s'",
-                                     option_arg.str().c_str());
+      error = Status::FromErrorStringWithFormat(
+          "invalid gdb format string '%s'", option_arg.str().c_str());
       return error;
     }
 
@@ -128,7 +144,7 @@ Status OptionGroupFormat::SetOptionValue(uint32_t option_idx,
       // Byte size is disabled, make sure it wasn't specified but if this is an
       // address, it's actually necessary to specify one so don't error out
       if (byte_size > 0 && format != lldb::eFormatAddressInfo) {
-        error.SetErrorString(
+        error = Status::FromErrorString(
             "this command doesn't support specifying a byte size");
         return error;
       }
@@ -142,7 +158,8 @@ Status OptionGroupFormat::SetOptionValue(uint32_t option_idx,
     } else {
       // Count is disabled, make sure it wasn't specified
       if (count > 0) {
-        error.SetErrorString("this command doesn't support specifying a count");
+        error = Status::FromErrorString(
+            "this command doesn't support specifying a count");
         return error;
       }
     }

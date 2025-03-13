@@ -5,11 +5,11 @@
 ; RUN: llc -verify-machineinstrs -O0 < %s -mtriple=ppc32-- -mcpu=ppc | FileCheck -check-prefix=OPT0-PPC32 %s
 ; RUN: llc -relocation-model=pic -verify-machineinstrs -O0 < %s -mtriple=ppc32-- -mcpu=ppc | FileCheck -check-prefix=OPT0-PPC32-PIC %s
 
-@a = thread_local global i32 0, align 4
+@a = dso_local thread_local global i32 0, align 4
 
 ;OPT0-LABEL:          localexec:
 ;OPT1-LABEL:          localexec:
-define i32 @localexec() nounwind {
+define dso_local i32 @localexec() nounwind {
 entry:
 ;OPT0:          addis [[REG1:[1-9][0-9]*]], 13, a@tprel@ha
 ;OPT0-NEXT:     addi [[REG2:[1-9][0-9]*]], [[REG1]], a@tprel@l
@@ -18,7 +18,7 @@ entry:
 ;OPT1:          addis [[REG1:[1-9][0-9]*]], 13, a@tprel@ha
 ;OPT1-NEXT:     li [[REG3:[0-9]+]], 42
 ;OPT1:     stw [[REG3]], a@tprel@l([[REG1]])
-  store i32 42, i32* @a, align 4
+  store i32 42, ptr @a, align 4
   ret i32 0
 }
 
@@ -27,11 +27,11 @@ entry:
 
 @a2 = external thread_local(initialexec) global i32
 
-define signext i32 @main2() nounwind {
+define dso_local signext i32 @main2() nounwind {
 entry:
   %retval = alloca i32, align 4
-  store i32 0, i32* %retval
-  %0 = load i32, i32* @a2, align 4
+  store i32 0, ptr %retval
+  %0 = load i32, ptr @a2, align 4
   ret i32 %0
 }
 

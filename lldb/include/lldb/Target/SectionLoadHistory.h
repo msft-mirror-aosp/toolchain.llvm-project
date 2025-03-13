@@ -24,7 +24,7 @@ public:
     eStopIDNow = UINT32_MAX
   };
   // Constructors and Destructors
-  SectionLoadHistory() : m_stop_id_to_section_load_list(), m_mutex() {}
+  SectionLoadHistory() = default;
 
   ~SectionLoadHistory() {
     // Call clear since this takes a lock and clears the section load list in
@@ -45,7 +45,7 @@ public:
                                      const lldb::SectionSP &section_sp);
 
   bool ResolveLoadAddress(uint32_t stop_id, lldb::addr_t load_addr,
-                          Address &so_addr);
+                          Address &so_addr, bool allow_section_end = false);
 
   bool SetSectionLoadAddress(uint32_t stop_id,
                              const lldb::SectionSP &section_sp,

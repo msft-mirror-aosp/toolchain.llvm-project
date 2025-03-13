@@ -8,7 +8,6 @@ define i1 @foo() {
 ; CHECK-LABEL: foo:
 ; CHECK:       # %bb.0: # %entry
 ; CHECK-NEXT:    li r3, 0
-; CHECK-NEXT:    isel r3, 0, r3, 4*cr5+lt
 ; CHECK-NEXT:    blr
 entry:
   br label %next
@@ -17,13 +16,13 @@ next:
   br i1 undef, label %true, label %false
 
 true:
+  %c = icmp ugt i64 0, ptrtoint (ptr @bar to i64)
   br label %end
 
 false:
   br label %end
 
 end:
-  %a = phi i1 [ icmp ugt (i64 0, i64 ptrtoint (i64* @bar to i64)), %true ],
-              [ icmp ugt (i64 0, i64 2), %false ]
+  %a = phi i1 [ %c, %true ], [ false, %false ]
   ret i1 %a
 }

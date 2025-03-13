@@ -50,24 +50,6 @@ static HANDLE __kmp_stderr = NULL;
 static int __kmp_console_exists = FALSE;
 static kmp_str_buf_t __kmp_console_buf;
 
-static int is_console(void) {
-  char buffer[128];
-  DWORD rc = 0;
-  DWORD err = 0;
-  // Try to get console title.
-  SetLastError(0);
-  // GetConsoleTitle does not reset last error in case of success or short
-  // buffer, so we need to clear it explicitly.
-  rc = GetConsoleTitle(buffer, sizeof(buffer));
-  if (rc == 0) {
-    // rc == 0 means getting console title failed. Let us find out why.
-    err = GetLastError();
-    // err == 0 means buffer too short (we suppose console exists).
-    // In Window applications we usually have err == 6 (invalid handle).
-  }
-  return rc > 0 || err == 0;
-}
-
 void __kmp_close_console(void) {
   /* wait until user presses return before closing window */
   /* TODO only close if a window was opened */
@@ -101,6 +83,7 @@ static void __kmp_redirect_output(void) {
 
       DWORD err = GetLastError();
       // TODO: output error somehow (maybe message box)
+      (void)err;
       __kmp_stdout = NULL;
 
     } else {
@@ -112,6 +95,7 @@ static void __kmp_redirect_output(void) {
 
       DWORD err = GetLastError();
       // TODO: output error somehow (maybe message box)
+      (void)err;
       __kmp_stderr = NULL;
 
     } else {
@@ -149,8 +133,8 @@ void __kmp_vprintf(enum kmp_io out_stream, char const *format, va_list ap) {
     int chars = 0;
 
 #ifdef KMP_DEBUG_PIDS
-    chars = KMP_SNPRINTF(db, __kmp_debug_buf_chars, "pid=%d: ",
-                         (kmp_int32)getpid());
+    chars = KMP_SNPRINTF(db, __kmp_debug_buf_chars,
+                         "pid=%d: ", (kmp_int32)getpid());
 #endif
     chars += KMP_VSNPRINTF(db, __kmp_debug_buf_chars, format, ap);
 
@@ -158,16 +142,18 @@ void __kmp_vprintf(enum kmp_io out_stream, char const *format, va_list ap) {
       if (chars + 1 > __kmp_debug_buf_warn_chars) {
 #if KMP_OS_WINDOWS
         DWORD count;
-        __kmp_str_buf_print(&__kmp_console_buf, "OMP warning: Debugging buffer "
-                                                "overflow; increase "
-                                                "KMP_DEBUG_BUF_CHARS to %d\n",
+        __kmp_str_buf_print(&__kmp_console_buf,
+                            "OMP warning: Debugging buffer "
+                            "overflow; increase "
+                            "KMP_DEBUG_BUF_CHARS to %d\n",
                             chars + 1);
         WriteFile(stream, __kmp_console_buf.str, __kmp_console_buf.used, &count,
                   NULL);
         __kmp_str_buf_clear(&__kmp_console_buf);
 #else
-        fprintf(stream, "OMP warning: Debugging buffer overflow; "
-                        "increase KMP_DEBUG_BUF_CHARS to %d\n",
+        fprintf(stream,
+                "OMP warning: Debugging buffer overflow; "
+                "increase KMP_DEBUG_BUF_CHARS to %d\n",
                 chars + 1);
         fflush(stream);
 #endif

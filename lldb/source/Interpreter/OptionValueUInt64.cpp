@@ -8,7 +8,6 @@
 
 #include "lldb/Interpreter/OptionValueUInt64.h"
 
-#include "lldb/Host/StringConvert.h"
 #include "lldb/Utility/Stream.h"
 
 using namespace lldb;
@@ -45,16 +44,22 @@ Status OptionValueUInt64::SetValueFromString(llvm::StringRef value_ref,
 
   case eVarSetOperationReplace:
   case eVarSetOperationAssign: {
-    bool success = false;
-    std::string value_str = value_ref.trim().str();
-    uint64_t value = StringConvert::ToUInt64(value_str.c_str(), 0, 0, &success);
-    if (success) {
-      m_value_was_set = true;
-      m_current_value = value;
-      NotifyValueChanged();
+    llvm::StringRef value_trimmed = value_ref.trim();
+    uint64_t value;
+    if (llvm::to_integer(value_trimmed, value)) {
+      if (value >= m_min_value && value <= m_max_value) {
+        m_value_was_set = true;
+        m_current_value = value;
+        NotifyValueChanged();
+      } else {
+        error = Status::FromErrorStringWithFormat(
+            "%" PRIu64 " is out of range, valid values must be between %" PRIu64
+            " and %" PRIu64 ".",
+            value, m_min_value, m_max_value);
+      }
     } else {
-      error.SetErrorStringWithFormat("invalid uint64_t string value: '%s'",
-                                     value_str.c_str());
+      error = Status::FromErrorStringWithFormat(
+          "invalid uint64_t string value: '%s'", value_ref.str().c_str());
     }
   } break;
 
@@ -67,8 +72,4 @@ Status OptionValueUInt64::SetValueFromString(llvm::StringRef value_ref,
     break;
   }
   return error;
-}
-
-lldb::OptionValueSP OptionValueUInt64::DeepCopy() const {
-  return OptionValueSP(new OptionValueUInt64(*this));
 }

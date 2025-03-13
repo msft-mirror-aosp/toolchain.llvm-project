@@ -16,11 +16,12 @@
 #define LLVM_TRANSFORMS_UTILS_CALLGRAPHUPDATER_H
 
 #include "llvm/Analysis/CGSCCPassManager.h"
-#include "llvm/Analysis/CallGraph.h"
-#include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 
 namespace llvm {
+
+class CallGraph;
+class CallGraphSCC;
 
 /// Wrapper to unify "old style" CallGraph and "new style" LazyCallGraph. This
 /// simplifies the interface and the call sites, e.g., new and old pass manager
@@ -37,12 +38,6 @@ class CallGraphUpdater {
   SmallVector<Function *, 16> DeadFunctionsInComdats;
   ///}
 
-  /// Old PM variables
-  ///{
-  CallGraph *CG = nullptr;
-  CallGraphSCC *CGSCC = nullptr;
-  ///}
-
   /// New PM variables
   ///{
   LazyCallGraph *LCG = nullptr;
@@ -53,16 +48,12 @@ class CallGraphUpdater {
   ///}
 
 public:
-  CallGraphUpdater() {}
+  CallGraphUpdater() = default;
   ~CallGraphUpdater() { finalize(); }
 
   /// Initializers for usage outside of a CGSCC pass, inside a CGSCC pass in
   /// the old and new pass manager (PM).
   ///{
-  void initialize(CallGraph &CG, CallGraphSCC &SCC) {
-    this->CG = &CG;
-    this->CGSCC = &SCC;
-  }
   void initialize(LazyCallGraph &LCG, LazyCallGraph::SCC &SCC,
                   CGSCCAnalysisManager &AM, CGSCCUpdateResult &UR) {
     this->LCG = &LCG;
@@ -87,21 +78,13 @@ public:
   /// If a new function was created by outlining, this method can be called
   /// to update the call graph for the new function. Note that the old one
   /// still needs to be re-analyzed or manually updated.
-  void registerOutlinedFunction(Function &NewFn);
+  void registerOutlinedFunction(Function &OriginalFn, Function &NewFn);
 
   /// Replace \p OldFn in the call graph (and SCC) with \p NewFn. The uses
   /// outside the call graph and the function \p OldFn are not modified.
   /// Note that \p OldFn is also removed from the call graph
   /// (\see removeFunction).
   void replaceFunctionWith(Function &OldFn, Function &NewFn);
-
-  /// Remove the call site \p CS from the call graph.
-  void removeCallSite(CallBase &CS);
-
-  /// Replace \p OldCS with the new call site \p NewCS.
-  /// \return True if the replacement was successful, otherwise False. In the
-  /// latter case the parent function of \p OldCB needs to be re-analyzed.
-  bool replaceCallSite(CallBase &OldCS, CallBase &NewCS);
 };
 
 } // end namespace llvm

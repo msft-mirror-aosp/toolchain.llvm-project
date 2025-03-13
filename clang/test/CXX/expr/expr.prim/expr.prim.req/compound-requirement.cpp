@@ -79,19 +79,23 @@ constexpr bool is_same_v = false;
 template<typename T>
 constexpr bool is_same_v<T, T> = true;
 
+template<typename T> struct remove_reference { using type = T; };
+template<typename T> struct remove_reference<T&> { using type = T; };
+
 template<typename T, typename U>
 concept Same = is_same_v<T, U>;
 
 template<typename T>
-concept Large = sizeof(T) >= 4; // expected-note{{because 'sizeof(short) >= 4' (2 >= 4) evaluated to false}}
+concept Large = sizeof(typename remove_reference<T>::type) >= 4;
+// expected-note@-1{{because 'sizeof(typename remove_reference<short &>::type) >= 4' (2 >= 4) evaluated to false}}
 
-template<typename T> requires requires (T t) { { t } -> Large; } // expected-note{{because 'decltype(t)' (aka 'short') does not satisfy 'Large':}}
+template<typename T> requires requires (T t) { { t } -> Large; } // expected-note{{because 'short &' does not satisfy 'Large':}}
 struct r7 {};
 
 using r7i1 = r7<int>;
 using r7i2 = r7<short>; // expected-error{{constraints not satisfied for class template 'r7' [with T = short]}}
 
-template<typename T> requires requires (T t) { { t } -> Same<T>; }
+template<typename T> requires requires (T t) { { t } -> Same<T&>; }
 struct r8 {};
 
 using r8i1 = r8<int>;
@@ -99,7 +103,8 @@ using r8i2 = r8<short*>;
 
 // Substitution failure in type constraint
 
-template<typename T> requires requires (T t) { { t } -> Same<typename T::type>; } // expected-note{{because 'Same<expr-type, typename T::type>' would be invalid: type 'int' cannot be used prior to '::' because it has no members}}
+template<typename T> requires requires (T t) { { t } -> Same<typename T::type&>; }
+// expected-note@-1{{because 'Same<expr-type, typename T::type &>' would be invalid: type 'int' cannot be used prior to '::' because it has no members}}
 struct r9 {};
 
 struct M { using type = M; };
@@ -121,6 +126,17 @@ concept IsEven = (T % 2) == 0;
 
 template<typename T> requires requires (T t) { { t } -> IsEven; } // expected-error{{concept named in type constraint is not a type concept}}
 struct r11 {};
+
+// Value categories
+
+template<auto a = 0>
+requires requires (int b) {
+  { a } -> Same<int>;
+  { b } -> Same<int&>;
+  { 0 } -> Same<int>;
+  { static_cast<int&&>(a) } -> Same<int&&>;
+} void f1() {}
+template void f1<>();
 
 // C++ [expr.prim.req.compound] Example
 namespace std_example {
@@ -173,3 +189,39 @@ namespace std_example {
   template<C5 T> struct C5_check {}; // expected-note{{because 'short' does not satisfy 'C5'}}
   using c5 = C5_check<short>; // expected-error{{constraints not satisfied for class template 'C5_check' [with T = short]}}
 }
+
+namespace access_checks {
+namespace in_return_type_requirement {
+
+// https://github.com/llvm/llvm-project/issues/93788
+template <typename From, typename To>
+concept is_assignable = requires(From from, To to) {
+  from = to;
+};
+
+template <typename T>
+class trait {
+ public:
+  using public_type = int;
+ private:
+  using private_type = int;
+};
+
+template <typename T>
+concept has_field = requires(T t) {
+  { t.field } -> is_assignable<typename trait<T>::private_type>;  // expected-note {{'private_type' is a private member}}
+};
+template <typename T>
+concept has_field2 = requires(T t) {
+  { t.field } -> is_assignable<typename trait<T>::public_type>;
+};
+
+struct A {
+  int field;
+};
+static_assert(has_field<A>); // expected-error {{static assertion failed}} \
+                             // expected-note {{because 'A' does not satisfy 'has_field'}}
+static_assert(has_field2<A>);
+
+}  // namespace access_checks
+}  // namespace in_return_type_requirement

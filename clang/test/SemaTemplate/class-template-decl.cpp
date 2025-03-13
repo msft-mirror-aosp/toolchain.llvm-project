@@ -63,7 +63,7 @@ public:
 };
 
 void f() {
-  template<typename T> class X; // expected-error{{expression}}
+  template<typename T> class X; // expected-error{{templates can only be declared in namespace or class scope}}
 }
 
 template<typename T> class X1 var; // expected-error {{variable has incomplete type 'class X1'}} \
@@ -166,4 +166,18 @@ namespace abstract_dependent_class {
     virtual A<T> *clone() = 0; // expected-note {{pure virtual}}
   };
   template<typename T> A<T> *A<T>::clone() { return new A<T>; } // expected-error {{abstract class type 'A<T>'}}
+}
+
+namespace qualified_out_of_line {
+  struct rbnode {};
+  template<typename T, typename U> struct pair {};
+  template<typename K, typename V> struct rbtree {
+    using base = rbnode;
+    pair<base, base> f();
+  };
+  template<typename K, typename V>
+  pair<typename rbtree<K, V>::base, typename rbtree<K, V>::base>
+  rbtree<K, V>::f() {
+    return {};
+  }
 }

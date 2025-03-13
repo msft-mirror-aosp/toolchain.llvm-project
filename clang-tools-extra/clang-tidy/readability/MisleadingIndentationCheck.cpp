@@ -7,21 +7,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "MisleadingIndentationCheck.h"
+#include "../utils/LexerUtils.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace readability {
+namespace clang::tidy::readability {
 
 static const IfStmt *getPrecedingIf(const SourceManager &SM,
                                     ASTContext *Context, const IfStmt *If) {
-  auto parents = Context->getParents(*If);
-  if (parents.size() != 1)
+  auto Parents = Context->getParents(*If);
+  if (Parents.size() != 1)
     return nullptr;
-  if (const auto *PrecedingIf = parents[0].get<IfStmt>()) {
+  if (const auto *PrecedingIf = Parents[0].get<IfStmt>()) {
     SourceLocation PreviousElseLoc = PrecedingIf->getElseLoc();
     if (SM.getExpansionLineNumber(PreviousElseLoc) ==
         SM.getExpansionLineNumber(If->getIfLoc()))
@@ -44,7 +43,7 @@ void MisleadingIndentationCheck::danglingElseCheck(const SourceManager &SM,
     return;
 
   // Find location of first 'if' in a 'if else if' chain.
-  for (auto PrecedingIf = getPrecedingIf(SM, Context, If); PrecedingIf;
+  for (const auto *PrecedingIf = getPrecedingIf(SM, Context, If); PrecedingIf;
        PrecedingIf = getPrecedingIf(SM, Context, PrecedingIf))
     IfLoc = PrecedingIf->getIfLoc();
 
@@ -53,11 +52,23 @@ void MisleadingIndentationCheck::danglingElseCheck(const SourceManager &SM,
     diag(ElseLoc, "different indentation for 'if' and corresponding 'else'");
 }
 
-void MisleadingIndentationCheck::missingBracesCheck(const SourceManager &SM,
-                                                    const CompoundStmt *CStmt) {
+static bool isAtStartOfLineIncludingEmptyMacro(SourceLocation NextLoc,
+                                               const SourceManager &SM,
+                                               const LangOptions &LangOpts) {
+  const SourceLocation BeforeLoc =
+      utils::lexer::getPreviousTokenAndStart(NextLoc, SM, LangOpts).second;
+  if (BeforeLoc.isInvalid())
+    return false;
+  return SM.getExpansionLineNumber(BeforeLoc) !=
+         SM.getExpansionLineNumber(NextLoc);
+}
+
+void MisleadingIndentationCheck::missingBracesCheck(
+    const SourceManager &SM, const CompoundStmt *CStmt,
+    const LangOptions &LangOpts) {
   const static StringRef StmtNames[] = {"if", "for", "while"};
-  for (unsigned int i = 0; i < CStmt->size() - 1; i++) {
-    const Stmt *CurrentStmt = CStmt->body_begin()[i];
+  for (unsigned int I = 0; I < CStmt->size() - 1; I++) {
+    const Stmt *CurrentStmt = CStmt->body_begin()[I];
     const Stmt *Inner = nullptr;
     int StmtKind = 0;
 
@@ -89,10 +100,12 @@ void MisleadingIndentationCheck::missingBracesCheck(const SourceManager &SM,
         SM.getExpansionLineNumber(OuterLoc))
       continue;
 
-    const Stmt *NextStmt = CStmt->body_begin()[i + 1];
+    const Stmt *NextStmt = CStmt->body_begin()[I + 1];
     SourceLocation NextLoc = NextStmt->getBeginLoc();
 
     if (NextLoc.isInvalid() || NextLoc.isMacroID())
+      continue;
+    if (!isAtStartOfLineIncludingEmptyMacro(NextLoc, SM, LangOpts))
       continue;
 
     if (SM.getExpansionColumnNumber(InnerLoc) ==
@@ -107,10 +120,7 @@ void MisleadingIndentationCheck::missingBracesCheck(const SourceManager &SM,
 
 void MisleadingIndentationCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(
-      ifStmt(allOf(hasElse(stmt()),
-                   unless(allOf(isConstexpr(), isInTemplateInstantiation()))))
-          .bind("if"),
-      this);
+      ifStmt(unless(hasThen(nullStmt())), hasElse(stmt())).bind("if"), this);
   Finder->addMatcher(
       compoundStmt(has(stmt(anyOf(ifStmt(), forStmt(), whileStmt()))))
           .bind("compound"),
@@ -122,9 +132,8 @@ void MisleadingIndentationCheck::check(const MatchFinder::MatchResult &Result) {
     danglingElseCheck(*Result.SourceManager, Result.Context, If);
 
   if (const auto *CStmt = Result.Nodes.getNodeAs<CompoundStmt>("compound"))
-    missingBracesCheck(*Result.SourceManager, CStmt);
+    missingBracesCheck(*Result.SourceManager, CStmt,
+                       Result.Context->getLangOpts());
 }
 
-} // namespace readability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::readability

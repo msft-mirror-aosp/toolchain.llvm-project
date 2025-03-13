@@ -6,8 +6,6 @@
 
 // UNSUPPORTED: android
 
-// REQUIRES: stable-runtime
-
 // Checks that pvalloc overflows are caught. If the allocator is allowed to
 // return null, the errno should be set to ENOMEM.
 
@@ -18,8 +16,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "../utils.h"
-
 int main(int argc, char *argv[]) {
   assert(argc == 2);
   const char *action = argv[1];
@@ -27,15 +23,15 @@ int main(int argc, char *argv[]) {
   const size_t page_size = sysconf(_SC_PAGESIZE);
 
   void *p = nullptr;
-  if (!untag_strcmp(action, "m1")) {
+  if (!strcmp(action, "m1")) {
     p = pvalloc((uintptr_t)-1);
-  } else if (!untag_strcmp(action, "psm1")) {
+  } else if (!strcmp(action, "psm1")) {
     p = pvalloc((uintptr_t)-(page_size - 1));
   } else {
     assert(0);
   }
 
-  untag_fprintf(stderr, "errno: %d\n", errno);
+  fprintf(stderr, "errno: %d\n", errno);
 
   return p != nullptr;
 }
@@ -43,6 +39,6 @@ int main(int argc, char *argv[]) {
 // CHECK: {{ERROR: HWAddressSanitizer: pvalloc parameters overflow: size .* rounded up to system page size .* cannot be represented in type size_t}}
 // CHECK: {{#0 0x.* in .*pvalloc}}
 // CHECK: {{#1 0x.* in main .*pvalloc-overflow.cpp:}}
-// CHECK: SUMMARY: HWAddressSanitizer: pvalloc-overflow
+// CHECK: SUMMARY: HWAddressSanitizer: pvalloc-overflow {{.*}} in main
 
 // CHECK-NULL: errno: 12

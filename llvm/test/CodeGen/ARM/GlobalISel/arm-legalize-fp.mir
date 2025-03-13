@@ -1,9 +1,9 @@
 # RUN: llc -O0 -mtriple arm-linux-gnueabihf -mattr=+vfp2 -float-abi=hard -run-pass=legalizer %s -o - | FileCheck %s -check-prefix CHECK -check-prefix HARD
-# RUN: llc -O0 -mtriple arm-linux-gnueabi -mattr=+vfp2,+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s -check-prefix CHECK -check-prefix SOFT -check-prefix SOFT-AEABI
-# RUN: llc -O0 -mtriple arm-linux-gnu -mattr=+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s  -check-prefix CHECK -check-prefix SOFT -check-prefix SOFT-DEFAULT
+# RUN: llc -O0 -mtriple arm-linux-gnueabi -mattr=+vfp2,+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s -check-prefix CHECK -check-prefix SOFT -check-prefix SOFT-AEABI -check-prefix SOFT_POOL
+# RUN: llc -O0 -mtriple arm-linux-gnu -mattr=+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s  -check-prefix CHECK -check-prefix SOFT -check-prefix SOFT-DEFAULT -check-prefix SOFT_POOL
 # RUN: llc -O0 -mtriple thumb-linux-gnueabihf -mattr=+v6t2,+vfp2 -float-abi=hard -run-pass=legalizer %s -o - | FileCheck %s -check-prefix CHECK -check-prefix HARD
-# RUN: llc -O0 -mtriple thumb-linux-gnueabi -mattr=+v6t2,+vfp2,+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s -check-prefix CHECK -check-prefix SOFT -check-prefix SOFT-AEABI
-# RUN: llc -O0 -mtriple thumb-linux-gnu -mattr=+v6t2,+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s  -check-prefix CHECK -check-prefix SOFT -check-prefix SOFT-DEFAULT
+# RUN: llc -O0 -mtriple thumb-linux-gnueabi -mattr=+v6t2,+vfp2,+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s -check-prefix CHECK -check-prefix SOFT -check-prefix=SOFT-AEABI -check-prefix SOFT_CONST
+# RUN: llc -O0 -mtriple thumb-linux-gnu -mattr=+v6t2,+soft-float -float-abi=soft -run-pass=legalizer %s -o - | FileCheck %s  -check-prefix CHECK -check-prefix SOFT -check-prefix SOFT-DEFAULT -check-prefix SOFT_CONST
 --- |
   define void @test_frem_float() { ret void }
   define void @test_frem_double() { ret void }
@@ -657,10 +657,20 @@ body:             |
   bb.0:
     liveins:
 
+    ; SOFT_POOL: constants:
+    ; SOFT_POOL: id: 0
+    ; SOFT_POOL: value: i32 -1073532109
+    ; SOFT_POOL: id: 1
+    ; SOFT_POOL: value: i32 858993459
+
     ; HARD: [[R:%[0-9]+]]:_(s64) = G_FCONSTANT double -2.4
     ; SOFT-NOT: G_FCONSTANT
-    ; SOFT-DAG: [[HI:%[0-9]+]]:_(s32) = G_CONSTANT i32 -1073532109
-    ; SOFT-DAG: [[LO:%[0-9]+]]:_(s32) = G_CONSTANT i32 858993459
+    ; SOFT_CONST-DAG: [[HI:%[0-9]+]]:_(s32) = G_CONSTANT i32 -1073532109
+    ; SOFT_CONST-DAG: [[LO:%[0-9]+]]:_(s32) = G_CONSTANT i32 858993459
+    ; SOFT_POOL-DAG: [[HIPTR:%[0-9]+]]:_(p0) = G_CONSTANT_POOL %const.0
+    ; SOFT_POOL-DAG: [[HI:%[0-9]+]]:_(s32) = G_LOAD [[HIPTR]]
+    ; SOFT_POOL-DAG: [[LOPTR:%[0-9]+]]:_(p0) = G_CONSTANT_POOL %const.1
+    ; SOFT_POOL-DAG: [[LO:%[0-9]+]]:_(s32) = G_LOAD [[LOPTR]]
     ; SOFT-NOT: G_FCONSTANT
     %0(s64) = G_FCONSTANT double -2.4
     ; HARD-DAG: G_UNMERGE_VALUES [[R]](s64)
@@ -1117,9 +1127,7 @@ body:             |
     ; SOFT-NOT: G_FCMP
     ; For soft float we just need to return a '-1' constant, but the truncation
     ; to 1 bit is converted by the combiner to the following masking sequence.
-    ; SOFT: [[R:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[R]](s32)
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[R]]
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
     ; SOFT-NOT: G_FCMP
     ; CHECK: $r0 = COPY [[REXT]]
 ...
@@ -1153,10 +1161,7 @@ body:             |
     ; SOFT-NOT: G_FCMP
     ; For soft float we just need to return a '0' constant, but the truncation
     ; to 1 bit is converted by the combiner to the following masking sequence.
-    ; SOFT: [[R:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
-    ; SOFT: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[R]](s32)
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-NOT: G_FCMP
     ; CHECK: $r0 = COPY [[REXT]]
 ...
@@ -1195,8 +1200,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(eq), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -1241,8 +1245,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(sgt), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -1287,8 +1290,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(sge), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -1333,8 +1335,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(slt), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -1379,8 +1380,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(sle), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -1670,8 +1670,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(ne), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -1724,16 +1723,14 @@ body:             |
     ; SOFT: [[RET2:%[0-9]+]]:_(s32) = COPY $r0
     ; SOFT: ADJCALLSTACKUP
     ; SOFT-DEFAULT: [[R2:%[0-9]+]]:_(s1) = G_ICMP intpred(slt), [[RET2]](s32), [[ZERO]]
-    ; SOFT-AEABI: [[R1EXT:%[0-9]+]]:_(s32) = COPY [[RET1]]
-    ; SOFT-AEABI: [[R2EXT:%[0-9]+]]:_(s32) = COPY [[RET2]]
     ; SOFT-DEFAULT: [[R1EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R1]]
     ; SOFT-DEFAULT: [[R2EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R2]]
-    ; SOFT: [[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_OR [[RET1]], [[RET2]]
+    ; SOFT-DEFAULT:[[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
     ; The result of the G_OR needs to be truncated, and the combiner turns the
     ; truncation into the following masking sequence.
     ; SOFT: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[R]]
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[R]], [[MASK]]
     ; SOFT-NOT: G_FCMP
     %3(s32) = G_ZEXT %2(s1)
     $r0 = COPY %3(s32)
@@ -1783,16 +1780,14 @@ body:             |
     ; SOFT: [[RET2:%[0-9]+]]:_(s32) = COPY $r0
     ; SOFT: ADJCALLSTACKUP
     ; SOFT-DEFAULT: [[R2:%[0-9]+]]:_(s1) = G_ICMP intpred(ne), [[RET2]](s32), [[ZERO]]
-    ; SOFT-AEABI: [[R1EXT:%[0-9]+]]:_(s32) = COPY [[RET1]]
-    ; SOFT-AEABI: [[R2EXT:%[0-9]+]]:_(s32) = COPY [[RET2]]
     ; SOFT-DEFAULT: [[R1EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R1]]
     ; SOFT-DEFAULT: [[R2EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R2]]
-    ; SOFT: [[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_OR [[RET1]], [[RET2]]
+    ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
     ; The result of the G_OR needs to be truncated, and the combiner turns the
     ; truncation into the following masking sequence.
     ; SOFT: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[R]]
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[R]], [[MASK]]
     ; SOFT-NOT: G_FCMP
     %3(s32) = G_ZEXT %2(s1)
     $r0 = COPY %3(s32)
@@ -1824,10 +1819,10 @@ body:             |
     %1(s32) = COPY $r1
     %2(s32) = COPY $r2
     %3(s32) = COPY $r3
-    ; CHECK-DAG: [[X0:%[0-9]+]]:_(s32) = COPY $r0
-    ; CHECK-DAG: [[X1:%[0-9]+]]:_(s32) = COPY $r1
-    ; CHECK-DAG: [[Y0:%[0-9]+]]:_(s32) = COPY $r2
-    ; CHECK-DAG: [[Y1:%[0-9]+]]:_(s32) = COPY $r3
+    ; HARD-DAG: [[X0:%[0-9]+]]:_(s32) = COPY $r0
+    ; HARD-DAG: [[X1:%[0-9]+]]:_(s32) = COPY $r1
+    ; HARD-DAG: [[Y0:%[0-9]+]]:_(s32) = COPY $r2
+    ; HARD-DAG: [[Y1:%[0-9]+]]:_(s32) = COPY $r3
     %4(s64) = G_MERGE_VALUES %0(s32), %1
     %5(s64) = G_MERGE_VALUES %2(s32), %3
     ; HARD-DAG: [[X:%[0-9]+]]:_(s64) = G_MERGE_VALUES [[X0]](s32), [[X1]](s32)
@@ -1838,9 +1833,7 @@ body:             |
     ; SOFT-NOT: G_FCMP
     ; The result needs to be truncated, and the combiner turns the truncation
     ; into the following masking sequence.
-    ; SOFT: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[MASK]]
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
     ; SOFT-NOT: G_FCMP
     %7(s32) = G_ZEXT %6(s1)
     $r0 = COPY %7(s32)
@@ -1872,10 +1865,10 @@ body:             |
     %1(s32) = COPY $r1
     %2(s32) = COPY $r2
     %3(s32) = COPY $r3
-    ; CHECK-DAG: [[X0:%[0-9]+]]:_(s32) = COPY $r0
-    ; CHECK-DAG: [[X1:%[0-9]+]]:_(s32) = COPY $r1
-    ; CHECK-DAG: [[Y0:%[0-9]+]]:_(s32) = COPY $r2
-    ; CHECK-DAG: [[Y1:%[0-9]+]]:_(s32) = COPY $r3
+    ; HARD-DAG: [[X0:%[0-9]+]]:_(s32) = COPY $r0
+    ; HARD-DAG: [[X1:%[0-9]+]]:_(s32) = COPY $r1
+    ; HARD-DAG: [[Y0:%[0-9]+]]:_(s32) = COPY $r2
+    ; HARD-DAG: [[Y1:%[0-9]+]]:_(s32) = COPY $r3
     %4(s64) = G_MERGE_VALUES %0(s32), %1
     %5(s64) = G_MERGE_VALUES %2(s32), %3
     ; HARD-DAG: [[X:%[0-9]+]]:_(s64) = G_MERGE_VALUES [[X0]](s32), [[X1]](s32)
@@ -1884,13 +1877,9 @@ body:             |
     ; HARD: [[R:%[0-9]+]]:_(s1) = G_FCMP floatpred(false), [[X]](s64), [[Y]]
     ; HARD: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
     ; SOFT-NOT: G_FCMP
-    ; SOFT: [[R:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; The result needs to be truncated, and the combiner turns the truncation
     ; into the following masking sequence.
-    ; SOFT: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[R]]
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
-    ; SOFT-NOT: G_FCMP
     ; SOFT-NOT: G_FCMP
     %7(s32) = G_ZEXT %6(s1)
     $r0 = COPY %7(s32)
@@ -1946,8 +1935,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(eq), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -2006,8 +1994,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(sgt), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -2066,8 +2053,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(sge), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -2126,8 +2112,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(slt), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -2186,8 +2171,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(sle), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -2575,8 +2559,7 @@ body:             |
     ; For aeabi, we just need to truncate the result. The combiner changes the
     ; truncation into the following masking sequence.
     ; SOFT-AEABI: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT-AEABI: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[RET]](s32)
-    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT-AEABI: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RET]], [[MASK]]
     ; SOFT-DEFAULT: [[ZERO:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
     ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s1) = G_ICMP intpred(ne), [[RET]](s32), [[ZERO]]
     ; SOFT-DEFAULT: [[REXT:%[0-9]+]]:_(s32) = G_ZEXT [[R]](s1)
@@ -2645,16 +2628,14 @@ body:             |
     ; SOFT: [[RET2:%[0-9]+]]:_(s32) = COPY $r0
     ; SOFT: ADJCALLSTACKUP
     ; SOFT-DEFAULT: [[R2:%[0-9]+]]:_(s1) = G_ICMP intpred(slt), [[RET2]](s32), [[ZERO]]
-    ; SOFT-AEABI: [[R1EXT:%[0-9]+]]:_(s32) = COPY [[RET1]]
-    ; SOFT-AEABI: [[R2EXT:%[0-9]+]]:_(s32) = COPY [[RET2]]
     ; SOFT-DEFAULT: [[R1EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R1]]
     ; SOFT-DEFAULT: [[R2EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R2]]
-    ; SOFT: [[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
+    ; SOFT-AEABI: [[R:%[0-9]+]]:_(s32) = G_OR [[RET1]], [[RET2]]
+    ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
     ; The result of the G_OR needs to be truncated, and the combiner turns the
     ; truncation into the following masking sequence.
     ; SOFT: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[R]]
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[R]], [[MASK]]
     ; SOFT-NOT: G_FCMP
     %7(s32) = G_ZEXT %6(s1)
     $r0 = COPY %7(s32)
@@ -2720,16 +2701,14 @@ body:             |
     ; SOFT: [[RET2:%[0-9]+]]:_(s32) = COPY $r0
     ; SOFT: ADJCALLSTACKUP
     ; SOFT-DEFAULT: [[R2:%[0-9]+]]:_(s1) = G_ICMP intpred(ne), [[RET2]](s32), [[ZERO]]
-    ; SOFT-AEABI: [[R1EXT:%[0-9]+]]:_(s32) = COPY [[RET1]]
-    ; SOFT-AEABI: [[R2EXT:%[0-9]+]]:_(s32) = COPY [[RET2]]
     ; SOFT-DEFAULT: [[R1EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R1]]
     ; SOFT-DEFAULT: [[R2EXT:%[0-9]+]]:_(s32) = G_ANYEXT [[R2]]
-    ; SOFT: [[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
+    ; SOFT-AEABI:[[R:%[0-9]+]]:_(s32) = G_OR [[RET1]], [[RET2]]
+    ; SOFT-DEFAULT: [[R:%[0-9]+]]:_(s32) = G_OR [[R1EXT]], [[R2EXT]]
     ; The result of the G_OR needs to be truncated, and the combiner turns the
     ; truncation into the following masking sequence.
     ; SOFT: [[MASK:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
-    ; SOFT: [[RCOPY:%[0-9]+]]:_(s32) = COPY [[R]]
-    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[RCOPY]], [[MASK]]
+    ; SOFT: [[REXT:%[0-9]+]]:_(s32) = G_AND [[R]], [[MASK]]
     ; SOFT-NOT: G_FCMP
     %7(s32) = G_ZEXT %6(s1)
     $r0 = COPY %7(s32)

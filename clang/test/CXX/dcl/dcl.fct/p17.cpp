@@ -96,7 +96,7 @@ namespace unconstrained {
   // expected-error@-1{{no matching}}
 
   template<typename T>
-  struct S {
+  struct S { // #defined-here
     constexpr auto f1(auto x, T t) -> decltype(x + t);
 
     template<typename U>
@@ -110,6 +110,7 @@ namespace unconstrained {
   template<typename U>
   constexpr auto S<T>::f2(auto x, U u, T t) -> decltype(x + u + t) { return x + u + t; }
   // expected-error@-1 {{out-of-line definition of 'f2' does not match any declaration in 'S<T>'}}
+  // expected-note@#defined-here {{S defined here}}
 
   template<typename T>
   template<typename U>
@@ -186,7 +187,7 @@ namespace constrained {
   static_assert(is_same_v<decltype(f9(i, c)), void>);
   // expected-error@-1{{no matching}}
   static_assert(is_same_v<decltype(f9(i, i, ci)), void>);
-  void f10(C decltype(auto) x);
+  void f10(C decltype(auto) x); // expected-error{{decltype(auto)' not allowed in function prototype}}
   auto f11 = [] (C auto x) { };
   // expected-note@-1{{candidate template ignored}} expected-note@-1{{because}}
   static_assert(is_same_v<decltype(f11(1)), void>);
@@ -238,7 +239,7 @@ namespace constrained {
   static_assert(is_same_v<decltype(f20(i, c)), void>);
   // expected-error@-1{{no matching}}
   static_assert(is_same_v<decltype(f20(c, c, cc)), void>);
-  void f21(C2<char> decltype(auto) x);
+  void f21(C2<char> decltype(auto) x); // expected-error{{decltype(auto)' not allowed in function prototype}}
   auto f22 = [] (C2<char> auto x) { };
   // expected-note@-1{{candidate template ignored}} expected-note@-1{{because}}
   static_assert(is_same_v<decltype(f22(1)), void>);

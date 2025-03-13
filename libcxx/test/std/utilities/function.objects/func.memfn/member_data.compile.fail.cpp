@@ -6,12 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-// GCC 5 does not evaluate static assertions dependent on a template parameter.
-// UNSUPPORTED: gcc-5
 
 // <functional>
 
-// template<Returnable R, class T> unspecified mem_fn(R T::* pm);
+// template<class R, class T> constexpr unspecified mem_fn(R T::*) noexcept;       // constexpr in C++20
 
 #include <functional>
 #include <cassert>

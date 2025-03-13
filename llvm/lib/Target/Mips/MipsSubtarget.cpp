@@ -12,17 +12,17 @@
 
 #include "MipsSubtarget.h"
 #include "Mips.h"
-#include "MipsMachineFunction.h"
-#include "MipsRegisterInfo.h"
-#include "MipsTargetMachine.h"
 #include "MipsCallLowering.h"
 #include "MipsLegalizerInfo.h"
 #include "MipsRegisterBankInfo.h"
+#include "MipsRegisterInfo.h"
+#include "MipsSelectionDAGInfo.h"
+#include "MipsTargetMachine.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -64,6 +64,7 @@ bool MipsSubtarget::MSAWarningPrinted = false;
 bool MipsSubtarget::VirtWarningPrinted = false;
 bool MipsSubtarget::CRCWarningPrinted = false;
 bool MipsSubtarget::GINVWarningPrinted = false;
+bool MipsSubtarget::MIPS1WarningPrinted = false;
 
 void MipsSubtarget::anchor() {}
 
@@ -78,29 +79,33 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
       HasMips3_32(false), HasMips3_32r2(false), HasMips4_32(false),
       HasMips4_32r2(false), HasMips5_32r2(false), InMips16Mode(false),
       InMips16HardFloat(Mips16HardFloat), InMicroMipsMode(false), HasDSP(false),
-      HasDSPR2(false), HasDSPR3(false), AllowMixed16_32(Mixed16_32 | Mips_Os16),
-      Os16(Mips_Os16), HasMSA(false), UseTCCInDIV(false), HasSym32(false),
-      HasEVA(false), DisableMadd4(false), HasMT(false), HasCRC(false),
-      HasVirt(false), HasGINV(false), UseIndirectJumpsHazard(false),
+      HasDSPR2(false), HasDSPR3(false),
+      AllowMixed16_32(Mixed16_32 || Mips_Os16), Os16(Mips_Os16), HasMSA(false),
+      UseTCCInDIV(false), HasSym32(false), HasEVA(false), DisableMadd4(false),
+      HasMT(false), HasCRC(false), HasVirt(false), HasGINV(false),
+      UseIndirectJumpsHazard(false), StrictAlign(false),
       StackAlignOverride(StackAlignOverride), TM(TM), TargetTriple(TT),
-      TSInfo(), InstrInfo(MipsInstrInfo::create(
-                    initializeSubtargetDependencies(CPU, FS, TM))),
+      InstrInfo(
+          MipsInstrInfo::create(initializeSubtargetDependencies(CPU, FS, TM))),
       FrameLowering(MipsFrameLowering::create(*this)),
       TLInfo(MipsTargetLowering::create(TM, *this)) {
 
   if (MipsArchVersion == MipsDefault)
     MipsArchVersion = Mips32;
 
-  // Don't even attempt to generate code for MIPS-I and MIPS-V. They have not
-  // been tested and currently exist for the integrated assembler only.
-  if (MipsArchVersion == Mips1)
-    report_fatal_error("Code generation for MIPS-I is not implemented", false);
+  // MIPS-I has not been tested.
+  if (MipsArchVersion == Mips1 && !MIPS1WarningPrinted) {
+    errs() << "warning: MIPS-I support is experimental\n";
+    MIPS1WarningPrinted = true;
+  }
+
+  // Don't even attempt to generate code for MIPS-V. It has not
+  // been tested and currently exists for the integrated assembler only.
   if (MipsArchVersion == Mips5)
     report_fatal_error("Code generation for MIPS-V is not implemented", false);
 
   // Check if Architecture and ABI are compatible.
-  assert(((!isGP64bit() && isABI_O32()) ||
-          (isGP64bit() && (isABI_N32() || isABI_N64()))) &&
+  assert(((!isGP64bit() && isABI_O32()) || isGP64bit()) &&
          "Invalid  Arch & ABI pair.");
 
   if (hasMSA() && !isFP64bit())
@@ -111,7 +116,7 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
   if (isFP64bit() && !hasMips64() && hasMips32() && !hasMips32r2())
     report_fatal_error(
         "FPU with 64-bit registers is not available on MIPS32 pre revision 2. "
-        "Use -mcpu=mips32r2 or greater.");
+        "Use -mcpu=mips32r2 or greater.", false);
 
   if (!isABI_O32() && !useOddSPReg())
     report_fatal_error("-mattr=+nooddspreg requires the O32 ABI.", false);
@@ -208,14 +213,17 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
     GINVWarningPrinted = true;
   }
 
+  TSInfo = std::make_unique<MipsSelectionDAGInfo>();
+
   CallLoweringInfo.reset(new MipsCallLowering(*getTargetLowering()));
   Legalizer.reset(new MipsLegalizerInfo(*this));
 
   auto *RBI = new MipsRegisterBankInfo(*getRegisterInfo());
   RegBankInfo.reset(RBI);
-  InstSelector.reset(createMipsInstructionSelector(
-      *static_cast<const MipsTargetMachine *>(&TM), *this, *RBI));
+  InstSelector.reset(createMipsInstructionSelector(TM, *this, *RBI));
 }
+
+MipsSubtarget::~MipsSubtarget() = default;
 
 bool MipsSubtarget::isPositionIndependent() const {
   return TM.isPositionIndependent();
@@ -230,8 +238,8 @@ void MipsSubtarget::getCriticalPathRCs(RegClassVector &CriticalPathRCs) const {
                                         : &Mips::GPR32RegClass);
 }
 
-CodeGenOpt::Level MipsSubtarget::getOptLevelToEnablePostRAScheduler() const {
-  return CodeGenOpt::Aggressive;
+CodeGenOptLevel MipsSubtarget::getOptLevelToEnablePostRAScheduler() const {
+  return CodeGenOptLevel::Aggressive;
 }
 
 MipsSubtarget &
@@ -277,6 +285,10 @@ bool MipsSubtarget::isABI_N64() const { return getABI().IsN64(); }
 bool MipsSubtarget::isABI_N32() const { return getABI().IsN32(); }
 bool MipsSubtarget::isABI_O32() const { return getABI().IsO32(); }
 const MipsABIInfo &MipsSubtarget::getABI() const { return TM.getABI(); }
+
+const SelectionDAGTargetInfo *MipsSubtarget::getSelectionDAGInfo() const {
+  return TSInfo.get();
+}
 
 const CallLowering *MipsSubtarget::getCallLowering() const {
   return CallLoweringInfo.get();

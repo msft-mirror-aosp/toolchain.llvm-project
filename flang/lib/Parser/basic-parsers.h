@@ -208,26 +208,31 @@ public:
   constexpr WithMessageParser(MessageFixedText t, PA p)
       : text_{t}, parser_{p} {}
   std::optional<resultType> Parse(ParseState &state) const {
+    if (state.deferMessages()) { // fast path
+      std::optional<resultType> result{parser_.Parse(state)};
+      if (!result) {
+        state.set_anyDeferredMessages();
+      }
+      return result;
+    }
     Messages messages{std::move(state.messages())};
-    ParseState backtrack{state};
+    bool hadAnyTokenMatched{state.anyTokenMatched()};
     state.set_anyTokenMatched(false);
     std::optional<resultType> result{parser_.Parse(state)};
     bool emitMessage{false};
     if (result) {
       messages.Annex(std::move(state.messages()));
-      if (backtrack.anyTokenMatched()) {
+      if (hadAnyTokenMatched) {
         state.set_anyTokenMatched();
       }
     } else if (state.anyTokenMatched()) {
       emitMessage = state.messages().empty();
       messages.Annex(std::move(state.messages()));
-      backtrack.set_anyTokenMatched();
-      if (state.anyDeferredMessages()) {
-        backtrack.set_anyDeferredMessages(true);
-      }
-      state = std::move(backtrack);
     } else {
       emitMessage = true;
+      if (hadAnyTokenMatched) {
+        state.set_anyTokenMatched();
+      }
     }
     state.messages() = std::move(messages);
     if (emitMessage) {
@@ -351,7 +356,7 @@ public:
   using resultType = typename PA::resultType;
   static_assert(std::is_same_v<resultType, typename PB::resultType>);
   constexpr RecoveryParser(const RecoveryParser &) = default;
-  constexpr RecoveryParser(PA pa, PB pb) : pa_{pa}, pb3_{pb} {}
+  constexpr RecoveryParser(PA pa, PB pb) : pa_{pa}, pb_{pb} {}
   std::optional<resultType> Parse(ParseState &state) const {
     bool originallyDeferred{state.deferMessages()};
     ParseState backtrack{state};
@@ -379,7 +384,7 @@ public:
     bool anyTokenMatched{state.anyTokenMatched()};
     state = std::move(backtrack);
     state.set_deferMessages(true);
-    std::optional<resultType> bx{pb3_.Parse(state)};
+    std::optional<resultType> bx{pb_.Parse(state)};
     state.messages() = std::move(messages);
     state.set_deferMessages(originallyDeferred);
     if (anyTokenMatched) {
@@ -398,7 +403,7 @@ public:
 
 private:
   const PA pa_;
-  const PB pb3_;
+  const PB pb_;
 };
 
 template <typename PA, typename PB>
@@ -575,11 +580,11 @@ template <typename PA> inline constexpr auto defaulted(PA p) {
 // applyLambda(f, ...) is the same concept extended to std::function<> functors.
 // It is not constexpr.
 //
-// Member function application is supported by applyMem(f, a).  If the
-// parser a succeeds and returns some value ax, the result is that returned
-// by ax.f().  Additional parser arguments can be specified to supply their
-// results to the member function call, so applyMem(f, a, b) succeeds if
-// both a and b do so and returns the result of calling ax.f(std::move(bx)).
+// Member function application is supported by applyMem(&C::f, a).  If the
+// parser a succeeds and returns some value ax of type C, the result is that
+// returned by ax.f().  Additional parser arguments can be specified to supply
+// their results to the member function call, so applyMem(&C::f, a, b) succeeds
+// if both a and b do so and returns the result of calling ax.f(std::move(bx)).
 
 // Runs a sequence of parsers until one fails or all have succeeded.
 // Collects their results in a std::tuple<std::optional<>...>.
@@ -649,39 +654,31 @@ inline /* not constexpr */ auto applyLambda(
 }
 
 // Member function application
-template <typename OBJPARSER, typename... PARSER> class AMFPHelper {
-  using resultType = typename OBJPARSER::resultType;
-
-public:
-  using type = void (resultType::*)(typename PARSER::resultType &&...);
-};
-template <typename OBJPARSER, typename... PARSER>
-using ApplicableMemberFunctionPointer =
-    typename AMFPHelper<OBJPARSER, PARSER...>::type;
-
-template <typename OBJPARSER, typename... PARSER, std::size_t... J>
-inline auto ApplyHelperMember(
-    ApplicableMemberFunctionPointer<OBJPARSER, PARSER...> mfp,
-    ApplyArgs<OBJPARSER, PARSER...> &&args, std::index_sequence<J...>) ->
-    typename OBJPARSER::resultType {
-  ((*std::get<0>(args)).*mfp)(std::move(*std::get<J + 1>(args))...);
-  return std::get<0>(std::move(args));
+template <typename MEMFUNC, typename OBJPARSER, typename... PARSER,
+    std::size_t... J>
+inline auto ApplyHelperMember(MEMFUNC mfp,
+    ApplyArgs<OBJPARSER, PARSER...> &&args, std::index_sequence<J...>) {
+  return ((*std::get<0>(args)).*mfp)(std::move(*std::get<J + 1>(args))...);
 }
 
-template <typename OBJPARSER, typename... PARSER> class ApplyMemberFunction {
-  using funcType = ApplicableMemberFunctionPointer<OBJPARSER, PARSER...>;
+template <typename MEMFUNC, typename OBJPARSER, typename... PARSER>
+class ApplyMemberFunction {
+  static_assert(std::is_member_function_pointer_v<MEMFUNC>);
+  using funcType = MEMFUNC;
 
 public:
-  using resultType = typename OBJPARSER::resultType;
+  using resultType =
+      std::invoke_result_t<MEMFUNC, typename OBJPARSER::resultType, PARSER...>;
+
   constexpr ApplyMemberFunction(const ApplyMemberFunction &) = default;
-  constexpr ApplyMemberFunction(funcType f, OBJPARSER o, PARSER... p)
+  constexpr ApplyMemberFunction(MEMFUNC f, OBJPARSER o, PARSER... p)
       : function_{f}, parsers_{o, p...} {}
   std::optional<resultType> Parse(ParseState &state) const {
     ApplyArgs<OBJPARSER, PARSER...> results;
     using Sequence1 = std::index_sequence_for<OBJPARSER, PARSER...>;
     using Sequence2 = std::index_sequence_for<PARSER...>;
     if (ApplyHelperArgs(parsers_, results, state, Sequence1{})) {
-      return ApplyHelperMember<OBJPARSER, PARSER...>(
+      return ApplyHelperMember<MEMFUNC, OBJPARSER, PARSER...>(
           function_, std::move(results), Sequence2{});
     } else {
       return std::nullopt;
@@ -693,11 +690,11 @@ private:
   const std::tuple<OBJPARSER, PARSER...> parsers_;
 };
 
-template <typename OBJPARSER, typename... PARSER>
+template <typename MEMFUNC, typename OBJPARSER, typename... PARSER>
 inline constexpr auto applyMem(
-    ApplicableMemberFunctionPointer<OBJPARSER, PARSER...> mfp,
-    const OBJPARSER &objParser, PARSER... parser) {
-  return ApplyMemberFunction<OBJPARSER, PARSER...>{mfp, objParser, parser...};
+    MEMFUNC memfn, const OBJPARSER &objParser, PARSER... parser) {
+  return ApplyMemberFunction<MEMFUNC, OBJPARSER, PARSER...>{
+      memfn, objParser, parser...};
 }
 
 // As is done with function application via applyFunction() above, class
@@ -845,6 +842,8 @@ template <LanguageFeature LF, typename PA> class NonstandardParser {
 public:
   using resultType = typename PA::resultType;
   constexpr NonstandardParser(const NonstandardParser &) = default;
+  constexpr NonstandardParser(PA parser, MessageFixedText msg)
+      : parser_{parser}, message_{msg} {}
   constexpr NonstandardParser(PA parser) : parser_{parser} {}
   std::optional<resultType> Parse(ParseState &state) const {
     if (UserState * ustate{state.userState()}) {
@@ -854,16 +853,22 @@ public:
     }
     auto at{state.GetLocation()};
     auto result{parser_.Parse(state)};
-    if (result) {
+    if (result && !message_.empty()) {
       state.Nonstandard(
-          CharBlock{at, state.GetLocation()}, LF, "nonstandard usage"_en_US);
+          CharBlock{at, std::max(state.GetLocation(), at + 1)}, LF, message_);
     }
     return result;
   }
 
 private:
   const PA parser_;
+  const MessageFixedText message_;
 };
+
+template <LanguageFeature LF, typename PA>
+inline constexpr auto extension(MessageFixedText feature, PA parser) {
+  return NonstandardParser<LF, PA>(parser, feature);
+}
 
 template <LanguageFeature LF, typename PA>
 inline constexpr auto extension(PA parser) {
@@ -887,8 +892,8 @@ public:
     auto at{state.GetLocation()};
     auto result{parser_.Parse(state)};
     if (result) {
-      state.Nonstandard(
-          CharBlock{at, state.GetLocation()}, LF, "deprecated usage"_en_US);
+      state.Nonstandard(CharBlock{at, state.GetLocation()}, LF,
+          "deprecated usage"_port_en_US);
     }
     return result;
   }

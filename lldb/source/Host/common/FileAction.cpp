@@ -16,8 +16,7 @@ using namespace lldb_private;
 
 // FileAction member functions
 
-FileAction::FileAction()
-    : m_action(eFileActionNone), m_fd(-1), m_arg(-1), m_file_spec() {}
+FileAction::FileAction() : m_file_spec() {}
 
 void FileAction::Clear() {
   m_action = eFileActionNone;
@@ -26,7 +25,9 @@ void FileAction::Clear() {
   m_file_spec.Clear();
 }
 
-llvm::StringRef FileAction::GetPath() const { return m_file_spec.GetCString(); }
+llvm::StringRef FileAction::GetPath() const {
+  return m_file_spec.GetPathAsConstString().AsCString();
+}
 
 const FileSpec &FileAction::GetFileSpec() const { return m_file_spec; }
 
@@ -40,7 +41,7 @@ bool FileAction::Open(int fd, const FileSpec &file_spec, bool read,
     else if (read)
       m_arg = O_NOCTTY | O_RDONLY;
     else
-      m_arg = O_NOCTTY | O_CREAT | O_WRONLY;
+      m_arg = O_NOCTTY | O_CREAT | O_WRONLY | O_TRUNC;
     m_file_spec = file_spec;
     return true;
   } else {
@@ -82,7 +83,7 @@ void FileAction::Dump(Stream &stream) const {
     break;
   case eFileActionOpen:
     stream.Printf("open fd %d with '%s', OFLAGS = 0x%x", m_fd,
-                  m_file_spec.GetCString(), m_arg);
+                  m_file_spec.GetPath().c_str(), m_arg);
     break;
   }
 }

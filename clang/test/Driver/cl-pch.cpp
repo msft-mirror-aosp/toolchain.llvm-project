@@ -79,12 +79,12 @@
 
 // If /Yc /Yu refer to different files, semantics are pretty wonky.  Since this
 // doesn't seem like something that's important in practice, just punt for now.
-// RUN: %clang_cl -Werror /Ycfoo1.h /Yufoo2.h /FIfoo1.h /FIfoo2.h /c -### -- %s 2>&1 \
+// RUN: not %clang_cl -Werror /Ycfoo1.h /Yufoo2.h /FIfoo1.h /FIfoo2.h /c -### -- %s 2>&1 \
 // RUN:   | FileCheck -check-prefix=CHECK-YC-YU-MISMATCH %s
 // CHECK-YC-YU-MISMATCH: error: support for '/Yc' and '/Yu' with different filenames not implemented yet; flags ignored
 
 // Similarly, punt on /Yc with more than one input file.
-// RUN: %clang_cl -Werror /Ycfoo1.h /FIfoo1.h /c -### -- %s %s 2>&1 \
+// RUN: not %clang_cl -Werror /Ycfoo1.h /FIfoo1.h /c -### -- %s %s 2>&1 \
 // RUN:   | FileCheck -check-prefix=CHECK-YC-MULTIINPUT %s
 // CHECK-YC-MULTIINPUT: error: support for '/Yc' with more than one source file not implemented yet; flag ignored
 
@@ -98,6 +98,12 @@
 
 // /Yu /Fpout.pch => out.pch is filename
 // RUN: %clang_cl -Werror /Yupchfile.h /FIpchfile.h /Fpout.pch /c -### -- %s 2>&1 \
+// RUN:   | FileCheck -check-prefix=CHECK-YUFP1 %s
+// /Yu /Fp:out.pch => out.pch is filename
+// RUN: %clang_cl -Werror /Yupchfile.h /FIpchfile.h /Fp:out.pch /c -### -- %s 2>&1 \
+// RUN:   | FileCheck -check-prefix=CHECK-YUFP1 %s
+// /Yu /Fp: out.pch => out.pch is filename
+// RUN: %clang_cl -Werror /Yupchfile.h /FIpchfile.h /Fp: out.pch /c -### -- %s 2>&1 \
 // RUN:   | FileCheck -check-prefix=CHECK-YUFP1 %s
 // Use .pch file, but don't build it.
 // CHECK-YUFP1: -include-pch
@@ -333,43 +339,10 @@
 // uses the last one.  This is true for e.g. /Fo too, so not warning on this
 // is self-consistent with clang-cl's flag handling.
 
-// Interaction with /fallback
-
-// /Yc /fallback => /Yc not passed on (but /FI is)
-// RUN: %clang_cl -Werror /Ycpchfile.h /FIpchfile.h /Fpfoo.pch /fallback /c -### -- %s 2>&1 \
-// RUN:   | FileCheck -check-prefix=CHECK-YC-FALLBACK %s
-// Note that in /fallback builds, if creation of the pch fails the main compile
-// does still run so that /fallback can have an effect (this part is not tested)
-// CHECK-YC-FALLBACK: cc1
-// CHECK-YC-FALLBACK: -emit-obj
-// CHECK-YC-FALLBACK: -include-pch
-// CHECK-YC-FALLBACK: foo.pch
-// CHECK-YC-FALLBACK: ||
-// CHECK-YC-FALLBACK: cl.exe
-// CHECK-YC-FALLBACK-NOT: -include-pch
-// CHECK-YC-FALLBACK-NOT: /Ycpchfile.h
-// CHECK-YC-FALLBACK: /FIpchfile.h
-// CHECK-YC-FALLBACK-NOT: /Fpfoo.pch
-
-// /Yu /fallback => /Yu not passed on (but /FI is)
-// RUN: %clang_cl -Werror /Yupchfile.h /FIpchfile.h /Fpfoo.pch /fallback /c -### -- %s 2>&1 \
-// RUN:   | FileCheck -check-prefix=CHECK-YU-FALLBACK %s
-// CHECK-YU-FALLBACK-NOT: -emit-pch
-// CHECK-YU-FALLBACK: cc1
-// CHECK-YU-FALLBACK: -emit-obj
-// CHECK-YU-FALLBACK: -include-pch
-// CHECK-YU-FALLBACK: foo.pch
-// CHECK-YU-FALLBACK: ||
-// CHECK-YU-FALLBACK: cl.exe
-// CHECK-YU-FALLBACK-NOT: -include-pch
-// CHECK-YU-FALLBACK-NOT: /Yupchfile.h
-// CHECK-YU-FALLBACK: /FIpchfile.h
-// CHECK-YU-FALLBACK-NOT: /Fpfoo.pch
-
 // /FI without /Yu => pch file not used, even if it exists (different from
 // -include, which picks up .gch files if they exist).
 // RUN: touch %t.pch
-// RUN: %clang_cl -Werror /FI%t.pch /Fp%t.pch /c -### -- %s 2>&1 \
+// RUN: not %clang_cl -Werror /FI%t.pch /Fp%t.pch /c -### -- %s 2>&1 \
 // RUN:   | FileCheck -check-prefix=CHECK-FI %s
 // CHECK-FI-NOT: -include-pch
 // CHECK-FI: -include
@@ -397,7 +370,7 @@
 // CHECK-YCTc: "c"
 
 // Don't crash when a non-source file is passed.
-// RUN: %clang_cl -Werror /Ycpchfile.h /FIpchfile.h /c -### -- %S/Inputs/file.prof 2>&1 \
+// RUN: not %clang_cl -Werror /Ycpchfile.h /FIpchfile.h /c -### -- %S/Inputs/file.prof 2>&1 \
 // RUN:   | FileCheck -check-prefix=CHECK-NoSource %s
 // CHECK-NoSource: file.prof:{{.*}}input unused
 

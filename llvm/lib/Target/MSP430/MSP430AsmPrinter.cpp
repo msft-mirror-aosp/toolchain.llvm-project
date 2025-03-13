@@ -12,27 +12,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/MSP430InstPrinter.h"
-#include "MSP430.h"
-#include "MSP430InstrInfo.h"
 #include "MSP430MCInstLower.h"
 #include "MSP430TargetMachine.h"
 #include "TargetInfo/MSP430TargetInfo.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
-#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Mangler.h"
-#include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
@@ -149,6 +143,9 @@ bool MSP430AsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 
 //===----------------------------------------------------------------------===//
 void MSP430AsmPrinter::emitInstruction(const MachineInstr *MI) {
+  MSP430_MC::verifyInstructionPredicates(MI->getOpcode(),
+                                         getSubtargetInfo().getFeatureBits());
+
   MSP430MCInstLower MCInstLowering(OutContext, *this);
 
   MCInst TmpInst;
@@ -166,11 +163,11 @@ void MSP430AsmPrinter::EmitInterruptVectorSection(MachineFunction &ISR) {
   MCSection *IV = OutStreamer->getContext().getELFSection(
     "__interrupt_vector_" + IVIdx,
     ELF::SHT_PROGBITS, ELF::SHF_ALLOC | ELF::SHF_EXECINSTR);
-  OutStreamer->SwitchSection(IV);
+  OutStreamer->switchSection(IV);
 
   const MCSymbol *FunctionSymbol = getSymbol(F);
   OutStreamer->emitSymbolValue(FunctionSymbol, TM.getProgramPointerSize());
-  OutStreamer->SwitchSection(Cur);
+  OutStreamer->switchSection(Cur);
 }
 
 bool MSP430AsmPrinter::runOnMachineFunction(MachineFunction &MF) {

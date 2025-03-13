@@ -1,5 +1,5 @@
 add_custom_target(PollyUnitTests)
-set_target_properties(PollyUnitTests PROPERTIES FOLDER "Polly")
+set_target_properties(PollyUnitTests PROPERTIES FOLDER "Polly/Tests")
 
 # add_polly_unittest(test_dirname file1.cpp file2.cpp)
 #
@@ -13,10 +13,15 @@ function(add_polly_unittest test_name)
 
     target_link_libraries(${test_name} PRIVATE gtest_main gtest)
     add_dependencies(PollyUnitTests ${test_name})
-
-    set_property(TARGET ${test_name} PROPERTY FOLDER "Polly")
   endif()
-  target_link_libraries(${test_name} PRIVATE Polly)
+  set_property(TARGET ${test_name} PROPERTY FOLDER "Polly/Tests/Unit")
+
+  if(LLVM_LINK_LLVM_DYLIB AND LLVM_POLLY_LINK_INTO_TOOLS)
+    # In this case Polly is already present in libLLVM,
+    # no need to link it again.
+  else()
+    target_link_libraries(${test_name} PRIVATE Polly)
+  endif()
 endfunction()
 
 add_subdirectory(Isl)

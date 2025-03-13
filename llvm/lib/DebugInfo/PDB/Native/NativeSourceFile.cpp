@@ -1,4 +1,4 @@
-//===- NativeSourceFile.cpp - Native line number implementaiton -*- C++ -*-===//
+//===- NativeSourceFile.cpp - Native line number implementation -*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/DebugInfo/PDB/Native/NativeSourceFile.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/DebugInfo/PDB/Native/NativeSession.h"
+#include "llvm/DebugInfo/PDB/Native/PDBFile.h"
+#include "llvm/DebugInfo/PDB/Native/PDBStringTable.h"
 
 using namespace llvm;
 using namespace llvm::pdb;

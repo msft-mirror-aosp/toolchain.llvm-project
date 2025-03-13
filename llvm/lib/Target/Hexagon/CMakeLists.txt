@@ -26,6 +26,7 @@ add_llvm_target(HexagonCodeGen
   HexagonCommonGEP.cpp
   HexagonConstExtenders.cpp
   HexagonConstPropagation.cpp
+  HexagonCopyHoisting.cpp
   HexagonCopyToCombine.cpp
   HexagonEarlyIfConv.cpp
   HexagonExpandCondsets.cpp
@@ -33,6 +34,7 @@ add_llvm_target(HexagonCodeGen
   HexagonFrameLowering.cpp
   HexagonGenExtract.cpp
   HexagonGenInsert.cpp
+  HexagonGenMemAbsolute.cpp
   HexagonGenMux.cpp
   HexagonGenPredicate.cpp
   HexagonHardwareLoops.cpp
@@ -42,9 +44,11 @@ add_llvm_target(HexagonCodeGen
   HexagonISelDAGToDAGHVX.cpp
   HexagonISelLowering.cpp
   HexagonISelLoweringHVX.cpp
+  HexagonLoopAlign.cpp
   HexagonLoopIdiomRecognition.cpp
   HexagonMachineFunctionInfo.cpp
   HexagonMachineScheduler.cpp
+  HexagonMask.cpp
   HexagonMCInstLower.cpp
   HexagonNewValueJump.cpp
   HexagonOptAddrMode.cpp
@@ -55,11 +59,13 @@ add_llvm_target(HexagonCodeGen
   HexagonSelectionDAGInfo.cpp
   HexagonSplitConst32AndConst64.cpp
   HexagonSplitDouble.cpp
-  HexagonStoreWidening.cpp
+  HexagonLoadStoreWidening.cpp
   HexagonSubtarget.cpp
   HexagonTargetMachine.cpp
   HexagonTargetObjectFile.cpp
   HexagonTargetTransformInfo.cpp
+  HexagonTfrCleanup.cpp
+  HexagonVectorCombine.cpp
   HexagonVectorLoopCarriedReuse.cpp
   HexagonVectorPrint.cpp
   HexagonVExtract.cpp
@@ -68,9 +74,10 @@ add_llvm_target(HexagonCodeGen
   RDFDeadCode.cpp
 
   LINK_COMPONENTS
-   Analysis
+  Analysis
   AsmPrinter
   CodeGen
+  CodeGenTypes
   Core
   HexagonAsmParser
   HexagonDesc
@@ -81,11 +88,12 @@ add_llvm_target(HexagonCodeGen
   SelectionDAG
   Support
   Target
+  TargetParser
   TransformUtils
 
   ADD_TO_COMPONENT
   Hexagon
-)
+  )
 
 add_subdirectory(AsmParser)
 add_subdirectory(Disassembler)

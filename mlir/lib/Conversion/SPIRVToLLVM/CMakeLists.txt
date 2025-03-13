@@ -1,7 +1,7 @@
 add_mlir_conversion_library(MLIRSPIRVToLLVM
   ConvertLaunchFuncToLLVMCalls.cpp
-  ConvertSPIRVToLLVM.cpp
-  ConvertSPIRVToLLVMPass.cpp
+  SPIRVToLLVM.cpp
+  SPIRVToLLVMPass.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/SPIRVToLLVM
@@ -11,10 +11,15 @@ add_mlir_conversion_library(MLIRSPIRVToLLVM
   intrinsics_gen
 
   LINK_LIBS PUBLIC
-  MLIRGPU
-  MLIRSPIRV
-  MLIRLLVMIR
-  MLIRStandardToLLVM
+  MLIRArithToLLVM
+  MLIRFuncToLLVM
+  MLIRGPUDialect
   MLIRIR
+  MLIRLLVMCommonConversion
+  MLIRLLVMDialect
+  MLIRMemRefToLLVM
+  MLIRSPIRVAttrToLLVMConversion
+  MLIRSPIRVDialect
+  MLIRSPIRVUtils
   MLIRTransforms
   )

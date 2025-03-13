@@ -12,29 +12,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "SIMachineScheduler.h"
-#include "AMDGPU.h"
-#include "SIInstrInfo.h"
-#include "SIRegisterInfo.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/CodeGen/LiveInterval.h"
+#include "SIInstrInfo.h"
 #include "llvm/CodeGen/LiveIntervals.h"
-#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/MachineScheduler.h"
-#include "llvm/CodeGen/RegisterPressure.h"
-#include "llvm/CodeGen/SlotIndexes.h"
-#include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
-#include <algorithm>
-#include <cassert>
-#include <map>
-#include <set>
-#include <utility>
-#include <vector>
 
 using namespace llvm;
 
@@ -83,7 +64,7 @@ using namespace llvm;
 // First the instructions are put into blocks.
 //   We want the blocks help control register usage and hide high latencies
 //   later. To help control register usage, we typically want all local
-//   computations, when for example you create a result that can be comsummed
+//   computations, when for example you create a result that can be consumed
 //   right away, to be contained in a block. Block inputs and outputs would
 //   typically be important results that are needed in several locations of
 //   the shader. Since we do want blocks to help hide high latencies, we want
@@ -109,8 +90,8 @@ using namespace llvm;
 // Increasing the number of active wavefronts helps hide the former, but it
 // doesn't solve the latter, thus why even if wavefront count is high, we have
 // to try have as many instructions hiding high latencies as possible.
-// The OpenCL doc says for example latency of 400 cycles for a global mem access,
-// which is hidden by 10 instructions if the wavefront count is 10.
+// The OpenCL doc says for example latency of 400 cycles for a global mem
+// access, which is hidden by 10 instructions if the wavefront count is 10.
 
 // Some figures taken from AMD docs:
 // Both texture and constant L1 caches are 4-way associative with 64 bytes
@@ -154,8 +135,7 @@ static const char *getReasonStr(SIScheduleCandReason Reason) {
 
 #endif
 
-namespace llvm {
-namespace SISched {
+namespace llvm::SISched {
 static bool tryLess(int TryVal, int CandVal,
                     SISchedulerCandidate &TryCand,
                     SISchedulerCandidate &Cand,
@@ -189,8 +169,7 @@ static bool tryGreater(int TryVal, int CandVal,
   Cand.setRepeat(Reason);
   return false;
 }
-} // end namespace SISched
-} // end namespace llvm
+} // end namespace llvm::SISched
 
 // SIScheduleBlock //
 
@@ -305,10 +284,9 @@ void SIScheduleBlock::fastSchedule() {
 }
 
 // Returns if the register was set between first and last.
-static bool isDefBetween(unsigned Reg,
-                           SlotIndex First, SlotIndex Last,
-                           const MachineRegisterInfo *MRI,
-                           const LiveIntervals *LIS) {
+static bool isDefBetween(Register Reg, SlotIndex First, SlotIndex Last,
+                         const MachineRegisterInfo *MRI,
+                         const LiveIntervals *LIS) {
   for (MachineRegisterInfo::def_instr_iterator
        UI = MRI->def_instr_begin(Reg),
        UE = MRI->def_instr_end(); UI != UE; ++UI) {
@@ -348,7 +326,7 @@ void SIScheduleBlock::initRegPressure(MachineBasicBlock::iterator BeginBlock,
 
   // Do not Track Physical Registers, because it messes up.
   for (const auto &RegMaskPair : RPTracker.getPressure().LiveInRegs) {
-    if (Register::isVirtualRegister(RegMaskPair.RegUnit))
+    if (RegMaskPair.RegUnit.isVirtual())
       LiveInRegs.insert(RegMaskPair.RegUnit);
   }
   LiveOutRegs.clear();
@@ -372,7 +350,7 @@ void SIScheduleBlock::initRegPressure(MachineBasicBlock::iterator BeginBlock,
   // able to correctly handle 5 vs 6, 2 vs 3.
   // (Note: This is not sufficient for RPTracker to not do mistakes for case 4)
   // The RPTracker's LiveOutRegs has 1, 3, (some correct or incorrect)4, 5, 7
-  // Comparing to LiveInRegs is not sufficient to differenciate 4 vs 5, 7
+  // Comparing to LiveInRegs is not sufficient to differentiate 4 vs 5, 7
   // The use of findDefBetween removes the case 4.
   for (const auto &RegMaskPair : RPTracker.getPressure().LiveOutRegs) {
     Register Reg = RegMaskPair.RegUnit;
@@ -421,8 +399,8 @@ void SIScheduleBlock::schedule(MachineBasicBlock::iterator BeginBlock,
     nodeScheduled(SU);
   }
 
-  // TODO: compute InternalAdditionnalPressure.
-  InternalAdditionnalPressure.resize(TopPressure.MaxSetPressure.size());
+  // TODO: compute InternalAdditionalPressure.
+  InternalAdditionalPressure.resize(TopPressure.MaxSetPressure.size());
 
   // Check everything is right.
 #ifndef NDEBUG
@@ -567,7 +545,7 @@ void SIScheduleBlock::addSucc(SIScheduleBlock *Succ,
   }
   if (Succ->isHighLatencyBlock())
     ++NumHighLatencySuccessors;
-  Succs.push_back(std::make_pair(Succ, Kind));
+  Succs.emplace_back(Succ, Kind);
 
   assert(none_of(Preds,
                  [=](SIScheduleBlock *P) { return SuccID == P->getID(); }) &&
@@ -602,11 +580,11 @@ void SIScheduleBlock::printDebug(bool full) {
            << LiveOutPressure[AMDGPU::RegisterPressureSets::SReg_32] << ' '
            << LiveOutPressure[AMDGPU::RegisterPressureSets::VGPR_32] << "\n\n";
     dbgs() << "LiveIns:\n";
-    for (unsigned Reg : LiveInRegs)
+    for (Register Reg : LiveInRegs)
       dbgs() << printVRegOrUnit(Reg, DAG->getTRI()) << ' ';
 
     dbgs() << "\nLiveOuts:\n";
-    for (unsigned Reg : LiveOutRegs)
+    for (Register Reg : LiveOutRegs)
       dbgs() << printVRegOrUnit(Reg, DAG->getTRI()) << ' ';
   }
 
@@ -638,9 +616,8 @@ SIScheduleBlockCreator::getBlocks(SISchedulerBlockCreatorVariant BlockVariant) {
     Res.TopDownBlock2Index = TopDownBlock2Index;
     Blocks[BlockVariant] = Res;
     return Res;
-  } else {
-    return B->second;
   }
+  return B->second;
 }
 
 bool SIScheduleBlockCreator::isSUInBlock(SUnit *SU, unsigned ID) {
@@ -715,7 +692,7 @@ void SIScheduleBlockCreator::colorHighLatenciesGroups() {
         bool HasSubGraph;
         std::vector<int> SubGraph;
         // By construction (topological order), if SU and
-        // DAG->SUnits[j] are linked, DAG->SUnits[j] is neccessary
+        // DAG->SUnits[j] are linked, DAG->SUnits[j] is necessary
         // in the parent graph of SU.
 #ifndef NDEBUG
         SubGraph = DAG->GetTopo()->GetSubGraph(SU, DAG->SUnits[j],
@@ -726,46 +703,42 @@ void SIScheduleBlockCreator::colorHighLatenciesGroups() {
                                                HasSubGraph);
         if (!HasSubGraph)
           continue; // No dependencies between each other
-        else if (SubGraph.size() > 5) {
+        if (SubGraph.size() > 5) {
           // Too many elements would be required to be added to the block.
           CompatibleGroup = false;
           break;
         }
-        else {
-          // Check the type of dependency
-          for (unsigned k : SubGraph) {
-            // If in the path to join the two instructions,
-            // there is another high latency instruction,
-            // or instructions colored for another block
-            // abort the merge.
-            if (DAG->IsHighLatencySU[k] ||
-                (CurrentColoring[k] != ProposedColor &&
-                 CurrentColoring[k] != 0)) {
-              CompatibleGroup = false;
-              break;
-            }
-            // If one of the SU in the subgraph depends on the result of SU j,
-            // there'll be a data dependency.
-            if (hasDataDependencyPred(DAG->SUnits[k], DAG->SUnits[j])) {
-              CompatibleGroup = false;
-              break;
-            }
-          }
-          if (!CompatibleGroup)
-            break;
-          // Same check for the SU
-          if (hasDataDependencyPred(SU, DAG->SUnits[j])) {
+        // Check the type of dependency
+        for (unsigned k : SubGraph) {
+          // If in the path to join the two instructions,
+          // there is another high latency instruction,
+          // or instructions colored for another block
+          // abort the merge.
+          if (DAG->IsHighLatencySU[k] || (CurrentColoring[k] != ProposedColor &&
+                                          CurrentColoring[k] != 0)) {
             CompatibleGroup = false;
             break;
           }
-          // Add all the required instructions to the block
-          // These cannot live in another block (because they
-          // depend (order dependency) on one of the
-          // instruction in the block, and are required for the
-          // high latency instruction we add.
-          AdditionalElements.insert(AdditionalElements.end(),
-                                    SubGraph.begin(), SubGraph.end());
+          // If one of the SU in the subgraph depends on the result of SU j,
+          // there'll be a data dependency.
+          if (hasDataDependencyPred(DAG->SUnits[k], DAG->SUnits[j])) {
+            CompatibleGroup = false;
+            break;
+          }
         }
+        if (!CompatibleGroup)
+          break;
+        // Same check for the SU
+        if (hasDataDependencyPred(SU, DAG->SUnits[j])) {
+          CompatibleGroup = false;
+          break;
+        }
+        // Add all the required instructions to the block
+        // These cannot live in another block (because they
+        // depend (order dependency) on one of the
+        // instruction in the block, and are required for the
+        // high latency instruction we add.
+        llvm::append_range(AdditionalElements, SubGraph);
       }
       if (CompatibleGroup) {
         FormingGroup.insert(SU.NodeNum);
@@ -889,31 +862,26 @@ void SIScheduleBlockCreator::colorComputeReservedDependencies() {
 }
 
 void SIScheduleBlockCreator::colorAccordingToReservedDependencies() {
-  unsigned DAGSize = DAG->SUnits.size();
   std::map<std::pair<unsigned, unsigned>, unsigned> ColorCombinations;
 
   // Every combination of colors given by the top down
   // and bottom up Reserved node dependency
 
-  for (unsigned i = 0, e = DAGSize; i != e; ++i) {
-    SUnit *SU = &DAG->SUnits[i];
+  for (const SUnit &SU : DAG->SUnits) {
     std::pair<unsigned, unsigned> SUColors;
 
     // High latency instructions: already given.
-    if (CurrentColoring[SU->NodeNum])
+    if (CurrentColoring[SU.NodeNum])
       continue;
 
-    SUColors.first = CurrentTopDownReservedDependencyColoring[SU->NodeNum];
-    SUColors.second = CurrentBottomUpReservedDependencyColoring[SU->NodeNum];
+    SUColors.first = CurrentTopDownReservedDependencyColoring[SU.NodeNum];
+    SUColors.second = CurrentBottomUpReservedDependencyColoring[SU.NodeNum];
 
-    std::map<std::pair<unsigned, unsigned>, unsigned>::iterator Pos =
-      ColorCombinations.find(SUColors);
-    if (Pos != ColorCombinations.end()) {
-      CurrentColoring[SU->NodeNum] = Pos->second;
-    } else {
-      CurrentColoring[SU->NodeNum] = NextNonReservedID;
-      ColorCombinations[SUColors] = NextNonReservedID++;
-    }
+    auto [Pos, Inserted] =
+        ColorCombinations.try_emplace(SUColors, NextNonReservedID);
+    CurrentColoring[SU.NodeNum] = Pos->second;
+    if (Inserted)
+      NextNonReservedID++;
   }
 }
 
@@ -926,10 +894,8 @@ void SIScheduleBlockCreator::colorEndsAccordingToDependencies() {
          CurrentTopDownReservedDependencyColoring.size() == DAGSize);
   // If there is no reserved block at all, do nothing. We don't want
   // everything in one block.
-  if (*std::max_element(CurrentBottomUpReservedDependencyColoring.begin(),
-                        CurrentBottomUpReservedDependencyColoring.end()) == 0 &&
-      *std::max_element(CurrentTopDownReservedDependencyColoring.begin(),
-                        CurrentTopDownReservedDependencyColoring.end()) == 0)
+  if (*llvm::max_element(CurrentBottomUpReservedDependencyColoring) == 0 &&
+      *llvm::max_element(CurrentTopDownReservedDependencyColoring) == 0)
     return;
 
   for (unsigned SUNum : DAG->BottomUpIndex2SU) {
@@ -1145,36 +1111,26 @@ void SIScheduleBlockCreator::colorExports() {
   for (unsigned SUNum : DAG->TopDownIndex2SU) {
     const SUnit &SU = DAG->SUnits[SUNum];
     if (SIInstrInfo::isEXP(*SU.getInstr())) {
-      // Check the EXP can be added to the group safely,
-      // ie without needing any other instruction.
-      // The EXP is allowed to depend on other EXP
-      // (they will be in the same group).
-      for (unsigned j : ExpGroup) {
-        bool HasSubGraph;
-        std::vector<int> SubGraph;
-        // By construction (topological order), if SU and
-        // DAG->SUnits[j] are linked, DAG->SUnits[j] is neccessary
-        // in the parent graph of SU.
-#ifndef NDEBUG
-        SubGraph = DAG->GetTopo()->GetSubGraph(SU, DAG->SUnits[j],
-                                               HasSubGraph);
-        assert(!HasSubGraph);
-#endif
-        SubGraph = DAG->GetTopo()->GetSubGraph(DAG->SUnits[j], SU,
-                                               HasSubGraph);
-        if (!HasSubGraph)
-          continue; // No dependencies between each other
+      // SU is an export instruction. Check whether one of its successor
+      // dependencies is a non-export, in which case we skip export grouping.
+      for (const SDep &SuccDep : SU.Succs) {
+        const SUnit *SuccSU = SuccDep.getSUnit();
+        if (SuccDep.isWeak() || SuccSU->NodeNum >= DAG->SUnits.size()) {
+          // Ignore these dependencies.
+          continue;
+        }
+        assert(SuccSU->isInstr() &&
+               "SUnit unexpectedly not representing an instruction!");
 
-        // SubGraph contains all the instructions required
-        // between EXP SUnits[j] and EXP SU.
-        for (unsigned k : SubGraph) {
-          if (!SIInstrInfo::isEXP(*DAG->SUnits[k].getInstr()))
-            // Other instructions than EXP would be required in the group.
-            // Abort the groupping.
-            return;
+        if (!SIInstrInfo::isEXP(*SuccSU->getInstr())) {
+          // A non-export depends on us. Skip export grouping.
+          // Note that this is a bit pessimistic: We could still group all other
+          // exports that are not depended on by non-exports, directly or
+          // indirectly. Simply skipping this particular export but grouping all
+          // others would not account for indirect dependencies.
+          return;
         }
       }
-
       ExpGroup.push_back(SUNum);
     }
   }
@@ -1252,15 +1208,13 @@ void SIScheduleBlockCreator::createBlocksForVariant(SISchedulerBlockCreatorVaria
   }
 
   // Free root and leafs of all blocks to enable scheduling inside them.
-  for (unsigned i = 0, e = CurrentBlocks.size(); i != e; ++i) {
-    SIScheduleBlock *Block = CurrentBlocks[i];
+  for (SIScheduleBlock *Block : CurrentBlocks)
     Block->finalizeUnits();
-  }
-  LLVM_DEBUG(dbgs() << "Blocks created:\n\n";
-             for (unsigned i = 0, e = CurrentBlocks.size(); i != e; ++i) {
-               SIScheduleBlock *Block = CurrentBlocks[i];
-               Block->printDebug(true);
-             });
+  LLVM_DEBUG({
+    dbgs() << "Blocks created:\n\n";
+    for (SIScheduleBlock *Block : CurrentBlocks)
+      Block->printDebug(true);
+  });
 }
 
 // Two functions taken from Codegen/MachineScheduler.cpp
@@ -1399,9 +1353,9 @@ void SIScheduleBlockCreator::scheduleInsideBlocks() {
     }
   }
 
-  LLVM_DEBUG(for (unsigned i = 0, e = CurrentBlocks.size(); i != e; ++i) {
-    SIScheduleBlock *Block = CurrentBlocks[i];
-    Block->printDebug(true);
+  LLVM_DEBUG({
+    for (SIScheduleBlock *Block : CurrentBlocks)
+      Block->printDebug(true);
   });
 }
 
@@ -1457,14 +1411,13 @@ SIScheduleBlockScheduler::SIScheduleBlockScheduler(SIScheduleDAGMI *DAG,
   // found for several parents, we increment the usage of the one with the
   // highest topological index.
   LiveOutRegsNumUsages.resize(Blocks.size());
-  for (unsigned i = 0, e = Blocks.size(); i != e; ++i) {
-    SIScheduleBlock *Block = Blocks[i];
-    for (unsigned Reg : Block->getInRegs()) {
+  for (SIScheduleBlock *Block : Blocks) {
+    for (Register Reg : Block->getInRegs()) {
       bool Found = false;
       int topoInd = -1;
       for (SIScheduleBlock* Pred: Block->getPreds()) {
-        std::set<unsigned> PredOutRegs = Pred->getOutRegs();
-        std::set<unsigned>::iterator RegPos = PredOutRegs.find(Reg);
+        std::set<Register> PredOutRegs = Pred->getOutRegs();
+        std::set<Register>::iterator RegPos = PredOutRegs.find(Reg);
 
         if (RegPos != PredOutRegs.end()) {
           Found = true;
@@ -1499,18 +1452,18 @@ SIScheduleBlockScheduler::SIScheduleBlockScheduler(SIScheduleDAGMI *DAG,
   }
 #endif
 
-  std::set<unsigned> InRegs = DAG->getInRegs();
+  std::set<Register> InRegs = DAG->getInRegs();
   addLiveRegs(InRegs);
 
   // Increase LiveOutRegsNumUsages for blocks
   // producing registers consumed in another
   // scheduling region.
-  for (unsigned Reg : DAG->getOutRegs()) {
+  for (Register Reg : DAG->getOutRegs()) {
     for (unsigned i = 0, e = Blocks.size(); i != e; ++i) {
       // Do reverse traversal
       int ID = BlocksStruct.TopDownIndex2Block[Blocks.size()-1-i];
       SIScheduleBlock *Block = Blocks[ID];
-      const std::set<unsigned> &OutRegs = Block->getOutRegs();
+      const std::set<Register> &OutRegs = Block->getOutRegs();
 
       if (OutRegs.find(Reg) == OutRegs.end())
         continue;
@@ -1522,13 +1475,12 @@ SIScheduleBlockScheduler::SIScheduleBlockScheduler(SIScheduleDAGMI *DAG,
 
   // Fill LiveRegsConsumers for regs that were already
   // defined before scheduling.
-  for (unsigned i = 0, e = Blocks.size(); i != e; ++i) {
-    SIScheduleBlock *Block = Blocks[i];
-    for (unsigned Reg : Block->getInRegs()) {
+  for (SIScheduleBlock *Block : Blocks) {
+    for (Register Reg : Block->getInRegs()) {
       bool Found = false;
       for (SIScheduleBlock* Pred: Block->getPreds()) {
-        std::set<unsigned> PredOutRegs = Pred->getOutRegs();
-        std::set<unsigned>::iterator RegPos = PredOutRegs.find(Reg);
+        std::set<Register> PredOutRegs = Pred->getOutRegs();
+        std::set<Register>::iterator RegPos = PredOutRegs.find(Reg);
 
         if (RegPos != PredOutRegs.end()) {
           Found = true;
@@ -1620,13 +1572,11 @@ SIScheduleBlock *SIScheduleBlockScheduler::pickBlock() {
   if (SregCurrentUsage > maxSregUsage)
     maxSregUsage = SregCurrentUsage;
   LLVM_DEBUG(dbgs() << "Picking New Blocks\n"; dbgs() << "Available: ";
-             for (SIScheduleBlock *Block
-                  : ReadyBlocks) dbgs()
-             << Block->getID() << ' ';
+             for (SIScheduleBlock *Block : ReadyBlocks)
+               dbgs() << Block->getID() << ' ';
              dbgs() << "\nCurrent Live:\n";
-             for (unsigned Reg
-                  : LiveRegs) dbgs()
-             << printVRegOrUnit(Reg, DAG->getTRI()) << ' ';
+             for (Register Reg : LiveRegs)
+               dbgs() << printVRegOrUnit(Reg, DAG->getTRI()) << ' ';
              dbgs() << '\n';
              dbgs() << "Current VGPRs: " << VregCurrentUsage << '\n';
              dbgs() << "Current SGPRs: " << SregCurrentUsage << '\n';);
@@ -1681,7 +1631,7 @@ SIScheduleBlock *SIScheduleBlockScheduler::pickBlock() {
 
 // Tracking of currently alive registers to determine VGPR Usage.
 
-void SIScheduleBlockScheduler::addLiveRegs(std::set<unsigned> &Regs) {
+void SIScheduleBlockScheduler::addLiveRegs(std::set<Register> &Regs) {
   for (Register Reg : Regs) {
     // For now only track virtual registers.
     if (!Reg.isVirtual())
@@ -1692,10 +1642,10 @@ void SIScheduleBlockScheduler::addLiveRegs(std::set<unsigned> &Regs) {
 }
 
 void SIScheduleBlockScheduler::decreaseLiveRegs(SIScheduleBlock *Block,
-                                       std::set<unsigned> &Regs) {
-  for (unsigned Reg : Regs) {
+                                                std::set<Register> &Regs) {
+  for (Register Reg : Regs) {
     // For now only track virtual registers.
-    std::set<unsigned>::iterator Pos = LiveRegs.find(Reg);
+    std::set<Register>::iterator Pos = LiveRegs.find(Reg);
     assert (Pos != LiveRegs.end() && // Reg must be live.
                LiveRegsConsumers.find(Reg) != LiveRegsConsumers.end() &&
                LiveRegsConsumers[Reg] >= 1);
@@ -1720,10 +1670,7 @@ void SIScheduleBlockScheduler::blockScheduled(SIScheduleBlock *Block) {
   decreaseLiveRegs(Block, Block->getInRegs());
   addLiveRegs(Block->getOutRegs());
   releaseBlockSuccs(Block);
-  for (std::map<unsigned, unsigned>::iterator RegI =
-       LiveOutRegsNumUsages[Block->getID()].begin(),
-       E = LiveOutRegsNumUsages[Block->getID()].end(); RegI != E; ++RegI) {
-    std::pair<unsigned, unsigned> RegP = *RegI;
+  for (const auto &RegP : LiveOutRegsNumUsages[Block->getID()]) {
     // We produce this register, thus it must not be previously alive.
     assert(LiveRegsConsumers.find(RegP.first) == LiveRegsConsumers.end() ||
            LiveRegsConsumers[RegP.first] == 0);
@@ -1737,8 +1684,8 @@ void SIScheduleBlockScheduler::blockScheduled(SIScheduleBlock *Block) {
 }
 
 std::vector<int>
-SIScheduleBlockScheduler::checkRegUsageImpact(std::set<unsigned> &InRegs,
-                                     std::set<unsigned> &OutRegs) {
+SIScheduleBlockScheduler::checkRegUsageImpact(std::set<Register> &InRegs,
+                                              std::set<Register> &OutRegs) {
   std::vector<int> DiffSetPressure;
   DiffSetPressure.assign(DAG->getTRI()->getNumRegPressureSets(), 0);
 
@@ -1779,8 +1726,7 @@ SIScheduler::scheduleVariant(SISchedulerBlockCreatorVariant BlockVariant,
 
   ScheduledBlocks = Scheduler.getBlocks();
 
-  for (unsigned b = 0; b < ScheduledBlocks.size(); ++b) {
-    SIScheduleBlock *Block = ScheduledBlocks[b];
+  for (SIScheduleBlock *Block : ScheduledBlocks) {
     std::vector<SUnit*> SUs = Block->getScheduledUnits();
 
     for (SUnit* SU : SUs)
@@ -1923,7 +1869,13 @@ void SIScheduleDAGMI::schedule()
   LLVM_DEBUG(dbgs() << "Preparing Scheduling\n");
 
   buildDAGWithRegPressure();
+  postProcessDAG();
+
   LLVM_DEBUG(dump());
+  if (PrintDAGs)
+    dump();
+  if (ViewMISchedDAGs)
+    viewGraph();
 
   topologicalSort();
   findRootsAndBiasEdges(TopRoots, BotRoots);
@@ -2020,9 +1972,8 @@ void SIScheduleDAGMI::schedule()
   assert(TopRPTracker.getPos() == RegionBegin && "bad initial Top tracker");
   TopRPTracker.setPos(CurrentTop);
 
-  for (std::vector<unsigned>::iterator I = ScheduledSUnits.begin(),
-       E = ScheduledSUnits.end(); I != E; ++I) {
-    SUnit *SU = &SUnits[*I];
+  for (unsigned I : ScheduledSUnits) {
+    SUnit *SU = &SUnits[I];
 
     scheduleMI(SU, true);
 

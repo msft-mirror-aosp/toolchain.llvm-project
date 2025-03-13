@@ -45,11 +45,7 @@
 #ifndef LLVM_ANALYSIS_CALLGRAPH_H
 #define LLVM_ANALYSIS_CALLGRAPH_H
 
-#include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
@@ -61,7 +57,9 @@
 
 namespace llvm {
 
+template <class GraphType> struct GraphTraits;
 class CallGraphNode;
+class Function;
 class Module;
 class raw_ostream;
 
@@ -86,13 +84,6 @@ class CallGraph {
   /// This node has edges to it from all functions making indirect calls
   /// or calling an external function.
   std::unique_ptr<CallGraphNode> CallsExternalNode;
-
-  /// Replace the function represented by this node by another.
-  ///
-  /// This does not rescan the body of the function, so it is suitable when
-  /// splicing the body of one function to another while also updating all
-  /// callers from the old function to the new.
-  void spliceFunction(const Function *From, const Function *To);
 
 public:
   explicit CallGraph(Module &M);
@@ -183,7 +174,7 @@ public:
   /// first field and it is not supposed to be `nullptr`.
   /// Reference edges, for example, are used for connecting broker function
   /// caller to the callback function for callback call sites.
-  using CallRecord = std::pair<Optional<WeakTrackingVH>, CallGraphNode *>;
+  using CallRecord = std::pair<std::optional<WeakTrackingVH>, CallGraphNode *>;
 
 public:
   using CalledFunctionsVector = std::vector<CallRecord>;
@@ -248,11 +239,9 @@ public:
 
   /// Adds a function to the list of functions called by this one.
   void addCalledFunction(CallBase *Call, CallGraphNode *M) {
-    assert(!Call || !Call->getCalledFunction() ||
-           !Call->getCalledFunction()->isIntrinsic() ||
-           !Intrinsic::isLeaf(Call->getCalledFunction()->getIntrinsicID()));
-    CalledFunctions.emplace_back(
-        Call ? Optional<WeakTrackingVH>(Call) : Optional<WeakTrackingVH>(), M);
+    CalledFunctions.emplace_back(Call ? std::optional<WeakTrackingVH>(Call)
+                                      : std::optional<WeakTrackingVH>(),
+                                 M);
     M->AddRef();
   }
 
@@ -332,6 +321,21 @@ public:
   explicit CallGraphPrinterPass(raw_ostream &OS) : OS(OS) {}
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+
+  static bool isRequired() { return true; }
+};
+
+/// Printer pass for the summarized \c CallGraphAnalysis results.
+class CallGraphSCCsPrinterPass
+    : public PassInfoMixin<CallGraphSCCsPrinterPass> {
+  raw_ostream &OS;
+
+public:
+  explicit CallGraphSCCsPrinterPass(raw_ostream &OS) : OS(OS) {}
+
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+
+  static bool isRequired() { return true; }
 };
 
 /// The \c ModulePass which wraps up a \c CallGraph and the logic to

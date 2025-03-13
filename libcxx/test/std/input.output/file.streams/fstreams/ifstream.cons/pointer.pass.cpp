@@ -8,6 +8,8 @@
 
 // FILE_DEPENDENCIES: test.dat
 
+// XFAIL: FROZEN-CXX03-HEADERS-FIXME
+
 // <fstream>
 
 // template <class charT, class traits = char_traits<charT> >
@@ -19,6 +21,7 @@
 #include <cassert>
 
 #include "test_macros.h"
+#include "operator_hijacker.h"
 
 int main(int, char**)
 {
@@ -28,18 +31,33 @@ int main(int, char**)
         fs >> x;
         assert(x == 3.25);
     }
+    {
+      std::basic_ifstream<char, operator_hijacker_char_traits<char> > fs("test.dat");
+      std::basic_string<char, operator_hijacker_char_traits<char> > x;
+      fs >> x;
+      assert(x == "3.25");
+    }
     // std::ifstream(const char*, std::ios_base::openmode) is tested in
     // test/std/input.output/file.streams/fstreams/ofstream.cons/pointer.pass.cpp
     // which creates writable files.
+
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         std::wifstream fs("test.dat");
         double x = 0;
         fs >> x;
         assert(x == 3.25);
     }
+    {
+      std::basic_ifstream<wchar_t, operator_hijacker_char_traits<wchar_t> > fs("test.dat");
+      std::basic_string<wchar_t, operator_hijacker_char_traits<wchar_t> > x;
+      fs >> x;
+      assert(x == L"3.25");
+    }
     // std::wifstream(const char*, std::ios_base::openmode) is tested in
     // test/std/input.output/file.streams/fstreams/ofstream.cons/pointer.pass.cpp
     // which creates writable files.
+#endif
 
   return 0;
 }

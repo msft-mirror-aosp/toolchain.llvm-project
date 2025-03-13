@@ -14,6 +14,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/VirtualFileSystem.h"
 
 DEF_DIAGTOOL("show-enabled",
              "Show which warnings are enabled for a given command line",
@@ -59,21 +60,23 @@ createDiagnostics(unsigned int argc, char **argv) {
   // Buffer diagnostics from argument parsing so that we can output them using a
   // well formed diagnostic object.
   TextDiagnosticBuffer *DiagsBuffer = new TextDiagnosticBuffer;
-  IntrusiveRefCntPtr<DiagnosticsEngine> InterimDiags(
-    new DiagnosticsEngine(DiagIDs, new DiagnosticOptions(), DiagsBuffer));
 
   // Try to build a CompilerInvocation.
   SmallVector<const char *, 4> Args;
   Args.push_back("diagtool");
   Args.append(argv, argv + argc);
+  CreateInvocationOptions CIOpts;
+  CIOpts.Diags =
+      new DiagnosticsEngine(DiagIDs, new DiagnosticOptions(), DiagsBuffer);
   std::unique_ptr<CompilerInvocation> Invocation =
-      createInvocationFromCommandLine(Args, InterimDiags);
+      createInvocation(Args, CIOpts);
   if (!Invocation)
     return nullptr;
 
   // Build the diagnostics parser
   IntrusiveRefCntPtr<DiagnosticsEngine> FinalDiags =
-    CompilerInstance::createDiagnostics(&Invocation->getDiagnosticOpts());
+      CompilerInstance::createDiagnostics(*llvm::vfs::getRealFileSystem(),
+                                          &Invocation->getDiagnosticOpts());
   if (!FinalDiags)
     return nullptr;
 
@@ -89,11 +92,11 @@ int ShowEnabledWarnings::run(unsigned int argc, char **argv, raw_ostream &Out) {
   bool ShouldShowLevels = true;
   if (argc > 0) {
     StringRef FirstArg(*argv);
-    if (FirstArg.equals("--no-levels")) {
+    if (FirstArg == "--no-levels") {
       ShouldShowLevels = false;
       --argc;
       ++argv;
-    } else if (FirstArg.equals("--levels")) {
+    } else if (FirstArg == "--levels") {
       ShouldShowLevels = true;
       --argc;
       ++argv;
@@ -116,10 +119,10 @@ int ShowEnabledWarnings::run(unsigned int argc, char **argv, raw_ostream &Out) {
   for (const DiagnosticRecord &DR : getBuiltinDiagnosticsByName()) {
     unsigned DiagID = DR.DiagID;
 
-    if (DiagnosticIDs::isBuiltinNote(DiagID))
+    if (DiagnosticIDs{}.isNote(DiagID))
       continue;
 
-    if (!DiagnosticIDs::isBuiltinWarningOrExtension(DiagID))
+    if (!DiagnosticIDs{}.isWarningOrExtension(DiagID))
       continue;
 
     DiagnosticsEngine::Level DiagLevel =
@@ -127,7 +130,7 @@ int ShowEnabledWarnings::run(unsigned int argc, char **argv, raw_ostream &Out) {
     if (DiagLevel == DiagnosticsEngine::Ignored)
       continue;
 
-    StringRef WarningOpt = DiagnosticIDs::getWarningOptionForDiag(DiagID);
+    StringRef WarningOpt = DiagnosticIDs{}.getWarningOptionForDiag(DiagID);
     Active.push_back(PrettyDiag(DR.getName(), WarningOpt, DiagLevel));
   }
 

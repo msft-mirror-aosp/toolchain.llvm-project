@@ -1,4 +1,4 @@
-! RUN: %S/test_errors.sh %s %t %f18
+! RUN: %python %S/test_errors.py %s %flang_fc1
 module m
   implicit none
   real, parameter :: a = 8.0
@@ -21,7 +21,7 @@ module m
   integer :: ff = 2_f
   !ERROR: REAL(KIND=23) is not a supported type
   real(d/2) :: g
-  !ERROR: REAL*47 is not a supported type
+  !ERROR: REAL(KIND=47) is not a supported type
   real*47 :: h
   !ERROR: COMPLEX*47 is not a supported type
   complex*47 :: i

@@ -7,13 +7,14 @@
 //===----------------------------------------------------------------------===//
 #include "CommandObjectFrame.h"
 #include "lldb/Core/Debugger.h"
-#include "lldb/Core/ValueObject.h"
 #include "lldb/DataFormatters/DataVisualization.h"
 #include "lldb/DataFormatters/ValueObjectPrinter.h"
 #include "lldb/Host/Config.h"
 #include "lldb/Host/OptionParser.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
+#include "lldb/Interpreter/CommandOptionArgumentTable.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
+#include "lldb/Interpreter/OptionArgParser.h"
 #include "lldb/Interpreter/OptionGroupFormat.h"
 #include "lldb/Interpreter/OptionGroupValueObjectDisplay.h"
 #include "lldb/Interpreter/OptionGroupVariable.h"
@@ -28,8 +29,10 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/Args.h"
+#include "lldb/ValueObject/ValueObject.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 using namespace lldb;
@@ -48,7 +51,7 @@ class CommandObjectFrameDiagnose : public CommandObjectParsed {
 public:
   class CommandOptions : public Options {
   public:
-    CommandOptions() : Options() { OptionParsingStarting(nullptr); }
+    CommandOptions() { OptionParsingStarting(nullptr); }
 
     ~CommandOptions() override = default;
 
@@ -65,8 +68,8 @@ public:
         address.emplace();
         if (option_arg.getAsInteger(0, *address)) {
           address.reset();
-          error.SetErrorStringWithFormat("invalid address argument '%s'",
-                                         option_arg.str().c_str());
+          error = Status::FromErrorStringWithFormat(
+              "invalid address argument '%s'", option_arg.str().c_str());
         }
       } break;
 
@@ -74,8 +77,8 @@ public:
         offset.emplace();
         if (option_arg.getAsInteger(0, *offset)) {
           offset.reset();
-          error.SetErrorStringWithFormat("invalid offset argument '%s'",
-                                         option_arg.str().c_str());
+          error = Status::FromErrorStringWithFormat(
+              "invalid offset argument '%s'", option_arg.str().c_str());
         }
       } break;
 
@@ -93,37 +96,24 @@ public:
     }
 
     llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
-      return llvm::makeArrayRef(g_frame_diag_options);
+      return llvm::ArrayRef(g_frame_diag_options);
     }
 
     // Options.
-    llvm::Optional<lldb::addr_t> address;
-    llvm::Optional<ConstString> reg;
-    llvm::Optional<int64_t> offset;
+    std::optional<lldb::addr_t> address;
+    std::optional<ConstString> reg;
+    std::optional<int64_t> offset;
   };
 
   CommandObjectFrameDiagnose(CommandInterpreter &interpreter)
       : CommandObjectParsed(interpreter, "frame diagnose",
-                            "Try to determine what path path the current stop "
+                            "Try to determine what path the current stop "
                             "location used to get to a register or address",
                             nullptr,
                             eCommandRequiresThread | eCommandTryTargetAPILock |
                                 eCommandProcessMustBeLaunched |
-                                eCommandProcessMustBePaused),
-        m_options() {
-    CommandArgumentEntry arg;
-    CommandArgumentData index_arg;
-
-    // Define the first (and only) variant of this arg.
-    index_arg.arg_type = eArgTypeFrameIndex;
-    index_arg.arg_repetition = eArgRepeatOptional;
-
-    // There is only one variant this argument could be; put it into the
-    // argument entry.
-    arg.push_back(index_arg);
-
-    // Push the data for the first argument into the m_arguments vector.
-    m_arguments.push_back(arg);
+                                eCommandProcessMustBePaused) {
+    AddSimpleArgumentList(eArgTypeFrameIndex, eArgRepeatOptional);
   }
 
   ~CommandObjectFrameDiagnose() override = default;
@@ -131,29 +121,27 @@ public:
   Options *GetOptions() override { return &m_options; }
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
+  void DoExecute(Args &command, CommandReturnObject &result) override {
     Thread *thread = m_exe_ctx.GetThreadPtr();
-    StackFrameSP frame_sp = thread->GetSelectedFrame();
+    StackFrameSP frame_sp = thread->GetSelectedFrame(SelectMostRelevantFrame);
 
     ValueObjectSP valobj_sp;
 
-    if (m_options.address.hasValue()) {
-      if (m_options.reg.hasValue() || m_options.offset.hasValue()) {
+    if (m_options.address) {
+      if (m_options.reg || m_options.offset) {
         result.AppendError(
             "`frame diagnose --address` is incompatible with other arguments.");
-        result.SetStatus(eReturnStatusFailed);
-        return false;
+        return;
       }
-      valobj_sp = frame_sp->GuessValueForAddress(m_options.address.getValue());
-    } else if (m_options.reg.hasValue()) {
+      valobj_sp = frame_sp->GuessValueForAddress(*m_options.address);
+    } else if (m_options.reg) {
       valobj_sp = frame_sp->GuessValueForRegisterAndOffset(
-          m_options.reg.getValue(), m_options.offset.getValueOr(0));
+          *m_options.reg, m_options.offset.value_or(0));
     } else {
       StopInfoSP stop_info_sp = thread->GetStopInfo();
       if (!stop_info_sp) {
         result.AppendError("No arguments provided, and no stop info.");
-        result.SetStatus(eReturnStatusFailed);
-        return false;
+        return;
       }
 
       valobj_sp = StopInfo::GetCrashingDereference(stop_info_sp);
@@ -161,8 +149,7 @@ protected:
 
     if (!valobj_sp) {
       result.AppendError("No diagnosis available.");
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+      return;
     }
 
     DumpValueObjectOptions::DeclPrintingHelper helper =
@@ -178,11 +165,12 @@ protected:
 
     DumpValueObjectOptions options;
     options.SetDeclPrintingHelper(helper);
-    ValueObjectPrinter printer(valobj_sp.get(), &result.GetOutputStream(),
-                               options);
-    printer.PrintValueObject();
-
-    return true;
+    // We've already handled the case where the value object sp is null, so
+    // this is just to make sure future changes don't skip that:
+    assert(valobj_sp.get() && "Must have a valid ValueObject to print");
+    ValueObjectPrinter printer(*valobj_sp, &result.GetOutputStream(), options);
+    if (llvm::Error error = printer.PrintValueObject())
+      result.AppendError(toString(std::move(error)));
   }
 
   CommandOptions m_options;
@@ -206,10 +194,9 @@ public:
   ~CommandObjectFrameInfo() override = default;
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
+  void DoExecute(Args &command, CommandReturnObject &result) override {
     m_exe_ctx.GetFrameRef().DumpUsingSettingsFormat(&result.GetOutputStream());
     result.SetStatus(eReturnStatusSuccessFinishResult);
-    return result.Succeeded();
   }
 };
 
@@ -224,7 +211,7 @@ class CommandObjectFrameSelect : public CommandObjectParsed {
 public:
   class CommandOptions : public Options {
   public:
-    CommandOptions() : Options() { OptionParsingStarting(nullptr); }
+    CommandOptions() { OptionParsingStarting(nullptr); }
 
     ~CommandOptions() override = default;
 
@@ -236,8 +223,8 @@ public:
       case 'r': {
         int32_t offset = 0;
         if (option_arg.getAsInteger(0, offset) || offset == INT32_MIN) {
-          error.SetErrorStringWithFormat("invalid frame offset argument '%s'",
-                                         option_arg.str().c_str());
+          error = Status::FromErrorStringWithFormat(
+              "invalid frame offset argument '%s'", option_arg.str().c_str());
         } else
           relative_frame_offset = offset;
         break;
@@ -255,10 +242,10 @@ public:
     }
 
     llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
-      return llvm::makeArrayRef(g_frame_select_options);
+      return llvm::ArrayRef(g_frame_select_options);
     }
 
-    llvm::Optional<int32_t> relative_frame_offset;
+    std::optional<int32_t> relative_frame_offset;
   };
 
   CommandObjectFrameSelect(CommandInterpreter &interpreter)
@@ -269,50 +256,50 @@ public:
                             nullptr,
                             eCommandRequiresThread | eCommandTryTargetAPILock |
                                 eCommandProcessMustBeLaunched |
-                                eCommandProcessMustBePaused),
-        m_options() {
-    CommandArgumentEntry arg;
-    CommandArgumentData index_arg;
-
-    // Define the first (and only) variant of this arg.
-    index_arg.arg_type = eArgTypeFrameIndex;
-    index_arg.arg_repetition = eArgRepeatOptional;
-
-    // There is only one variant this argument could be; put it into the
-    // argument entry.
-    arg.push_back(index_arg);
-
-    // Push the data for the first argument into the m_arguments vector.
-    m_arguments.push_back(arg);
+                                eCommandProcessMustBePaused) {
+    AddSimpleArgumentList(eArgTypeFrameIndex, eArgRepeatOptional);
   }
 
   ~CommandObjectFrameSelect() override = default;
 
-  void
-  HandleArgumentCompletion(CompletionRequest &request,
-                           OptionElementVector &opt_element_vector) override {
-    if (request.GetCursorIndex() != 0)
-      return;
-
-    CommandCompletions::InvokeCommonCompletionCallbacks(
-        GetCommandInterpreter(), CommandCompletions::eFrameIndexCompletion,
-        request, nullptr);
-  }
-
   Options *GetOptions() override { return &m_options; }
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
+  void DoExecute(Args &command, CommandReturnObject &result) override {
     // No need to check "thread" for validity as eCommandRequiresThread ensures
     // it is valid
     Thread *thread = m_exe_ctx.GetThreadPtr();
 
     uint32_t frame_idx = UINT32_MAX;
-    if (m_options.relative_frame_offset.hasValue()) {
+    if (m_options.relative_frame_offset) {
       // The one and only argument is a signed relative frame index
-      frame_idx = thread->GetSelectedFrameIndex();
+      frame_idx = thread->GetSelectedFrameIndex(SelectMostRelevantFrame);
       if (frame_idx == UINT32_MAX)
         frame_idx = 0;
+
+      // If moving up/down by one, skip over hidden frames.
+      if (*m_options.relative_frame_offset == 1 ||
+          *m_options.relative_frame_offset == -1) {
+        uint32_t candidate_idx = frame_idx;
+        const unsigned max_depth = 12;
+        for (unsigned num_try = 0; num_try < max_depth; ++num_try) {
+          if (candidate_idx == 0 && *m_options.relative_frame_offset == -1) {
+            candidate_idx = UINT32_MAX;
+            break;
+          }
+          candidate_idx += *m_options.relative_frame_offset;
+          if (auto candidate_sp = thread->GetStackFrameAtIndex(candidate_idx)) {
+            if (candidate_sp->IsHidden())
+              continue;
+            // Now candidate_idx is the first non-hidden frame.
+            break;
+          }
+          candidate_idx = UINT32_MAX;
+          break;
+        };
+        if (candidate_idx != UINT32_MAX)
+          m_options.relative_frame_offset = candidate_idx - frame_idx;
+      }
 
       if (*m_options.relative_frame_offset < 0) {
         if (static_cast<int32_t>(frame_idx) >=
@@ -323,29 +310,35 @@ protected:
             // If you are already at the bottom of the stack, then just warn
             // and don't reset the frame.
             result.AppendError("Already at the bottom of the stack.");
-            result.SetStatus(eReturnStatusFailed);
-            return false;
+            return;
           } else
             frame_idx = 0;
         }
       } else if (*m_options.relative_frame_offset > 0) {
         // I don't want "up 20" where "20" takes you past the top of the stack
-        // to produce
-        // an error, but rather to just go to the top.  So I have to count the
-        // stack here...
-        const uint32_t num_frames = thread->GetStackFrameCount();
-        if (static_cast<int32_t>(num_frames - frame_idx) >
-            *m_options.relative_frame_offset)
-          frame_idx += *m_options.relative_frame_offset;
+        // to produce an error, but rather to just go to the top.  OTOH, start
+        // by seeing if the requested frame exists, in which case we can avoid 
+        // counting the stack here...
+        const uint32_t frame_requested = frame_idx 
+            + *m_options.relative_frame_offset;
+        StackFrameSP frame_sp = thread->GetStackFrameAtIndex(frame_requested);
+        if (frame_sp)
+          frame_idx = frame_requested;
         else {
-          if (frame_idx == num_frames - 1) {
-            // If we are already at the top of the stack, just warn and don't
-            // reset the frame.
-            result.AppendError("Already at the top of the stack.");
-            result.SetStatus(eReturnStatusFailed);
-            return false;
-          } else
-            frame_idx = num_frames - 1;
+          // The request went past the stack, so handle that case:
+          const uint32_t num_frames = thread->GetStackFrameCount();
+          if (static_cast<int32_t>(num_frames - frame_idx) >
+              *m_options.relative_frame_offset)
+          frame_idx += *m_options.relative_frame_offset;
+          else {
+            if (frame_idx == num_frames - 1) {
+              // If we are already at the top of the stack, just warn and don't
+              // reset the frame.
+              result.AppendError("Already at the top of the stack.");
+              return;
+            } else
+              frame_idx = num_frames - 1;
+          }
         }
       }
     } else {
@@ -354,20 +347,19 @@ protected:
             "too many arguments; expected frame-index, saw '%s'.\n",
             command[0].c_str());
         m_options.GenerateOptionUsage(
-            result.GetErrorStream(), this,
+            result.GetErrorStream(), *this,
             GetCommandInterpreter().GetDebugger().GetTerminalWidth());
-        return false;
+        return;
       }
 
       if (command.GetArgumentCount() == 1) {
         if (command[0].ref().getAsInteger(0, frame_idx)) {
           result.AppendErrorWithFormat("invalid frame index argument '%s'.",
                                        command[0].c_str());
-          result.SetStatus(eReturnStatusFailed);
-          return false;
+          return;
         }
       } else if (command.GetArgumentCount() == 0) {
-        frame_idx = thread->GetSelectedFrameIndex();
+        frame_idx = thread->GetSelectedFrameIndex(SelectMostRelevantFrame);
         if (frame_idx == UINT32_MAX) {
           frame_idx = 0;
         }
@@ -377,15 +369,12 @@ protected:
     bool success = thread->SetSelectedFrameByIndexNoisily(
         frame_idx, result.GetOutputStream());
     if (success) {
-      m_exe_ctx.SetFrameSP(thread->GetSelectedFrame());
+      m_exe_ctx.SetFrameSP(thread->GetSelectedFrame(SelectMostRelevantFrame));
       result.SetStatus(eReturnStatusSuccessFinishResult);
     } else {
       result.AppendErrorWithFormat("Frame index (%u) out of range.\n",
                                    frame_idx);
-      result.SetStatus(eReturnStatusFailed);
     }
-
-    return result.Succeeded();
   }
 
   CommandOptions m_options;
@@ -400,40 +389,27 @@ public:
             interpreter, "frame variable",
             "Show variables for the current stack frame. Defaults to all "
             "arguments and local variables in scope. Names of argument, "
-            "local, file static and file global variables can be specified. "
-            "Children of aggregate variables can be specified such as "
-            "'var->child.x'.  The -> and [] operators in 'frame variable' do "
-            "not invoke operator overloads if they exist, but directly access "
-            "the specified element.  If you want to trigger operator overloads "
-            "use the expression command to print the variable instead."
-            "\nIt is worth noting that except for overloaded "
-            "operators, when printing local variables 'expr local_var' and "
-            "'frame var local_var' produce the same "
-            "results.  However, 'frame variable' is more efficient, since it "
-            "uses debug information and memory reads directly, rather than "
-            "parsing and evaluating an expression, which may even involve "
-            "JITing and running code in the target program.",
+            "local, file static and file global variables can be specified.",
             nullptr,
             eCommandRequiresFrame | eCommandTryTargetAPILock |
                 eCommandProcessMustBeLaunched | eCommandProcessMustBePaused |
                 eCommandRequiresProcess),
-        m_option_group(),
         m_option_variable(
             true), // Include the frame specific options by passing "true"
-        m_option_format(eFormatDefault), m_varobj_options() {
-    CommandArgumentEntry arg;
-    CommandArgumentData var_name_arg;
+        m_option_format(eFormatDefault) {
+    SetHelpLong(R"(
+Children of aggregate variables can be specified such as 'var->child.x'.  In
+'frame variable', the operators -> and [] do not invoke operator overloads if
+they exist, but directly access the specified element.  If you want to trigger
+operator overloads use the expression command to print the variable instead.
 
-    // Define the first (and only) variant of this arg.
-    var_name_arg.arg_type = eArgTypeVarName;
-    var_name_arg.arg_repetition = eArgRepeatStar;
+It is worth noting that except for overloaded operators, when printing local
+variables 'expr local_var' and 'frame var local_var' produce the same results.
+However, 'frame variable' is more efficient, since it uses debug information and
+memory reads directly, rather than parsing and evaluating an expression, which
+may even involve JITing and running code in the target program.)");
 
-    // There is only one variant this argument could be; put it into the
-    // argument entry.
-    arg.push_back(var_name_arg);
-
-    // Push the data for the first argument into the m_arguments vector.
-    m_arguments.push_back(arg);
+    AddSimpleArgumentList(eArgTypeVarName, eArgRepeatStar);
 
     m_option_group.Append(&m_option_variable, LLDB_OPT_SET_ALL, LLDB_OPT_SET_1);
     m_option_group.Append(&m_option_format,
@@ -448,19 +424,10 @@ public:
 
   Options *GetOptions() override { return &m_option_group; }
 
-  void
-  HandleArgumentCompletion(CompletionRequest &request,
-                           OptionElementVector &opt_element_vector) override {
-    // Arguments are the standard source file completer.
-    CommandCompletions::InvokeCommonCompletionCallbacks(
-        GetCommandInterpreter(), CommandCompletions::eVariablePathCompletion,
-        request, nullptr);
-  }
-
 protected:
   llvm::StringRef GetScopeString(VariableSP var_sp) {
     if (!var_sp)
-      return llvm::StringRef::withNullAsEmpty(nullptr);
+      return llvm::StringRef();
 
     switch (var_sp->GetScope()) {
     case eValueTypeVariableGlobal:
@@ -477,24 +444,79 @@ protected:
       break;
     }
 
-    return llvm::StringRef::withNullAsEmpty(nullptr);
+    return llvm::StringRef();
   }
 
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
+  /// Returns true if `scope` matches any of the options in `m_option_variable`.
+  bool ScopeRequested(lldb::ValueType scope) {
+    switch (scope) {
+    case eValueTypeVariableGlobal:
+    case eValueTypeVariableStatic:
+      return m_option_variable.show_globals;
+    case eValueTypeVariableArgument:
+      return m_option_variable.show_args;
+    case eValueTypeVariableLocal:
+      return m_option_variable.show_locals;
+    case eValueTypeInvalid:
+    case eValueTypeRegister:
+    case eValueTypeRegisterSet:
+    case eValueTypeConstResult:
+    case eValueTypeVariableThreadLocal:
+    case eValueTypeVTable:
+    case eValueTypeVTableEntry:
+      return false;
+    }
+    llvm_unreachable("Unexpected scope value");
+  }
+
+  /// Finds all the variables in `all_variables` whose name matches `regex`,
+  /// inserting them into `matches`. Variables already contained in `matches`
+  /// are not inserted again.
+  /// Nullopt is returned in case of no matches.
+  /// A sub-range of `matches` with all newly inserted variables is returned.
+  /// This may be empty if all matches were already contained in `matches`.
+  std::optional<llvm::ArrayRef<VariableSP>>
+  findUniqueRegexMatches(RegularExpression &regex,
+                         VariableList &matches,
+                         const VariableList &all_variables) {
+    bool any_matches = false;
+    const size_t previous_num_vars = matches.GetSize();
+
+    for (const VariableSP &var : all_variables) {
+      if (!var->NameMatches(regex) || !ScopeRequested(var->GetScope()))
+        continue;
+      any_matches = true;
+      matches.AddVariableIfUnique(var);
+    }
+
+    if (any_matches)
+      return matches.toArrayRef().drop_front(previous_num_vars);
+    return std::nullopt;
+  }
+
+  void DoExecute(Args &command, CommandReturnObject &result) override {
     // No need to check "frame" for validity as eCommandRequiresFrame ensures
     // it is valid
     StackFrame *frame = m_exe_ctx.GetFramePtr();
 
     Stream &s = result.GetOutputStream();
 
+    // Using a regex should behave like looking for an exact name match: it
+    // also finds globals.
+    m_option_variable.show_globals |= m_option_variable.use_regex;
+
     // Be careful about the stack frame, if any summary formatter runs code, it
     // might clear the StackFrameList for the thread.  So hold onto a shared
     // pointer to the frame so it stays alive.
 
+    Status error;
     VariableList *variable_list =
-        frame->GetVariableList(m_option_variable.show_globals);
+        frame->GetVariableList(m_option_variable.show_globals, &error);
 
-    VariableSP var_sp;
+    if (error.Fail() && (!variable_list || variable_list->GetSize() == 0)) {
+      result.AppendError(error.AsCString());
+
+    }
     ValueObjectSP valobj_sp;
 
     TypeSummaryImplSP summary_format_sp;
@@ -527,55 +549,47 @@ protected:
         // objects from them...
         for (auto &entry : command) {
           if (m_option_variable.use_regex) {
-            const size_t regex_start_index = regex_var_list.GetSize();
             llvm::StringRef name_str = entry.ref();
             RegularExpression regex(name_str);
             if (regex.IsValid()) {
-              size_t num_matches = 0;
-              const size_t num_new_regex_vars =
-                  variable_list->AppendVariablesIfUnique(regex, regex_var_list,
-                                                         num_matches);
-              if (num_new_regex_vars > 0) {
-                for (size_t regex_idx = regex_start_index,
-                            end_index = regex_var_list.GetSize();
-                     regex_idx < end_index; ++regex_idx) {
-                  var_sp = regex_var_list.GetVariableAtIndex(regex_idx);
-                  if (var_sp) {
-                    valobj_sp = frame->GetValueObjectForFrameVariable(
-                        var_sp, m_varobj_options.use_dynamic);
-                    if (valobj_sp) {
-                      std::string scope_string;
-                      if (m_option_variable.show_scope)
-                        scope_string = GetScopeString(var_sp).str();
+              std::optional<llvm::ArrayRef<VariableSP>> results =
+                  findUniqueRegexMatches(regex, regex_var_list, *variable_list);
+              if (!results) {
+                result.AppendErrorWithFormat(
+                    "no variables matched the regular expression '%s'.",
+                    entry.c_str());
+                continue;
+              }
+              for (const VariableSP &var_sp : *results) {
+                valobj_sp = frame->GetValueObjectForFrameVariable(
+                    var_sp, m_varobj_options.use_dynamic);
+                if (valobj_sp) {
+                  std::string scope_string;
+                  if (m_option_variable.show_scope)
+                    scope_string = GetScopeString(var_sp).str();
 
-                      if (!scope_string.empty())
-                        s.PutCString(scope_string);
+                  if (!scope_string.empty())
+                    s.PutCString(scope_string);
 
-                      if (m_option_variable.show_decl &&
-                          var_sp->GetDeclaration().GetFile()) {
-                        bool show_fullpaths = false;
-                        bool show_module = true;
-                        if (var_sp->DumpDeclaration(&s, show_fullpaths,
-                                                    show_module))
-                          s.PutCString(": ");
-                      }
-                      valobj_sp->Dump(result.GetOutputStream(), options);
-                    }
+                  if (m_option_variable.show_decl &&
+                      var_sp->GetDeclaration().GetFile()) {
+                    bool show_fullpaths = false;
+                    bool show_module = true;
+                    if (var_sp->DumpDeclaration(&s, show_fullpaths,
+                                                show_module))
+                      s.PutCString(": ");
                   }
+                  auto &strm = result.GetOutputStream();
+                  if (llvm::Error error = valobj_sp->Dump(strm, options))
+                    result.AppendError(toString(std::move(error)));
                 }
-              } else if (num_matches == 0) {
-                result.GetErrorStream().Printf("error: no variables matched "
-                                               "the regular expression '%s'.\n",
-                                               entry.c_str());
               }
             } else {
               if (llvm::Error err = regex.GetError())
-                result.GetErrorStream().Printf(
-                    "error: %s\n", llvm::toString(std::move(err)).c_str());
+                result.AppendError(llvm::toString(std::move(err)));
               else
-                result.GetErrorStream().Printf(
-                    "error: unknown regex error when compiling '%s'\n",
-                    entry.c_str());
+                result.AppendErrorWithFormat(
+                    "unknown regex error when compiling '%s'", entry.c_str());
             }
           } else // No regex, either exact variable names or variable
                  // expressions.
@@ -609,16 +623,16 @@ protected:
               Stream &output_stream = result.GetOutputStream();
               options.SetRootValueObjectName(
                   valobj_sp->GetParent() ? entry.c_str() : nullptr);
-              valobj_sp->Dump(output_stream, options);
+              if (llvm::Error error = valobj_sp->Dump(output_stream, options))
+                result.AppendError(toString(std::move(error)));
             } else {
-              const char *error_cstr = error.AsCString(nullptr);
-              if (error_cstr)
-                result.GetErrorStream().Printf("error: %s\n", error_cstr);
+              if (auto error_cstr = error.AsCString(nullptr))
+                result.AppendError(error_cstr);
               else
-                result.GetErrorStream().Printf("error: unable to find any "
-                                               "variable expression path that "
-                                               "matches '%s'.\n",
-                                               entry.c_str());
+                result.AppendErrorWithFormat(
+                    "unable to find any variable expression path that matches "
+                    "'%s'.",
+                    entry.c_str());
             }
           }
         }
@@ -627,28 +641,9 @@ protected:
         const size_t num_variables = variable_list->GetSize();
         if (num_variables > 0) {
           for (size_t i = 0; i < num_variables; i++) {
-            var_sp = variable_list->GetVariableAtIndex(i);
-            switch (var_sp->GetScope()) {
-            case eValueTypeVariableGlobal:
-              if (!m_option_variable.show_globals)
+            VariableSP var_sp = variable_list->GetVariableAtIndex(i);
+            if (!ScopeRequested(var_sp->GetScope()))
                 continue;
-              break;
-            case eValueTypeVariableStatic:
-              if (!m_option_variable.show_globals)
-                continue;
-              break;
-            case eValueTypeVariableArgument:
-              if (!m_option_variable.show_args)
-                continue;
-              break;
-            case eValueTypeVariableLocal:
-              if (!m_option_variable.show_locals)
-                continue;
-              break;
-            default:
-              continue;
-              break;
-            }
             std::string scope_string;
             if (m_option_variable.show_scope)
               scope_string = GetScopeString(var_sp).str();
@@ -680,13 +675,16 @@ protected:
                     valobj_sp->GetPreferredDisplayLanguage());
                 options.SetRootValueObjectName(
                     var_sp ? var_sp->GetName().AsCString() : nullptr);
-                valobj_sp->Dump(result.GetOutputStream(), options);
+                if (llvm::Error error =
+                        valobj_sp->Dump(result.GetOutputStream(), options))
+                  result.AppendError(toString(std::move(error)));
               }
             }
           }
         }
       }
-      result.SetStatus(eReturnStatusSuccessFinishResult);
+      if (result.GetStatus() != eReturnStatusFailed)
+        result.SetStatus(eReturnStatusSuccessFinishResult);
     }
 
     if (m_option_variable.show_recognized_args) {
@@ -700,26 +698,23 @@ protected:
             options.SetVariableFormatDisplayLanguage(
                 rec_value_sp->GetPreferredDisplayLanguage());
             options.SetRootValueObjectName(rec_value_sp->GetName().AsCString());
-            rec_value_sp->Dump(result.GetOutputStream(), options);
+            if (llvm::Error error =
+                    rec_value_sp->Dump(result.GetOutputStream(), options))
+              result.AppendError(toString(std::move(error)));
           }
         }
       }
     }
 
-    if (m_interpreter.TruncationWarningNecessary()) {
-      result.GetOutputStream().Printf(m_interpreter.TruncationWarningText(),
-                                      m_cmd_name.c_str());
-      m_interpreter.TruncationWarningGiven();
-    }
+    m_interpreter.PrintWarningsIfNecessary(result.GetOutputStream(),
+                                           m_cmd_name);
 
     // Increment statistics.
-    bool res = result.Succeeded();
-    Target &target = GetSelectedOrDummyTarget();
-    if (res)
-      target.IncrementStats(StatisticKind::FrameVarSuccess);
+    TargetStats &target_stats = GetTarget().GetStatistics();
+    if (result.Succeeded())
+      target_stats.GetFrameVariableStats().NotifySuccess();
     else
-      target.IncrementStats(StatisticKind::FrameVarFailure);
-    return res;
+      target_stats.GetFrameVariableStats().NotifyFailure();
   }
 
   OptionGroupOptions m_option_group;
@@ -737,7 +732,7 @@ class CommandObjectFrameRecognizerAdd : public CommandObjectParsed {
 private:
   class CommandOptions : public Options {
   public:
-    CommandOptions() : Options() {}
+    CommandOptions() = default;
     ~CommandOptions() override = default;
 
     Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
@@ -746,6 +741,17 @@ private:
       const int short_option = m_getopt_table[option_idx].val;
 
       switch (short_option) {
+      case 'f': {
+        bool value, success;
+        value = OptionArgParser::ToBoolean(option_arg, true, &success);
+        if (success) {
+          m_first_instruction_only = value;
+        } else {
+          error = Status::FromErrorStringWithFormat(
+              "invalid boolean value '%s' passed for -f option",
+              option_arg.str().c_str());
+        }
+      } break;
       case 'l':
         m_class_name = std::string(option_arg);
         break;
@@ -770,10 +776,11 @@ private:
       m_symbols.clear();
       m_class_name = "";
       m_regex = false;
+      m_first_instruction_only = true;
     }
 
     llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
-      return llvm::makeArrayRef(g_frame_recognizer_add_options);
+      return llvm::ArrayRef(g_frame_recognizer_add_options);
     }
 
     // Instance variables to hold the values for command options.
@@ -781,6 +788,7 @@ private:
     std::string m_module;
     std::vector<std::string> m_symbols;
     bool m_regex;
+    bool m_first_instruction_only;
   };
 
   CommandOptions m_options;
@@ -788,13 +796,12 @@ private:
   Options *GetOptions() override { return &m_options; }
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override;
+  void DoExecute(Args &command, CommandReturnObject &result) override;
 
 public:
   CommandObjectFrameRecognizerAdd(CommandInterpreter &interpreter)
       : CommandObjectParsed(interpreter, "frame recognizer add",
-                            "Add a new frame recognizer.", nullptr),
-        m_options() {
+                            "Add a new frame recognizer.", nullptr) {
     SetHelpLong(R"(
 Frame recognizers allow for retrieving information about special frames based on
 ABI, arguments or other special properties of that frame, even without source
@@ -815,7 +822,8 @@ functions 'read', 'write' and 'close' follows:
     def get_recognized_arguments(self, frame):
       if frame.name in ["read", "write", "close"]:
         fd = frame.EvaluateExpression("$arg1").unsigned
-        value = lldb.target.CreateValueFromExpression("fd", "(int)%d" % fd)
+        target = frame.thread.process.target
+        value = target.CreateValueFromExpression("fd", "(int)%d" % fd)
         return [value]
       return []
 
@@ -844,37 +852,33 @@ Process 1234 stopped
   ~CommandObjectFrameRecognizerAdd() override = default;
 };
 
-bool CommandObjectFrameRecognizerAdd::DoExecute(Args &command,
+void CommandObjectFrameRecognizerAdd::DoExecute(Args &command,
                                                 CommandReturnObject &result) {
 #if LLDB_ENABLE_PYTHON
   if (m_options.m_class_name.empty()) {
     result.AppendErrorWithFormat(
         "%s needs a Python class name (-l argument).\n", m_cmd_name.c_str());
-    result.SetStatus(eReturnStatusFailed);
-    return false;
+    return;
   }
 
   if (m_options.m_module.empty()) {
     result.AppendErrorWithFormat("%s needs a module name (-s argument).\n",
                                  m_cmd_name.c_str());
-    result.SetStatus(eReturnStatusFailed);
-    return false;
+    return;
   }
 
   if (m_options.m_symbols.empty()) {
     result.AppendErrorWithFormat(
         "%s needs at least one symbol name (-n argument).\n",
         m_cmd_name.c_str());
-    result.SetStatus(eReturnStatusFailed);
-    return false;
+    return;
   }
 
   if (m_options.m_regex && m_options.m_symbols.size() > 1) {
     result.AppendErrorWithFormat(
         "%s needs only one symbol regular expression (-n argument).\n",
         m_cmd_name.c_str());
-    result.SetStatus(eReturnStatusFailed);
-    return false;
+    return;
   }
 
   ScriptInterpreter *interpreter = GetDebugger().GetScriptInterpreter();
@@ -893,19 +897,21 @@ bool CommandObjectFrameRecognizerAdd::DoExecute(Args &command,
         RegularExpressionSP(new RegularExpression(m_options.m_module));
     auto func =
         RegularExpressionSP(new RegularExpression(m_options.m_symbols.front()));
-    GetSelectedOrDummyTarget().GetFrameRecognizerManager().AddRecognizer(
-        recognizer_sp, module, func);
+    GetTarget().GetFrameRecognizerManager().AddRecognizer(
+        recognizer_sp, module, func, Mangled::NamePreference::ePreferDemangled,
+        m_options.m_first_instruction_only);
   } else {
     auto module = ConstString(m_options.m_module);
     std::vector<ConstString> symbols(m_options.m_symbols.begin(),
                                      m_options.m_symbols.end());
-    GetSelectedOrDummyTarget().GetFrameRecognizerManager().AddRecognizer(
-        recognizer_sp, module, symbols);
+    GetTarget().GetFrameRecognizerManager().AddRecognizer(
+        recognizer_sp, module, symbols,
+        Mangled::NamePreference::ePreferDemangled,
+        m_options.m_first_instruction_only);
   }
 #endif
 
   result.SetStatus(eReturnStatusSuccessFinishNoResult);
-  return result.Succeeded();
 }
 
 class CommandObjectFrameRecognizerClear : public CommandObjectParsed {
@@ -917,22 +923,54 @@ public:
   ~CommandObjectFrameRecognizerClear() override = default;
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
-    GetSelectedOrDummyTarget()
-        .GetFrameRecognizerManager()
-        .RemoveAllRecognizers();
+  void DoExecute(Args &command, CommandReturnObject &result) override {
+    GetTarget().GetFrameRecognizerManager().RemoveAllRecognizers();
     result.SetStatus(eReturnStatusSuccessFinishResult);
-    return result.Succeeded();
   }
 };
 
-class CommandObjectFrameRecognizerDelete : public CommandObjectParsed {
-public:
-  CommandObjectFrameRecognizerDelete(CommandInterpreter &interpreter)
-      : CommandObjectParsed(interpreter, "frame recognizer delete",
-                            "Delete an existing frame recognizer.", nullptr) {}
+static void
+PrintRecognizerDetails(Stream &strm, const std::string &name, bool enabled,
+                       const std::string &module,
+                       llvm::ArrayRef<lldb_private::ConstString> symbols,
+                       Mangled::NamePreference symbol_mangling, bool regexp) {
+  if (!enabled)
+    strm << "[disabled] ";
 
-  ~CommandObjectFrameRecognizerDelete() override = default;
+  strm << name << ", ";
+
+  if (!module.empty())
+    strm << "module " << module << ", ";
+
+  switch (symbol_mangling) {
+  case Mangled::NamePreference ::ePreferMangled:
+    strm << "mangled symbol ";
+    break;
+  case Mangled::NamePreference ::ePreferDemangled:
+    strm << "demangled symbol ";
+    break;
+  case Mangled::NamePreference ::ePreferDemangledWithoutArguments:
+    strm << "demangled (no args) symbol ";
+    break;
+  }
+
+  if (regexp)
+    strm << "regex ";
+
+  llvm::interleaveComma(symbols, strm);
+}
+
+// Base class for commands which accept a single frame recognizer as an argument
+class CommandObjectWithFrameRecognizerArg : public CommandObjectParsed {
+public:
+  CommandObjectWithFrameRecognizerArg(CommandInterpreter &interpreter,
+                                      const char *name,
+                                      const char *help = nullptr,
+                                      const char *syntax = nullptr,
+                                      uint32_t flags = 0)
+      : CommandObjectParsed(interpreter, name, help, syntax, flags) {
+    AddSimpleArgumentList(eArgTypeRecognizerID);
+  }
 
   void
   HandleArgumentCompletion(CompletionRequest &request,
@@ -940,70 +978,109 @@ public:
     if (request.GetCursorIndex() != 0)
       return;
 
-    GetSelectedOrDummyTarget().GetFrameRecognizerManager().ForEach(
-        [&request](uint32_t rid, std::string rname, std::string module,
+    GetTarget().GetFrameRecognizerManager().ForEach(
+        [&request](uint32_t rid, bool enabled, std::string rname,
+                   std::string module,
                    llvm::ArrayRef<lldb_private::ConstString> symbols,
-                   bool regexp) {
+                   Mangled::NamePreference symbol_mangling, bool regexp) {
           StreamString strm;
           if (rname.empty())
             rname = "(internal)";
 
-          strm << rname;
-          if (!module.empty())
-            strm << ", module " << module;
-          if (!symbols.empty())
-            for (auto &symbol : symbols)
-              strm << ", symbol " << symbol;
-          if (regexp)
-            strm << " (regexp)";
+          PrintRecognizerDetails(strm, rname, enabled, module, symbols,
+                                 symbol_mangling, regexp);
 
           request.TryCompleteCurrentArg(std::to_string(rid), strm.GetString());
         });
   }
 
-protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
-    if (command.GetArgumentCount() == 0) {
-      if (!m_interpreter.Confirm(
-              "About to delete all frame recognizers, do you want to do that?",
-              true)) {
-        result.AppendMessage("Operation cancelled...");
-        result.SetStatus(eReturnStatusFailed);
-        return false;
-      }
+  virtual void DoExecuteWithId(CommandReturnObject &result,
+                               uint32_t recognizer_id) = 0;
 
-      GetSelectedOrDummyTarget()
-          .GetFrameRecognizerManager()
-          .RemoveAllRecognizers();
-      result.SetStatus(eReturnStatusSuccessFinishResult);
-      return result.Succeeded();
-    }
-
-    if (command.GetArgumentCount() != 1) {
-      result.AppendErrorWithFormat("'%s' takes zero or one arguments.\n",
-                                   m_cmd_name.c_str());
-      result.SetStatus(eReturnStatusFailed);
-      return false;
-    }
-
+  void DoExecute(Args &command, CommandReturnObject &result) override {
     uint32_t recognizer_id;
     if (!llvm::to_integer(command.GetArgumentAtIndex(0), recognizer_id)) {
       result.AppendErrorWithFormat("'%s' is not a valid recognizer id.\n",
                                    command.GetArgumentAtIndex(0));
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+      return;
     }
 
-    if (!GetSelectedOrDummyTarget()
-             .GetFrameRecognizerManager()
-             .RemoveRecognizerWithID(recognizer_id)) {
-      result.AppendErrorWithFormat("'%s' is not a valid recognizer id.\n",
-                                   command.GetArgumentAtIndex(0));
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+    DoExecuteWithId(result, recognizer_id);
+  }
+};
+
+class CommandObjectFrameRecognizerEnable
+    : public CommandObjectWithFrameRecognizerArg {
+public:
+  CommandObjectFrameRecognizerEnable(CommandInterpreter &interpreter)
+      : CommandObjectWithFrameRecognizerArg(
+            interpreter, "frame recognizer enable",
+            "Enable a frame recognizer by id.", nullptr) {
+    AddSimpleArgumentList(eArgTypeRecognizerID);
+  }
+
+  ~CommandObjectFrameRecognizerEnable() override = default;
+
+protected:
+  void DoExecuteWithId(CommandReturnObject &result,
+                       uint32_t recognizer_id) override {
+    auto &recognizer_mgr = GetTarget().GetFrameRecognizerManager();
+    if (!recognizer_mgr.SetEnabledForID(recognizer_id, true)) {
+      result.AppendErrorWithFormat("'%u' is not a valid recognizer id.\n",
+                                   recognizer_id);
+      return;
     }
     result.SetStatus(eReturnStatusSuccessFinishResult);
-    return result.Succeeded();
+  }
+};
+
+class CommandObjectFrameRecognizerDisable
+    : public CommandObjectWithFrameRecognizerArg {
+public:
+  CommandObjectFrameRecognizerDisable(CommandInterpreter &interpreter)
+      : CommandObjectWithFrameRecognizerArg(
+            interpreter, "frame recognizer disable",
+            "Disable a frame recognizer by id.", nullptr) {
+    AddSimpleArgumentList(eArgTypeRecognizerID);
+  }
+
+  ~CommandObjectFrameRecognizerDisable() override = default;
+
+protected:
+  void DoExecuteWithId(CommandReturnObject &result,
+                       uint32_t recognizer_id) override {
+    auto &recognizer_mgr = GetTarget().GetFrameRecognizerManager();
+    if (!recognizer_mgr.SetEnabledForID(recognizer_id, false)) {
+      result.AppendErrorWithFormat("'%u' is not a valid recognizer id.\n",
+                                   recognizer_id);
+      return;
+    }
+    result.SetStatus(eReturnStatusSuccessFinishResult);
+  }
+};
+
+class CommandObjectFrameRecognizerDelete
+    : public CommandObjectWithFrameRecognizerArg {
+public:
+  CommandObjectFrameRecognizerDelete(CommandInterpreter &interpreter)
+      : CommandObjectWithFrameRecognizerArg(
+            interpreter, "frame recognizer delete",
+            "Delete an existing frame recognizer by id.", nullptr) {
+    AddSimpleArgumentList(eArgTypeRecognizerID);
+  }
+
+  ~CommandObjectFrameRecognizerDelete() override = default;
+
+protected:
+  void DoExecuteWithId(CommandReturnObject &result,
+                       uint32_t recognizer_id) override {
+    auto &recognizer_mgr = GetTarget().GetFrameRecognizerManager();
+    if (!recognizer_mgr.RemoveRecognizerWithID(recognizer_id)) {
+      result.AppendErrorWithFormat("'%u' is not a valid recognizer id.\n",
+                                   recognizer_id);
+      return;
+    }
+    result.SetStatus(eReturnStatusSuccessFinishResult);
   }
 };
 
@@ -1017,25 +1094,21 @@ public:
   ~CommandObjectFrameRecognizerList() override = default;
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
+  void DoExecute(Args &command, CommandReturnObject &result) override {
     bool any_printed = false;
-    GetSelectedOrDummyTarget().GetFrameRecognizerManager().ForEach(
-        [&result, &any_printed](
-            uint32_t recognizer_id, std::string name, std::string module,
-            llvm::ArrayRef<ConstString> symbols, bool regexp) {
+    GetTarget().GetFrameRecognizerManager().ForEach(
+        [&result,
+         &any_printed](uint32_t recognizer_id, bool enabled, std::string name,
+                       std::string module, llvm::ArrayRef<ConstString> symbols,
+                       Mangled::NamePreference symbol_mangling, bool regexp) {
           Stream &stream = result.GetOutputStream();
 
           if (name.empty())
             name = "(internal)";
 
-          stream << std::to_string(recognizer_id) << ": " << name;
-          if (!module.empty())
-            stream << ", module " << module;
-          if (!symbols.empty())
-            for (auto &symbol : symbols)
-              stream << ", symbol " << symbol;
-          if (regexp)
-            stream << " (regexp)";
+          stream << std::to_string(recognizer_id) << ": ";
+          PrintRecognizerDetails(stream, name, enabled, module, symbols,
+                                 symbol_mangling, regexp);
 
           stream.EOL();
           stream.Flush();
@@ -1049,7 +1122,6 @@ protected:
       result.GetOutputStream().PutCString("no matching results found.\n");
       result.SetStatus(eReturnStatusSuccessFinishNoResult);
     }
-    return result.Succeeded();
   }
 };
 
@@ -1060,63 +1132,45 @@ public:
             interpreter, "frame recognizer info",
             "Show which frame recognizer is applied a stack frame (if any).",
             nullptr) {
-    CommandArgumentEntry arg;
-    CommandArgumentData index_arg;
-
-    // Define the first (and only) variant of this arg.
-    index_arg.arg_type = eArgTypeFrameIndex;
-    index_arg.arg_repetition = eArgRepeatPlain;
-
-    // There is only one variant this argument could be; put it into the
-    // argument entry.
-    arg.push_back(index_arg);
-
-    // Push the data for the first argument into the m_arguments vector.
-    m_arguments.push_back(arg);
+    AddSimpleArgumentList(eArgTypeFrameIndex);
   }
 
   ~CommandObjectFrameRecognizerInfo() override = default;
 
 protected:
-  bool DoExecute(Args &command, CommandReturnObject &result) override {
+  void DoExecute(Args &command, CommandReturnObject &result) override {
     const char *frame_index_str = command.GetArgumentAtIndex(0);
     uint32_t frame_index;
     if (!llvm::to_integer(frame_index_str, frame_index)) {
       result.AppendErrorWithFormat("'%s' is not a valid frame index.",
                                    frame_index_str);
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+      return;
     }
 
     Process *process = m_exe_ctx.GetProcessPtr();
     if (process == nullptr) {
       result.AppendError("no process");
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+      return;
     }
     Thread *thread = m_exe_ctx.GetThreadPtr();
     if (thread == nullptr) {
       result.AppendError("no thread");
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+      return;
     }
     if (command.GetArgumentCount() != 1) {
       result.AppendErrorWithFormat(
           "'%s' takes exactly one frame index argument.\n", m_cmd_name.c_str());
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+      return;
     }
 
     StackFrameSP frame_sp = thread->GetStackFrameAtIndex(frame_index);
     if (!frame_sp) {
       result.AppendErrorWithFormat("no frame with index %u", frame_index);
-      result.SetStatus(eReturnStatusFailed);
-      return false;
+      return;
     }
 
-    auto recognizer = GetSelectedOrDummyTarget()
-                          .GetFrameRecognizerManager()
-                          .GetRecognizerForFrame(frame_sp);
+    auto recognizer =
+        GetTarget().GetFrameRecognizerManager().GetRecognizerForFrame(frame_sp);
 
     Stream &output_stream = result.GetOutputStream();
     output_stream.Printf("frame %d ", frame_index);
@@ -1128,7 +1182,6 @@ protected:
     }
     output_stream.EOL();
     result.SetStatus(eReturnStatusSuccessFinishResult);
-    return result.Succeeded();
   }
 };
 
@@ -1139,18 +1192,24 @@ public:
             interpreter, "frame recognizer",
             "Commands for editing and viewing frame recognizers.",
             "frame recognizer [<sub-command-options>] ") {
+    LoadSubCommand("info", CommandObjectSP(new CommandObjectFrameRecognizerInfo(
+                               interpreter)));
+    LoadSubCommand("list", CommandObjectSP(new CommandObjectFrameRecognizerList(
+                               interpreter)));
     LoadSubCommand("add", CommandObjectSP(new CommandObjectFrameRecognizerAdd(
                               interpreter)));
     LoadSubCommand(
-        "clear",
-        CommandObjectSP(new CommandObjectFrameRecognizerClear(interpreter)));
+        "enable",
+        CommandObjectSP(new CommandObjectFrameRecognizerEnable(interpreter)));
+    LoadSubCommand(
+        "disable",
+        CommandObjectSP(new CommandObjectFrameRecognizerDisable(interpreter)));
     LoadSubCommand(
         "delete",
         CommandObjectSP(new CommandObjectFrameRecognizerDelete(interpreter)));
-    LoadSubCommand("list", CommandObjectSP(new CommandObjectFrameRecognizerList(
-                               interpreter)));
-    LoadSubCommand("info", CommandObjectSP(new CommandObjectFrameRecognizerInfo(
-                               interpreter)));
+    LoadSubCommand(
+        "clear",
+        CommandObjectSP(new CommandObjectFrameRecognizerClear(interpreter)));
   }
 
   ~CommandObjectFrameRecognizer() override = default;
@@ -1164,7 +1223,7 @@ CommandObjectMultiwordFrame::CommandObjectMultiwordFrame(
     CommandInterpreter &interpreter)
     : CommandObjectMultiword(interpreter, "frame",
                              "Commands for selecting and "
-                             "examing the current "
+                             "examining the current "
                              "thread's stack frames.",
                              "frame <subcommand> [<subcommand-options>]") {
   LoadSubCommand("diagnose",

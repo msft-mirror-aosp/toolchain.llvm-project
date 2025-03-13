@@ -1,5 +1,7 @@
 // RUN: %clang_cc1 -flax-vector-conversions=none -ffreestanding %s -triple=x86_64-apple-darwin -target-feature +xop -emit-llvm -o - -Wall -Werror | FileCheck %s
 // RUN: %clang_cc1 -flax-vector-conversions=none -ffreestanding %s -triple=x86_64-apple-darwin -target-feature +xop -fno-signed-char -emit-llvm -o - -Wall -Werror | FileCheck %s
+// RUN: %clang_cc1 -flax-vector-conversions=none -ffreestanding %s -triple=i386-apple-darwin -target-feature +xop -emit-llvm -o - -Wall -Werror | FileCheck %s
+// RUN: %clang_cc1 -flax-vector-conversions=none -ffreestanding %s -triple=i386-apple-darwin -target-feature +xop -fno-signed-char -emit-llvm -o - -Wall -Werror | FileCheck %s
 
 
 #include <x86intrin.h>
@@ -406,48 +408,48 @@ __m128i test_mm_comfalse_epi64(__m128i a, __m128i b) {
 
 __m128i test_mm_comtrue_epu8(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epu8
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epu8(a, b);
 }
 
 __m128i test_mm_comtrue_epu16(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epu16
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epu16(a, b);
 }
 
 __m128i test_mm_comtrue_epu32(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epu32
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epu32(a, b);
 }
 
 __m128i test_mm_comtrue_epu64(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epu64
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epu64(a, b);
 }
 
 __m128i test_mm_comtrue_epi8(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epi8
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epi8(a, b);
 }
 
 __m128i test_mm_comtrue_epi16(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epi16
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epi16(a, b);
 }
 
 __m128i test_mm_comtrue_epi32(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epi32
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epi32(a, b);
 }
 
 __m128i test_mm_comtrue_epi64(__m128i a, __m128i b) {
   // CHECK-LABEL: test_mm_comtrue_epi64
-  // CHECK: ret <2 x i64> <i64 -1, i64 -1>
+  // CHECK: ret <2 x i64> splat (i64 -1)
   return _mm_comtrue_epi64(a, b);
 }

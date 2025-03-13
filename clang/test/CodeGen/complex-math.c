@@ -1,11 +1,12 @@
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple x86_64-unknown-unknown -o - | FileCheck %s --check-prefix=X86
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple x86_64-pc-win64 -o - | FileCheck %s --check-prefix=X86
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple i686-unknown-unknown -o - | FileCheck %s --check-prefix=X86
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple powerpc-unknown-unknown -o - | FileCheck %s --check-prefix=PPC
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple armv7-none-linux-gnueabi -o - | FileCheck %s --check-prefix=ARM
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple armv7-none-linux-gnueabihf -o - | FileCheck %s --check-prefix=ARMHF
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple thumbv7k-apple-watchos2.0 -o - -target-abi aapcs16 | FileCheck %s --check-prefix=ARM7K
-// RUN: %clang_cc1 %s -O0 -fno-experimental-new-pass-manager -emit-llvm -triple aarch64-unknown-unknown -ffast-math -ffp-contract=fast -o - | FileCheck %s --check-prefix=AARCH64-FASTMATH
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple x86_64-unknown-unknown -o - | FileCheck %s --check-prefix=X86
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple x86_64-pc-win64 -o - | FileCheck %s --check-prefix=X86
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple i686-unknown-unknown -o - | FileCheck %s --check-prefix=X86
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple powerpc-unknown-unknown -o - | FileCheck %s --check-prefix=PPC
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple armv7-none-linux-gnueabi -o - | FileCheck %s --check-prefix=ARM
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple armv7-none-linux-gnueabihf -o - | FileCheck %s --check-prefix=ARMHF
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple thumbv7k-apple-watchos2.0 -o - -target-abi aapcs16 | FileCheck %s --check-prefix=ARM7K
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple aarch64-unknown-unknown -ffast-math -ffp-contract=fast -complex-range=improved -o - | FileCheck %s --check-prefix=AARCH64-FASTMATH
+// RUN: %clang_cc1 %s -O0 -emit-llvm -triple spir -o - | FileCheck %s --check-prefix=SPIR
 
 float _Complex add_float_rr(float a, float b) {
   // X86-LABEL: @add_float_rr(
@@ -107,6 +108,7 @@ float _Complex mul_float_cc(float _Complex a, float _Complex b) {
   // X86: fcmp uno float %[[RI]]
   // X86: call {{.*}} @__mulsc3(
   // X86: ret
+  // SPIR: call spir_func {{.*}} @__mulsc3(
   return a * b;
 }
 
@@ -131,24 +133,70 @@ float _Complex div_float_rc(float a, float _Complex b) {
   // X86: call {{.*}} @__divsc3(
   // X86: ret
 
-  // a / b = (A+iB) / (C+iD) = ((AC+BD)/(CC+DD)) + i((BC-AD)/(CC+DD))
-  // AARCH64-FASTMATH-LABEL: @div_float_rc(float %a, [2 x float] %b.coerce)
-  // A = a
-  // B = 0
-  //
-  // AARCH64-FASTMATH: [[AC:%.*]] = fmul fast float
-  // BD = 0
-  // ACpBD = AC
-  //
-  // AARCH64-FASTMATH: [[CC:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[DD:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[CCpDD:%.*]] = fadd fast float
-  //
-  // BC = 0
-  // AARCH64-FASTMATH: [[AD:%.*]] = fmul fast float
-  //
-  // AARCH64-FASTMATH: fdiv fast float
-  // AARCH64-FASTMATH: fdiv fast float
+  // SPIR: call spir_func {{.*}} @__divsc3(
+
+  // a / b = (A+iB) / (C+iD) = (E+iF)
+  // if (|C| >= |D|)
+  //   DdC = D/C
+  //   CpRD = C+DdC*D
+  //   E = (A+B*DdC)/CpRD
+  //   F = (B-A*DdC)/CpRD
+  // else
+  //   CdD = C/D
+  //   DpRC= D+CdD*C
+  //   E = (A*CdD+B)/DpRC
+  //   F = (B*CdD-A)/DpRC
+  // AARCH64-FASTMATH-LABEL: @div_float_rc(float noundef nofpclass(nan inf) %a, [2 x float] noundef nofpclass(nan inf) alignstack(8) %b.coerce)
+  // |C|
+  // AARCH64-FASTMATH: call {{.*}}float @llvm.fabs.f32(float {{.*}})
+  // |D|
+  // AARCH64-FASTMATH-NEXT: call {{.*}}float @llvm.fabs.f32(float {{.*}})
+  // AARCH64-FASTMATH-NEXT: fcmp {{.*}}ugt float
+  // AARCH64-FASTMATH-NEXT: br i1 {{.*}}, label
+  // AARCH64-FASTMATH:      abs_rhsr_greater_or_equal_abs_rhsi:
+
+  // |C| >= |D|
+  // DdC=D/C
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // CpRD=C+CdC*D
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+
+  // A+BR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // B-AR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      abs_rhsr_less_than_abs_rhsi:
+
+  // |C| < |D|
+  // CdD=C/D
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // DpRC=D+CdD*C
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+
+  // (A*CdD+B)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // (BCdD-A)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      complex_div:
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}float
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}float
   // AARCH64-FASTMATH: ret
   return a / b;
 }
@@ -158,24 +206,70 @@ float _Complex div_float_cc(float _Complex a, float _Complex b) {
   // X86: call {{.*}} @__divsc3(
   // X86: ret
 
-  // a / b = (A+iB) / (C+iD) = ((AC+BD)/(CC+DD)) + i((BC-AD)/(CC+DD))
-  // AARCH64-FASTMATH-LABEL: @div_float_cc([2 x float] %a.coerce, [2 x float] %b.coerce)
-  //
-  // AARCH64-FASTMATH: [[AC:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[BD:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[ACpBD:%.*]] = fadd fast float
-  //
-  // AARCH64-FASTMATH: [[CC:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[DD:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[CCpDD:%.*]] = fadd fast float
-  //
-  // AARCH64-FASTMATH: [[BC:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[AD:%.*]] = fmul fast float
-  // AARCH64-FASTMATH: [[BCmAD:%.*]] = fsub fast float
-  //
-  // AARCH64-FASTMATH: fdiv fast float
-  // AARCH64-FASTMATH: fdiv fast float
-  // AARCH64-FASTMATH: ret
+  // SPIR: call spir_func {{.*}} @__divsc3(
+
+  // a / b = (A+iB) / (C+iD) = (E+iF)
+  // if (|C| >= |D|)
+  //   DdC = D/C
+  //   CpRD = C+DdC*D
+  //   E = (A+B*DdC)/CpRD
+  //   F = (B-A*DdC)/CpRD
+  // else
+  //   CdD = C/D
+  //   DpRC= D+CdD*C
+  //   E = (A*CdD+B)/DpRC
+  //   F = (B*CdD-A)/DpRC
+  // AARCH64-FASTMATH-LABEL: @div_float_cc([2 x float] noundef nofpclass(nan inf) alignstack(8) %a.coerce, [2 x float] noundef nofpclass(nan inf) alignstack(8) %b.coerce)
+  // |C|
+  // AARCH64-FASTMATH: call {{.*}}float @llvm.fabs.f32(float {{.*}})
+  // |D|
+  // AARCH64-FASTMATH-NEXT: call {{.*}}float @llvm.fabs.f32(float {{.*}})
+  // AARCH64-FASTMATH-NEXT: fcmp {{.*}}ugt float
+  // AARCH64-FASTMATH-NEXT: br i1 {{.*}}, label
+  // AARCH64-FASTMATH:      abs_rhsr_greater_or_equal_abs_rhsi:
+
+  // |C| >= |D|
+  // DdC=D/C
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // CpRD=C+CdC*D
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+
+  // A+BR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // B-AR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      abs_rhsr_less_than_abs_rhsi:
+
+  // |C| < |D|
+  // CdD=C/D
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // DpRC=D+CdD*C
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+
+  // (A*CdD+B)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // (BCdD-A)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}float
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}float
+
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      complex_div:
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}float
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}float
   return a / b;
 }
 
@@ -278,6 +372,8 @@ double _Complex mul_double_cc(double _Complex a, double _Complex b) {
   // X86: fcmp uno double %[[RI]]
   // X86: call {{.*}} @__muldc3(
   // X86: ret
+
+  // SPIR: call spir_func {{.*}} @__muldc3(
   return a * b;
 }
 
@@ -302,24 +398,70 @@ double _Complex div_double_rc(double a, double _Complex b) {
   // X86: call {{.*}} @__divdc3(
   // X86: ret
 
-  // a / b = (A+iB) / (C+iD) = ((AC+BD)/(CC+DD)) + i((BC-AD)/(CC+DD))
-  // AARCH64-FASTMATH-LABEL: @div_double_rc(double %a, [2 x double] %b.coerce)
-  // A = a
-  // B = 0
-  //
-  // AARCH64-FASTMATH: [[AC:%.*]] = fmul fast double
-  // BD = 0
-  // ACpBD = AC
-  //
-  // AARCH64-FASTMATH: [[CC:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[DD:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[CCpDD:%.*]] = fadd fast double
-  //
-  // BC = 0
-  // AARCH64-FASTMATH: [[AD:%.*]] = fmul fast double
-  //
-  // AARCH64-FASTMATH: fdiv fast double
-  // AARCH64-FASTMATH: fdiv fast double
+  // SPIR: call spir_func {{.*}} @__divdc3(
+
+  // a / b = (A+iB) / (C+iD) = (E+iF)
+  // if (|C| >= |D|)
+  //   DdC = D/C
+  //   CpRD = C+DdC*D
+  //   E = (A+B*DdC)/CpRD
+  //   F = (B-A*DdC)/CpRD
+  // else
+  //   CdD = C/D
+  //   DpRC= D+CdD*C
+  //   E = (A*CdD+B)/DpRC
+  //   F = (B*CdD-A)/DpRC
+  // AARCH64-FASTMATH-LABEL: @div_double_rc(double noundef nofpclass(nan inf) %a, [2 x double] noundef nofpclass(nan inf) alignstack(8) %b.coerce)
+  // |C|
+  // AARCH64-FASTMATH: call {{.*}}double @llvm.fabs.f64(double {{.*}})
+  // |D|
+  // AARCH64-FASTMATH-NEXT: call {{.*}}double @llvm.fabs.f64(double {{.*}})
+  // AARCH64-FASTMATH-NEXT: fcmp {{.*}}ugt double
+  // AARCH64-FASTMATH-NEXT: br i1 {{.*}}, label
+  // AARCH64-FASTMATH:      abs_rhsr_greater_or_equal_abs_rhsi:
+
+  // |C| >= |D|
+  // DdC=D/C
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // CpRD=C+CdC*D
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+
+  // A+BR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // B-AR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      abs_rhsr_less_than_abs_rhsi:
+
+  // |C| < |D|
+  // CdD=C/D
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // DpRC=D+CdD*C
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+
+  // (A*CdD+B)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // (BCdD-A)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      complex_div:
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}double
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}double
   // AARCH64-FASTMATH: ret
   return a / b;
 }
@@ -329,23 +471,70 @@ double _Complex div_double_cc(double _Complex a, double _Complex b) {
   // X86: call {{.*}} @__divdc3(
   // X86: ret
 
-  // a / b = (A+iB) / (C+iD) = ((AC+BD)/(CC+DD)) + i((BC-AD)/(CC+DD))
-  // AARCH64-FASTMATH-LABEL: @div_double_cc([2 x double] %a.coerce, [2 x double] %b.coerce)
-  //
-  // AARCH64-FASTMATH: [[AC:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[BD:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[ACpBD:%.*]] = fadd fast double
-  //
-  // AARCH64-FASTMATH: [[CC:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[DD:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[CCpDD:%.*]] = fadd fast double
-  //
-  // AARCH64-FASTMATH: [[BC:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[AD:%.*]] = fmul fast double
-  // AARCH64-FASTMATH: [[BCmAD:%.*]] = fsub fast double
-  //
-  // AARCH64-FASTMATH: fdiv fast double
-  // AARCH64-FASTMATH: fdiv fast double
+  // SPIR: call spir_func {{.*}} @__divdc3(
+
+  // a / b = (A+iB) / (C+iD) = (E+iF)
+  // if (|C| >= |D|)
+  //   DdC = D/C
+  //   CpRD = C+DdC*D
+  //   E = (A+B*DdC)/CpRD
+  //   F = (B-A*DdC)/CpRD
+  // else
+  //   CdD = C/D
+  //   DpRC= D+CdD*C
+  //   E = (A*CdD+B)/DpRC
+  //   F = (B*CdD-A)/DpRC
+  // AARCH64-FASTMATH-LABEL: @div_double_cc([2 x double] noundef nofpclass(nan inf) alignstack(8) %a.coerce, [2 x double] noundef nofpclass(nan inf) alignstack(8) %b.coerce)
+  // |C|
+  // AARCH64-FASTMATH: call {{.*}}double @llvm.fabs.f64(double {{.*}})
+  // |D|
+  // AARCH64-FASTMATH-NEXT: call {{.*}}double @llvm.fabs.f64(double {{.*}})
+  // AARCH64-FASTMATH-NEXT: fcmp {{.*}}ugt double
+  // AARCH64-FASTMATH-NEXT: br i1 {{.*}}, label
+  // AARCH64-FASTMATH:      abs_rhsr_greater_or_equal_abs_rhsi:
+
+  // |C| >= |D|
+  // DdC=D/C
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // CpRD=C+CdC*D
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+
+  // A+BR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // B-AR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      abs_rhsr_less_than_abs_rhsi:
+
+  // |C| < |D|
+  // CdD=C/D
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // DpRC=D+CdD*C
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+
+  // (A*CdD+B)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // (BCdD-A)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}double
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}double
+
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      complex_div:
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}double
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}double
   // AARCH64-FASTMATH: ret
   return a / b;
 }
@@ -463,6 +652,7 @@ long double _Complex mul_long_double_cc(long double _Complex a, long double _Com
   // PPC: fcmp uno ppc_fp128 %[[RI]]
   // PPC: call {{.*}} @__multc3(
   // PPC: ret
+  // SPIR: call spir_func {{.*}} @__muldc3(
   return a * b;
 }
 
@@ -490,25 +680,70 @@ long double _Complex div_long_double_rc(long double a, long double _Complex b) {
   // PPC-NOT: fdiv
   // PPC: call {{.*}} @__divtc3(
   // PPC: ret
+  // SPIR: call spir_func {{.*}} @__divdc3(
 
-  // a / b = (A+iB) / (C+iD) = ((AC+BD)/(CC+DD)) + i((BC-AD)/(CC+DD))
-  // AARCH64-FASTMATH-LABEL: @div_long_double_rc(fp128 %a, [2 x fp128] %b.coerce)
-  // A = a
-  // B = 0
-  //
-  // AARCH64-FASTMATH: [[AC:%.*]] = fmul fast fp128
-  // BD = 0
-  // ACpBD = AC
-  //
-  // AARCH64-FASTMATH: [[CC:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[DD:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[CCpDD:%.*]] = fadd fast fp128
-  //
-  // BC = 0
-  // AARCH64-FASTMATH: [[AD:%.*]] = fmul fast fp128
-  //
-  // AARCH64-FASTMATH: fdiv fast fp128
-  // AARCH64-FASTMATH: fdiv fast fp128
+  // a / b = (A+iB) / (C+iD) = (E+iF)
+  // if (|C| >= |D|)
+  //   DdC = D/C
+  //   CpRD = C+DdC*D
+  //   E = (A+B*DdC)/CpRD
+  //   F = (B-A*DdC)/CpRD
+  // else
+  //   CdD = C/D
+  //   DpRC= D+CdD*C
+  //   E = (A*CdD+B)/DpRC
+  //   F = (B*CdD-A)/DpRC
+  // AARCH64-FASTMATH-LABEL: @div_long_double_rc(fp128 noundef nofpclass(nan inf) %a, [2 x fp128] noundef nofpclass(nan inf) alignstack(16) %b.coerce)
+  // |C|
+  // AARCH64-FASTMATH: call {{.*}}fp128 @llvm.fabs.f128(fp128 {{.*}})
+  // |D|
+  // AARCH64-FASTMATH-NEXT: call {{.*}}fp128 @llvm.fabs.f128(fp128 {{.*}})
+  // AARCH64-FASTMATH-NEXT: fcmp {{.*}}ugt fp128
+  // AARCH64-FASTMATH-NEXT: br i1 {{.*}}, label
+  // AARCH64-FASTMATH:      abs_rhsr_greater_or_equal_abs_rhsi:
+
+  // |C| >= |D|
+  // DdC=D/C
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // CpRD=C+CdC*D
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+
+  // A+BR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // B-AR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      abs_rhsr_less_than_abs_rhsi:
+
+  // |C| < |D|
+  // CdD=C/D
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // DpRC=D+CdD*C
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+
+  // (A*CdD+B)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // (BCdD-A)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      complex_div:
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}fp128
   // AARCH64-FASTMATH: ret
   return a / b;
 }
@@ -521,24 +756,70 @@ long double _Complex div_long_double_cc(long double _Complex a, long double _Com
   // PPC-NOT: fdiv
   // PPC: call {{.*}} @__divtc3(
   // PPC: ret
+  // SPIR: call spir_func {{.*}} @__divdc3(
 
-  // a / b = (A+iB) / (C+iD) = ((AC+BD)/(CC+DD)) + i((BC-AD)/(CC+DD))
-  // AARCH64-FASTMATH-LABEL: @div_long_double_cc([2 x fp128] %a.coerce, [2 x fp128] %b.coerce)
-  //
-  // AARCH64-FASTMATH: [[AC:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[BD:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[ACpBD:%.*]] = fadd fast fp128
-  //
-  // AARCH64-FASTMATH: [[CC:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[DD:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[CCpDD:%.*]] = fadd fast fp128
-  //
-  // AARCH64-FASTMATH: [[BC:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[AD:%.*]] = fmul fast fp128
-  // AARCH64-FASTMATH: [[BCmAD:%.*]] = fsub fast fp128
-  //
-  // AARCH64-FASTMATH: fdiv fast fp128
-  // AARCH64-FASTMATH: fdiv fast fp128
+  // a / b = (A+iB) / (C+iD) = (E+iF)
+  // if (|C| >= |D|)
+  //   DdC = D/C
+  //   CpRD = C+DdC*D
+  //   E = (A+B*DdC)/CpRD
+  //   F = (B-A*DdC)/CpRD
+  // else
+  //   CdD = C/D
+  //   DpRC= D+CdD*C
+  //   E = (A*CdD+B)/DpRC
+  //   F = (B*CdD-A)/DpRC
+  // AARCH64-FASTMATH-LABEL: @div_long_double_cc([2 x fp128] noundef nofpclass(nan inf) alignstack(16) %a.coerce, [2 x fp128] noundef nofpclass(nan inf) alignstack(16) %b.coerce)
+  // |C|
+  // AARCH64-FASTMATH: call {{.*}}fp128 @llvm.fabs.f128(fp128 {{.*}})
+  // |D|
+  // AARCH64-FASTMATH-NEXT: call {{.*}}fp128 @llvm.fabs.f128(fp128 {{.*}})
+  // AARCH64-FASTMATH-NEXT: fcmp {{.*}}ugt fp128
+  // AARCH64-FASTMATH-NEXT: br i1 {{.*}}, label
+  // AARCH64-FASTMATH:      abs_rhsr_greater_or_equal_abs_rhsi:
+
+  // |C| >= |D|
+  // DdC=D/C
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // CpRD=C+CdC*D
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+
+  // A+BR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // B-AR/CpRD
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      abs_rhsr_less_than_abs_rhsi:
+
+  // |C| < |D|
+  // CdD=C/D
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // DpRC=D+CdD*C
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+
+  // (A*CdD+B)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fadd {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // (BCdD-A)/DpRC
+  // AARCH64-FASTMATH-NEXT: fmul {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fsub {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: fdiv {{.*}}fp128
+
+  // AARCH64-FASTMATH-NEXT: br label
+  // AARCH64-FASTMATH:      complex_div:
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}fp128
+  // AARCH64-FASTMATH-NEXT: phi {{.*}}fp128
   // AARCH64-FASTMATH: ret
   return a / b;
 }
@@ -603,10 +884,24 @@ _Complex double foo(_Complex double a, _Complex double b) {
   // ARM-LABEL: @foo(
   // ARM: call void @__muldc3
 
+  // SPIR: call spir_func void @__muldc3
+
   // ARMHF-LABEL: @foo(
   // ARMHF: call { double, double } @__muldc3
 
   // ARM7K-LABEL: @foo(
   // ARM7K: call { double, double } @__muldc3
   return a*b;
+}
+
+typedef _Complex double ComplexDouble;
+typedef double Double;
+
+float _Complex double_cr_sugar(ComplexDouble a, Double b) {
+  // X86-LABEL: @double_cr_sugar(
+  // X86: fmul
+  // X86: fmul
+  // X86-NOT: fmul
+  // X86: ret
+  return a *= b;
 }

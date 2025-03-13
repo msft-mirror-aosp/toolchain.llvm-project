@@ -8,12 +8,6 @@
 //
 // UNSUPPORTED: c++03, c++11, c++14
 
-// Throwing bad_optional_access is supported starting in macosx10.13
-// XFAIL: with_system_cxx_lib=macosx10.12 && !no-exceptions
-// XFAIL: with_system_cxx_lib=macosx10.11 && !no-exceptions
-// XFAIL: with_system_cxx_lib=macosx10.10 && !no-exceptions
-// XFAIL: with_system_cxx_lib=macosx10.9 && !no-exceptions
-
 // <optional>
 
 // constexpr optional(const T& v);

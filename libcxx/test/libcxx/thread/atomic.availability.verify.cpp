@@ -7,22 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11
-// REQUIRES: with_system_cxx_lib=macosx10.9 || \
-// REQUIRES: with_system_cxx_lib=macosx10.10 || \
-// REQUIRES: with_system_cxx_lib=macosx10.11 || \
-// REQUIRES: with_system_cxx_lib=macosx10.12 || \
-// REQUIRES: with_system_cxx_lib=macosx10.13 || \
-// REQUIRES: with_system_cxx_lib=macosx10.14 || \
-// REQUIRES: with_system_cxx_lib=macosx10.15
+// REQUIRES: availability-synchronization_library-missing
 
 // Test the availability markup on the C++20 Synchronization Library
 // additions to <atomic>.
 
 #include <atomic>
 
-
-int main(int, char**)
-{
+void f() {
     {
         std::atomic<int> i(3);
         std::memory_order m = std::memory_order_relaxed;

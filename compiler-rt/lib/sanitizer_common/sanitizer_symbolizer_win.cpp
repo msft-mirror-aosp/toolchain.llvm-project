@@ -14,8 +14,8 @@
 #include "sanitizer_platform.h"
 #if SANITIZER_WINDOWS
 
-#include "sanitizer_dbghelp.h"
-#include "sanitizer_symbolizer_internal.h"
+#  include "sanitizer_dbghelp.h"
+#  include "sanitizer_symbolizer_internal.h"
 
 namespace __sanitizer {
 
@@ -65,12 +65,13 @@ void InitializeDbgHelpIfNeeded() {
   HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
   CHECK(dbghelp && "failed to load dbghelp.dll");
 
-#define DBGHELP_IMPORT(name)                                                  \
-  do {                                                                        \
-    name =                                                                    \
-        reinterpret_cast<decltype(::name) *>(GetProcAddress(dbghelp, #name)); \
-    CHECK(name != nullptr);                                                   \
-  } while (0)
+#  define DBGHELP_IMPORT(name)                     \
+    do {                                           \
+      name = reinterpret_cast<decltype(::name) *>( \
+          (void *)GetProcAddress(dbghelp, #name)); \
+      CHECK(name != nullptr);                      \
+    } while (0)
+
   DBGHELP_IMPORT(StackWalk64);
   DBGHELP_IMPORT(SymCleanup);
   DBGHELP_IMPORT(SymFromAddr);
@@ -136,9 +137,10 @@ void InitializeDbgHelpIfNeeded() {
 bool WinSymbolizerTool::SymbolizePC(uptr addr, SymbolizedStack *frame) {
   InitializeDbgHelpIfNeeded();
 
-  // See http://msdn.microsoft.com/en-us/library/ms680578(VS.85).aspx
-  char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(CHAR)];
-  PSYMBOL_INFO symbol = (PSYMBOL_INFO)buffer;
+  // See https://docs.microsoft.com/en-us/windows/win32/debug/retrieving-symbol-information-by-address
+  InternalMmapVector<char> buffer(sizeof(SYMBOL_INFO) +
+                                  MAX_SYM_NAME * sizeof(CHAR));
+  PSYMBOL_INFO symbol = (PSYMBOL_INFO)&buffer[0];
   symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
   symbol->MaxNameLen = MAX_SYM_NAME;
   DWORD64 offset = 0;
@@ -174,9 +176,7 @@ const char *WinSymbolizerTool::Demangle(const char *name) {
     return name;
 }
 
-const char *Symbolizer::PlatformDemangle(const char *name) {
-  return name;
-}
+const char *Symbolizer::PlatformDemangle(const char *name) { return nullptr; }
 
 namespace {
 struct ScopedHandle {
@@ -223,18 +223,16 @@ bool SymbolizerProcess::StartSymbolizerSubprocess() {
   // Compute the command line. Wrap double quotes around everything.
   const char *argv[kArgVMax];
   GetArgV(path_, argv);
-  InternalScopedString command_line(kMaxPathLength * 3);
+  InternalScopedString command_line;
   for (int i = 0; argv[i]; i++) {
     const char *arg = argv[i];
     int arglen = internal_strlen(arg);
     // Check that tool command lines are simple and that complete escaping is
     // unnecessary.
     CHECK(!internal_strchr(arg, '"') && "quotes in args unsupported");
-    CHECK(!internal_strstr(arg, "\\\\") &&
-          "double backslashes in args unsupported");
     CHECK(arglen > 0 && arg[arglen - 1] != '\\' &&
           "args ending in backslash and empty args unsupported");
-    command_line.append("\"%s\" ", arg);
+    command_line.AppendF("\"%s\" ", arg);
   }
   VReport(3, "Launching symbolizer command: %s\n", command_line.data());
 
@@ -281,20 +279,27 @@ static void ChooseSymbolizerTools(IntrusiveList<SymbolizerTool> *list,
     return;
   }
 
-  // Add llvm-symbolizer in case the binary has dwarf.
+  // Add llvm-symbolizer.
   const char *user_path = common_flags()->external_symbolizer_path;
+
+  if (user_path && internal_strchr(user_path, '%')) {
+    char *new_path = (char *)InternalAlloc(kMaxPathLength);
+    SubstituteForFlagValue(user_path, new_path, kMaxPathLength);
+    user_path = new_path;
+  }
+
   const char *path =
       user_path ? user_path : FindPathToBinary("llvm-symbolizer.exe");
   if (path) {
-    VReport(2, "Using llvm-symbolizer at %spath: %s\n",
-            user_path ? "user-specified " : "", path);
-    list->push_back(new(*allocator) LLVMSymbolizer(path, allocator));
-  } else {
     if (user_path && user_path[0] == '\0') {
       VReport(2, "External symbolizer is explicitly disabled.\n");
     } else {
-      VReport(2, "External symbolizer is not present.\n");
+      VReport(2, "Using llvm-symbolizer at %spath: %s\n",
+              user_path ? "user-specified " : "", path);
+      list->push_back(new (*allocator) LLVMSymbolizer(path, allocator));
     }
+  } else {
+    VReport(2, "External symbolizer is not present.\n");
   }
 
   // Add the dbghelp based symbolizer.
@@ -310,7 +315,7 @@ Symbolizer *Symbolizer::PlatformInit() {
 }
 
 void Symbolizer::LateInitialize() {
-  Symbolizer::GetOrInit()->LateInitializeTools();
+  Symbolizer::GetOrInit();
 }
 
 }  // namespace __sanitizer

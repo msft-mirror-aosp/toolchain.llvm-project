@@ -59,7 +59,7 @@ multiple file formats.
 
  Remove most local symbols from the output. Different file formats may limit
  this to a subset of the local symbols. For example, file and section symbols in
- ELF objects will not be discarded.
+ ELF objects will not be discarded. Additionally, remove all debug sections.
 
 .. option:: --dump-section <section>=<file>
 
@@ -78,9 +78,46 @@ multiple file formats.
  Enable deterministic mode when copying archives, i.e. use 0 for archive member
  header UIDs, GIDs and timestamp fields. On by default.
 
+.. option:: --globalize-symbol <symbol>
+
+ Mark any defined symbols named ``<symbol>`` as global symbols in the output.
+ Can be specified multiple times to mark multiple symbols.
+
+.. option:: --globalize-symbols <filename>
+
+ Read a list of names from the file ``<filename>`` and mark defined symbols with
+ those names as global in the output. In the file, each line represents a single
+ symbol, with leading and trailing whitespace ignored, as is anything following
+ a '#'. Can be specified multiple times to read names from multiple files.
+
 .. option:: --help, -h
 
  Print a summary of command line options.
+
+.. option:: --keep-global-symbol <symbol>, -G
+
+ Mark all symbols local in the output, except for symbols with the name
+ ``<symbol>``. Can be specified multiple times to ignore multiple symbols.
+
+.. option:: --keep-global-symbols <filename>
+
+ Mark all symbols local in the output, except for symbols named in the file
+ ``<filename>``. In the file, each line represents a single symbol, with leading
+ and trailing whitespace ignored, as is anything following a '#'. Can be
+ specified multiple times to read names from multiple files.
+
+.. option:: --localize-symbol <symbol>, -L
+
+ Mark any defined non-common symbol named ``<symbol>`` as a local symbol in the
+ output. Can be specified multiple times to mark multiple symbols as local.
+
+.. option:: --localize-symbols <filename>
+
+ Read a list of names from the file ``<filename>`` and mark defined non-common
+ symbols with those names as local in the output. In the file, each line
+ represents a single symbol, with leading and trailing whitespace ignored, as is
+ anything following a '#'. Can be specified multiple times to read names from
+ multiple files.
 
 .. option:: --only-keep-debug
 
@@ -117,6 +154,11 @@ multiple file formats.
  If specified, symbol and section names specified by other switches are treated
  as extended POSIX regular expression patterns.
 
+.. option:: --remove-symbol-prefix <prefix>
+
+ Remove ``<prefix>`` from the start of every symbol name. No-op for symbols that do
+ not start with ``<prefix>``.
+
 .. option:: --remove-section <section>, -R
 
  Remove the specified section from the output. Can be specified multiple times
@@ -127,7 +169,7 @@ multiple file formats.
 
 .. option:: --set-section-alignment <section>=<align>
 
- Set the alignment of section ``<section>`` to `<align>``. Can be specified
+ Set the alignment of section ``<section>`` to ``<align>``. Can be specified
  multiple times to update multiple sections.
 
 .. option:: --set-section-flags <section>=<flag>[,<flag>,...]
@@ -137,8 +179,9 @@ multiple file formats.
  sections.
 
  Supported flag names are `alloc`, `load`, `noload`, `readonly`, `exclude`,
- `debug`, `code`, `data`, `rom`, `share`, `contents`, `merge` and `strings`. Not
- all flags are meaningful for all object file formats.
+ `debug`, `code`, `data`, `rom`, `share`, `contents`, `merge`, `strings`, and
+ `large`. Not all flags are meaningful for all object file formats or target
+ architectures.
 
  For ELF objects, the flags have the following effects:
 
@@ -152,6 +195,8 @@ multiple file formats.
  - `strings` = add the `SHF_STRINGS` flag.
  - `contents` = if the section has `SHT_NOBITS` type, mark it as a `SHT_PROGBITS`
    section.
+ - `large` = add the `SHF_X86_64_LARGE` on x86_64; rejected if the target
+   architecture is not x86_64.
 
  For COFF objects, the flags have the following effects:
 
@@ -168,6 +213,19 @@ multiple file formats.
  - `data` = add the `IMAGE_SCN_CNT_INITIALIZED_DATA` and `IMAGE_SCN_MEM_READ`
    flags.
  - `share` = add the `IMAGE_SCN_MEM_SHARED` and `IMAGE_SCN_MEM_READ` flags.
+
+.. option:: --skip-symbol <symbol>
+
+ Do not change the parameters of symbol ``<symbol>`` when executing other
+ options that can change the symbol's name, binding or visibility.
+
+.. option:: --skip-symbols <filename>
+
+ Do not change the parameters of symbols named in the file ``<filename>`` when
+ executing other options that can change the symbol's name, binding or
+ visibility. In the file, each line represents a single symbol, with leading
+ and trailing whitespace ignored, as is anything following a '#'.
+ Can be specified multiple times to read names from multiple files.
 
 .. option:: --strip-all-gnu
 
@@ -216,6 +274,12 @@ multiple file formats.
 
  Remove from the output all local or undefined symbols that are not required by
  relocations. Also remove all debug sections.
+
+.. option:: --update-section <name>=<file>
+
+ Replace the contents of the section ``<name>`` with contents from the file
+ ``<file>``. If the section ``<name>`` is part of a segment, the new contents
+ cannot be larger than the existing section.
 
 .. option:: --version, -V
 
@@ -285,33 +349,36 @@ them.
  Allow :program:`llvm-objcopy` to remove sections even if it would leave invalid
  section references. Any invalid sh_link fields will be set to zero.
 
-.. option:: --build-id-link-dir <dir>
+.. option:: --change-section-lma \*{+-}<val>
 
- Set the directory used by :option:`--build-id-link-input` and
- :option:`--build-id-link-output`.
+ Shift LMA of non-zero-sized segments by ``<val>``.
 
-.. option:: --build-id-link-input <suffix>
+.. option:: --change-section-address <section>{=+-}<val>, --adjust-section-vma
 
- Hard-link the input to ``<dir>/xx/xxx<suffix>``, where ``<dir>`` is the directory
- specified by :option:`--build-id-link-dir`. The path used is derived from the
- hex build ID.
-
-.. option:: --build-id-link-output <suffix>
-
- Hard-link the output to ``<dir>/xx/xxx<suffix>``, where ``<dir>`` is the directory
- specified by :option:`--build-id-link-dir`. The path used is derived from the
- hex build ID.
+ Change the address of sections that match ``<section>`` pattern to the
+ specified value, or apply ``+<val>``/``-<val>`` to the current value. Can be
+ specified multiple times to specify multiple patterns. Each section is only
+ modified by one ``--change-section-address`` argument. If a section name
+ matches multiple patterns, the rightmost change applies. The object file needs
+ to be of ET_REL type.
 
 .. option:: --change-start <incr>, --adjust-start
 
  Add ``<incr>`` to the program's start address. Can be specified multiple
  times, in which case the values will be applied cumulatively.
 
-.. option:: --compress-debug-sections [<style>]
+.. option:: --compress-debug-sections [<format>]
 
- Compress DWARF debug sections in the output, using the specified style.
- Supported styles are `zlib-gnu` and `zlib`. Defaults to `zlib` if no style is
- specified.
+ Compress DWARF debug sections in the output, using the specified format.
+ Supported formats are ``zlib`` and ``zstd``. Use ``zlib`` if ``<format>`` is omitted.
+
+.. option:: --compress-sections <section>=<format>
+
+ Compress or decompress sections matched by ``<section>`` using the specified
+ format. Supported formats are ``zlib`` and ``zstd``. Specify ``none`` for
+ decompression. When a section is matched by multiple options, the last one
+ wins. A wildcard ``<section>`` starting with '!' is disallowed.
+ Sections within a segment cannot be (de)compressed.
 
 .. option:: --decompress-debug-sections
 
@@ -333,17 +400,10 @@ them.
 
  Extract the named partition from the output.
 
-.. option:: --globalize-symbol <symbol>
+.. option:: --gap-fill <value>
 
- Mark any defined symbols named ``<symbol>`` as global symbols in the output.
- Can be specified multiple times to mark multiple symbols.
-
-.. option:: --globalize-symbols <filename>
-
- Read a list of names from the file ``<filename>`` and mark defined symbols with
- those names as global in the output. In the file, each line represents a single
- symbol, with leading and trailing whitespace ignored, as is anything following
- a '#'. Can be specified multiple times to read names from multiple files.
+ For binary outputs, fill the gaps between sections with ``<value>`` instead
+ of zero. The value must be an unsigned 8-bit integer.
 
 .. option:: --input-target <format>, -I
 
@@ -354,18 +414,6 @@ them.
 .. option:: --keep-file-symbols
 
  Keep symbols of type `STT_FILE`, even if they would otherwise be stripped.
-
-.. option:: --keep-global-symbol <symbol>
-
- Make all symbols local in the output, except for symbols with the name
- ``<symbol>``. Can be specified multiple times to ignore multiple symbols.
-
-.. option:: --keep-global-symbols <filename>
-
- Make all symbols local in the output, except for symbols named in the file
- ``<filename>``. In the file, each line represents a single symbol, with leading
- and trailing whitespace ignored, as is anything following a '#'. Can be
- specified multiple times to read names from multiple files.
 
 .. option:: --keep-section <section>
 
@@ -386,21 +434,8 @@ them.
 
 .. option:: --localize-hidden
 
- Make all symbols with hidden or internal visibility local in the output.
+ Mark all symbols with hidden or internal visibility local in the output.
 
-.. option:: --localize-symbol <symbol>, -L
-
- Mark any defined non-common symbol named ``<symbol>`` as a local symbol in the
- output. Can be specified multiple times to mark multiple symbols as local.
-
-.. option:: --localize-symbols <filename>
-
- Read a list of names from the file ``<filename>`` and mark defined non-common
- symbols with those names as local in the output. In the file, each line
- represents a single symbol, with leading and trailing whitespace ignored, as is
- anything following a '#'. Can be specified multiple times to read names from
- multiple files.
- 
 .. option:: --new-symbol-visibility <visibility>
 
  Specify the visibility of the symbols automatically created when using binary
@@ -413,12 +448,21 @@ them.
 
  The default is `default`.
 
+.. option:: --no-verify-note-sections
+
+ When adding note sections, do not verify if the section format is valid.
+
 .. option:: --output-target <format>, -O
 
  Write the output as the specified format. See `SUPPORTED FORMATS`_ for a list
  of valid ``<format>`` values. If unspecified, the output format is assumed to
  be the same as the value specified for :option:`--input-target` or the input
  file's format if that option is also unspecified.
+
+.. option:: --pad-to <address>
+
+ For binary outputs, pad the output to the load address ``<address>`` using a value
+ of zero or the value specified by :option:`--gap-fill`.
 
 .. option:: --prefix-alloc-sections <prefix>
 
@@ -433,16 +477,35 @@ them.
 
  Preserve access and modification timestamps in the output.
 
+.. option:: --remove-note [<name>/]<type>
+
+ Remove notes of integer type ``<type>`` and name ``<name>`` from SHT_NOTE
+ sections that are not in a segment. Can be specified multiple times.
+
 .. option:: --rename-section <old>=<new>[,<flag>,...]
 
  Rename sections called ``<old>`` to ``<new>`` in the output, and apply any
  specified ``<flag>`` values. See :option:`--set-section-flags` for a list of
  supported flags. Can be specified multiple times to rename multiple sections.
 
-.. option:: --set-start-addr <addr>
+.. option:: --set-section-type <section>=<type>
+
+ Set the type of section ``<section>`` to the integer ``<type>``. Can be
+ specified multiple times to update multiple sections.
+
+.. option:: --set-start <addr>
 
  Set the start address of the output to ``<addr>``. Overrides any previously
  specified :option:`--change-start` or :option:`--adjust-start` options.
+
+.. option:: --set-symbol-visibility <symbol>=<visibility>
+
+ Change the visibility of a symbol to the specified value.
+
+.. option:: --set-symbols-visibility <filename>=<visibility>
+
+ Read a list of symbols from <filename> and change their visibility to the
+ specified value. Visibility values: default, internal, hidden, protected.
 
 .. option:: --split-dwo <dwo-file>
 
@@ -471,9 +534,14 @@ them.
  specified format. See `SUPPORTED FORMATS`_ for a list of valid ``<format>``
  values.
 
+.. option:: --verify-note-sections
+
+ When adding note sections, verify if the section format is valid. On by
+ default.
+
 .. option:: --weaken-symbol <symbol>, -W
 
- Mark any global symbol named ``<symbol>`` as a weak symbol in the output. Can
+ Mark global symbols named ``<symbol>`` as weak symbols in the output. Can
  be specified multiple times to mark multiple symbols as weak.
 
 .. option:: --weaken-symbols <filename>
@@ -486,6 +554,20 @@ them.
 .. option:: --weaken
 
  Mark all defined global symbols as weak in the output.
+
+MACH-O-SPECIFIC OPTIONS
+-----------------------
+
+.. option:: --keep-undefined
+
+ Keep undefined symbols, even if they would otherwise be stripped.
+
+COFF-SPECIFIC OPTIONS
+---------------------
+
+.. option:: --subsystem <name>[:<version>]
+
+ Set the PE subsystem, and optionally subsystem version.
 
 SUPPORTED FORMATS
 -----------------
@@ -518,9 +600,18 @@ options. For GNU :program:`objcopy` compatibility, the values are all bfdnames.
 - `elf64-tradlittlemips`
 - `elf32-sparc`
 - `elf32-sparcel`
+- `elf32-hexagon`
+- `elf32-loongarch`
+- `elf64-loongarch`
+- `elf64-s390`
 
-Additionally, all targets except `binary` and `ihex` can have `-freebsd` as a
-suffix.
+The following formats are suppoprted by :program:`llvm-objcopy` for the
+:option:`--output-target` only:
+
+- `srec`
+
+Additionally, all targets except `binary`, `ihex`, and `srec` can have
+`-freebsd` as a suffix.
 
 BINARY INPUT AND OUTPUT
 -----------------------
@@ -546,7 +637,7 @@ Otherwise, it exits with code 0.
 BUGS
 ----
 
-To report bugs, please visit <https://bugs.llvm.org/>.
+To report bugs, please visit <https://github.com/llvm/llvm-project/labels/tools:llvm-objcopy/strip/>.
 
 There is a known issue with :option:`--input-target` and :option:`--target`
 causing only ``binary`` and ``ihex`` formats to have any effect. Other values

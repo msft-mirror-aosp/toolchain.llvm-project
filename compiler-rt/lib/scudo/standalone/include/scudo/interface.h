@@ -14,12 +14,24 @@
 
 extern "C" {
 
-__attribute__((weak)) const char *__scudo_default_options();
+__attribute__((weak)) const char *__scudo_default_options(void);
 
 // Post-allocation & pre-deallocation hooks.
-// They must be thread-safe and not use heap related functions.
 __attribute__((weak)) void __scudo_allocate_hook(void *ptr, size_t size);
 __attribute__((weak)) void __scudo_deallocate_hook(void *ptr);
+
+// `realloc` involves both deallocation and allocation but they are not reported
+// atomically. In one specific case which may keep taking a snapshot right in
+// the middle of `realloc` reporting the deallocation and allocation, it may
+// confuse the user by missing memory from `realloc`. To alleviate that case,
+// define the two `realloc` hooks to get the knowledge of the bundled hook
+// calls. These hooks are optional and should only be used when a hooks user
+// wants to track reallocs more closely.
+//
+// See more details in the comment of `realloc` in wrapper_c.inc.
+__attribute__((weak)) void
+__scudo_realloc_allocate_hook(void *old_ptr, void *new_ptr, size_t size);
+__attribute__((weak)) void __scudo_realloc_deallocate_hook(void *old_ptr);
 
 void __scudo_print_stats(void);
 
@@ -40,10 +52,11 @@ typedef void (*iterate_callback)(uintptr_t base, size_t size, void *arg);
 // the version in the process that analyzes the crash.
 //
 // fault_addr is the fault address. On aarch64 this is available in the system
-// register FAR_ELx, or far_context.far in an upcoming release of the Linux
-// kernel. This address must include the pointer tag; note that the kernel
-// strips the tag from the fields siginfo.si_addr and sigcontext.fault_address,
-// so these addresses are not suitable to be passed as fault_addr.
+// register FAR_ELx, or siginfo.si_addr in Linux 5.11 or above. This address
+// must include the pointer tag; this is available if SA_EXPOSE_TAGBITS was set
+// in sigaction.sa_flags when the signal handler was registered. Note that the
+// kernel strips the tag from the field sigcontext.fault_address, so this
+// address is not suitable to be passed as fault_addr.
 //
 // stack_depot is a pointer to the stack depot data structure, which may be
 // obtained by calling the function __scudo_get_stack_depot_addr() in the
@@ -72,9 +85,10 @@ typedef void (*iterate_callback)(uintptr_t base, size_t size, void *arg);
 // pointer.
 void __scudo_get_error_info(struct scudo_error_info *error_info,
                             uintptr_t fault_addr, const char *stack_depot,
-                            const char *region_info, const char *memory,
-                            const char *memory_tags, uintptr_t memory_addr,
-                            size_t memory_size);
+                            size_t stack_depot_size, const char *region_info,
+                            const char *ring_buffer, size_t ring_buffer_size,
+                            const char *memory, const char *memory_tags,
+                            uintptr_t memory_addr, size_t memory_size);
 
 enum scudo_error_type {
   UNKNOWN,
@@ -100,11 +114,14 @@ struct scudo_error_info {
   struct scudo_error_report reports[3];
 };
 
-const char *__scudo_get_stack_depot_addr();
-size_t __scudo_get_stack_depot_size();
+const char *__scudo_get_stack_depot_addr(void);
+size_t __scudo_get_stack_depot_size(void);
 
-const char *__scudo_get_region_info_addr();
-size_t __scudo_get_region_info_size();
+const char *__scudo_get_region_info_addr(void);
+size_t __scudo_get_region_info_size(void);
+
+const char *__scudo_get_ring_buffer_addr(void);
+size_t __scudo_get_ring_buffer_size(void);
 
 #ifndef M_DECAY_TIME
 #define M_DECAY_TIME -100
@@ -114,9 +131,13 @@ size_t __scudo_get_region_info_size();
 #define M_PURGE -101
 #endif
 
+#ifndef M_PURGE_ALL
+#define M_PURGE_ALL -104
+#endif
+
 // Tune the allocator's choice of memory tags to make it more likely that
 // a certain class of memory errors will be detected. The value argument should
-// be one of the enumerators of the scudo_memtag_tuning enum below.
+// be one of the M_MEMTAG_TUNING_* constants below.
 #ifndef M_MEMTAG_TUNING
 #define M_MEMTAG_TUNING -102
 #endif
@@ -141,13 +162,20 @@ size_t __scudo_get_region_info_size();
 #define M_TSDS_COUNT_MAX -202
 #endif
 
-enum scudo_memtag_tuning {
-  // Tune for buffer overflows.
-  M_MEMTAG_TUNING_BUFFER_OVERFLOW,
+// Tune for buffer overflows.
+#ifndef M_MEMTAG_TUNING_BUFFER_OVERFLOW
+#define M_MEMTAG_TUNING_BUFFER_OVERFLOW 0
+#endif
 
-  // Tune for use-after-free.
-  M_MEMTAG_TUNING_UAF,
-};
+// Tune for use-after-free.
+#ifndef M_MEMTAG_TUNING_UAF
+#define M_MEMTAG_TUNING_UAF 1
+#endif
+
+// Print internal stats to the log.
+#ifndef M_LOG_STATS
+#define M_LOG_STATS -205
+#endif
 
 } // extern "C"
 

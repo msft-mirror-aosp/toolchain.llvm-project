@@ -7,16 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "compute-offsets.h"
-#include "../../runtime/descriptor.h"
 #include "flang/Evaluate/fold-designator.h"
 #include "flang/Evaluate/fold.h"
 #include "flang/Evaluate/shape.h"
 #include "flang/Evaluate/type.h"
+#include "flang/Runtime/descriptor-consts.h"
 #include "flang/Semantics/scope.h"
 #include "flang/Semantics/semantics.h"
 #include "flang/Semantics/symbol.h"
 #include "flang/Semantics/tools.h"
 #include "flang/Semantics/type.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <vector>
 
@@ -24,11 +26,8 @@ namespace Fortran::semantics {
 
 class ComputeOffsetsHelper {
 public:
-  // TODO: configure based on target
-  static constexpr std::size_t maxAlignment{8};
-
   ComputeOffsetsHelper(SemanticsContext &context) : context_{context} {}
-  void Compute() { Compute(context_.globalScope()); }
+  void Compute(Scope &);
 
 private:
   struct SizeAndAlignment {
@@ -41,49 +40,105 @@ private:
   };
   struct SymbolAndOffset {
     SymbolAndOffset(Symbol &s, std::size_t off, const EquivalenceObject &obj)
-        : symbol{&s}, offset{off}, object{&obj} {}
+        : symbol{s}, offset{off}, object{&obj} {}
     SymbolAndOffset(const SymbolAndOffset &) = default;
-    Symbol *symbol;
+    MutableSymbolRef symbol;
     std::size_t offset;
     const EquivalenceObject *object;
   };
 
-  void Compute(Scope &);
-  void DoScope(Scope &);
   void DoCommonBlock(Symbol &);
   void DoEquivalenceBlockBase(Symbol &, SizeAndAlignment &);
   void DoEquivalenceSet(const EquivalenceSet &);
   SymbolAndOffset Resolve(const SymbolAndOffset &);
   std::size_t ComputeOffset(const EquivalenceObject &);
-  void DoSymbol(Symbol &);
-  SizeAndAlignment GetSizeAndAlignment(const Symbol &);
-  SizeAndAlignment GetElementSize(const Symbol &);
-  std::size_t CountElements(const Symbol &);
-  static std::size_t Align(std::size_t, std::size_t);
-  static SizeAndAlignment GetIntrinsicSizeAndAlignment(TypeCategory, int);
+  // Returns amount of padding that was needed for alignment
+  std::size_t DoSymbol(
+      Symbol &, std::optional<const size_t> newAlign = std::nullopt);
+  SizeAndAlignment GetSizeAndAlignment(const Symbol &, bool entire);
+  std::size_t Align(std::size_t, std::size_t);
+  std::optional<size_t> CompAlignment(const Symbol &);
+  std::optional<size_t> HasSpecialAlign(const Symbol &, Scope &);
 
   SemanticsContext &context_;
-  evaluate::FoldingContext &foldingContext_{context_.foldingContext()};
   std::size_t offset_{0};
-  std::size_t alignment_{0};
+  std::size_t alignment_{1};
   // symbol -> symbol+offset that determines its location, from EQUIVALENCE
-  std::map<MutableSymbolRef, SymbolAndOffset> dependents_;
+  std::map<MutableSymbolRef, SymbolAndOffset, SymbolAddressCompare> dependents_;
   // base symbol -> SizeAndAlignment for each distinct EQUIVALENCE block
-  std::map<MutableSymbolRef, SizeAndAlignment> equivalenceBlock_;
+  std::map<MutableSymbolRef, SizeAndAlignment, SymbolAddressCompare>
+      equivalenceBlock_;
 };
+
+// This function is only called if the target platform is AIX.
+static bool isReal8OrLarger(const Fortran::semantics::DeclTypeSpec *type) {
+  return ((type->IsNumeric(common::TypeCategory::Real) ||
+              type->IsNumeric(common::TypeCategory::Complex)) &&
+      evaluate::ToInt64(type->numericTypeSpec().kind()) > 4);
+}
+
+// This function is only called if the target platform is AIX.
+// It determines the alignment of a component. If the component is a derived
+// type, the alignment is computed accordingly.
+std::optional<size_t> ComputeOffsetsHelper::CompAlignment(const Symbol &sym) {
+  size_t max_align{0};
+  constexpr size_t fourByteAlign{4};
+  bool contain_double{false};
+  auto derivedTypeSpec{sym.GetType()->AsDerived()};
+  DirectComponentIterator directs{*derivedTypeSpec};
+  for (auto it{directs.begin()}; it != directs.end(); ++it) {
+    auto type{it->GetType()};
+    auto s{GetSizeAndAlignment(*it, true)};
+    if (isReal8OrLarger(type)) {
+      max_align = std::max(max_align, fourByteAlign);
+      contain_double = true;
+    } else if (type->AsDerived()) {
+      if (const auto newAlgin{CompAlignment(*it)}) {
+        max_align = std::max(max_align, s.alignment);
+      } else {
+        return std::nullopt;
+      }
+    } else {
+      max_align = std::max(max_align, s.alignment);
+    }
+  }
+
+  if (contain_double) {
+    return max_align;
+  } else {
+    return std::nullopt;
+  }
+}
+
+// This function is only called if the target platform is AIX.
+// Special alignment is needed only if it is a bind(c) derived type
+// and contain real type components that have larger than 4 bytes.
+std::optional<size_t> ComputeOffsetsHelper::HasSpecialAlign(
+    const Symbol &sym, Scope &scope) {
+  // On AIX, if the component that is not the first component and is
+  // a float of 8 bytes or larger, it has the 4-byte alignment.
+  // Only set the special alignment for bind(c) derived type on that platform.
+  if (const auto type{sym.GetType()}) {
+    auto &symOwner{sym.owner()};
+    if (symOwner.symbol() && symOwner.IsDerivedType() &&
+        symOwner.symbol()->attrs().HasAny({semantics::Attr::BIND_C}) &&
+        &sym != &(*scope.GetSymbols().front())) {
+      if (isReal8OrLarger(type)) {
+        return 4UL;
+      } else if (type->AsDerived()) {
+        return CompAlignment(sym);
+      }
+    }
+  }
+  return std::nullopt;
+}
 
 void ComputeOffsetsHelper::Compute(Scope &scope) {
   for (Scope &child : scope.children()) {
-    Compute(child);
+    ComputeOffsets(context_, child);
   }
-  DoScope(scope);
-  dependents_.clear();
-  equivalenceBlock_.clear();
-}
-
-void ComputeOffsetsHelper::DoScope(Scope &scope) {
-  if (scope.symbol() && scope.IsParameterizedDerivedType()) {
-    return; // only process instantiations of parameterized derived types
+  if (scope.symbol() && scope.IsDerivedTypeWithKindParameter()) {
+    return; // only process instantiations of kind parameterized derived types
   }
   if (scope.alignment().has_value()) {
     return; // prevent infinite recursion in error cases
@@ -93,14 +148,12 @@ void ComputeOffsetsHelper::DoScope(Scope &scope) {
   for (const EquivalenceSet &set : scope.equivalenceSets()) {
     DoEquivalenceSet(set);
   }
-  offset_ = 0;
-  alignment_ = 1;
   // Compute a base symbol and overall block size for each
   // disjoint EQUIVALENCE storage sequence.
   for (auto &[symbol, dep] : dependents_) {
     dep = Resolve(dep);
     CHECK(symbol->size() == 0);
-    auto symInfo{GetSizeAndAlignment(*symbol)};
+    auto symInfo{GetSizeAndAlignment(*symbol, true)};
     symbol->set_size(symInfo.size);
     Symbol &base{*dep.symbol};
     auto iter{equivalenceBlock_.find(base)};
@@ -116,7 +169,7 @@ void ComputeOffsetsHelper::DoScope(Scope &scope) {
   }
   // Assign offsets for non-COMMON EQUIVALENCE blocks
   for (auto &[symbol, blockInfo] : equivalenceBlock_) {
-    if (!InCommonBlock(*symbol)) {
+    if (!FindCommonBlockContaining(*symbol)) {
       DoSymbol(*symbol);
       DoEquivalenceBlockBase(*symbol, blockInfo);
       offset_ = std::max(offset_, symbol->offset() + blockInfo.size);
@@ -125,17 +178,37 @@ void ComputeOffsetsHelper::DoScope(Scope &scope) {
   // Process remaining non-COMMON symbols; this is all of them if there
   // was no use of EQUIVALENCE in the scope.
   for (auto &symbol : scope.GetSymbols()) {
-    if (!InCommonBlock(*symbol) &&
+    if (!FindCommonBlockContaining(*symbol) &&
         dependents_.find(symbol) == dependents_.end() &&
         equivalenceBlock_.find(symbol) == equivalenceBlock_.end()) {
-      DoSymbol(*symbol);
+
+      std::optional<size_t> newAlign{std::nullopt};
+      // Handle special alignment requirement for AIX
+      auto triple{llvm::Triple(
+          llvm::Triple::normalize(llvm::sys::getDefaultTargetTriple()))};
+      if (triple.getOS() == llvm::Triple::OSType::AIX) {
+        newAlign = HasSpecialAlign(*symbol, scope);
+      }
+      DoSymbol(*symbol, newAlign);
+      if (auto *generic{symbol->detailsIf<GenericDetails>()}) {
+        if (Symbol * specific{generic->specific()};
+            specific && !FindCommonBlockContaining(*specific)) {
+          // might be a shadowed procedure pointer
+          DoSymbol(*specific);
+        }
+      }
     }
   }
+  // Ensure that the size is a multiple of the alignment
+  offset_ = Align(offset_, alignment_);
   scope.set_size(offset_);
   scope.SetAlignment(alignment_);
-  // Assign offsets in COMMON blocks.
-  for (auto &pair : scope.commonBlocks()) {
-    DoCommonBlock(*pair.second);
+  // Assign offsets in COMMON blocks, unless this scope is a BLOCK construct,
+  // where COMMON blocks are illegal (C1107 and C1108).
+  if (scope.kind() != Scope::Kind::BlockConstruct) {
+    for (auto &pair : scope.commonBlocks()) {
+      DoCommonBlock(*pair.second);
+    }
   }
   for (auto &[symbol, dep] : dependents_) {
     symbol->set_offset(dep.symbol->offset() + dep.offset);
@@ -164,31 +237,36 @@ void ComputeOffsetsHelper::DoCommonBlock(Symbol &commonBlock) {
   alignment_ = 0;
   std::size_t minSize{0};
   std::size_t minAlignment{0};
-  for (auto &object : details.objects()) {
+  UnorderedSymbolSet previous;
+  for (auto object : details.objects()) {
     Symbol &symbol{*object};
-    DoSymbol(symbol);
+    auto errorSite{
+        commonBlock.name().empty() ? symbol.name() : commonBlock.name()};
+    if (std::size_t padding{DoSymbol(symbol.GetUltimate())}) {
+      context_.Warn(common::UsageWarning::CommonBlockPadding, errorSite,
+          "COMMON block /%s/ requires %zd bytes of padding before '%s' for alignment"_port_en_US,
+          commonBlock.name(), padding, symbol.name());
+    }
+    previous.emplace(symbol);
+    auto eqIter{equivalenceBlock_.end()};
     auto iter{dependents_.find(symbol)};
     if (iter == dependents_.end()) {
-      // Get full extent of any EQUIVALENCE block into size of COMMON
-      auto eqIter{equivalenceBlock_.find(symbol)};
+      eqIter = equivalenceBlock_.find(symbol);
       if (eqIter != equivalenceBlock_.end()) {
-        SizeAndAlignment &blockInfo{eqIter->second};
-        DoEquivalenceBlockBase(symbol, blockInfo);
-        minSize = std::max(
-            minSize, std::max(offset_, symbol.offset() + blockInfo.size));
-        minAlignment = std::max(minAlignment, blockInfo.alignment);
+        DoEquivalenceBlockBase(symbol, eqIter->second);
       }
     } else {
       SymbolAndOffset &dep{iter->second};
       Symbol &base{*dep.symbol};
-      auto errorSite{
-          commonBlock.name().empty() ? symbol.name() : commonBlock.name()};
       if (const auto *baseBlock{FindCommonBlockContaining(base)}) {
         if (baseBlock == &commonBlock) {
-          context_.Say(errorSite,
-              "'%s' is storage associated with '%s' by EQUIVALENCE elsewhere in COMMON block /%s/"_err_en_US,
-              symbol.name(), base.name(), commonBlock.name());
-        } else { // 8.10.3(1)
+          if (previous.find(SymbolRef{base}) == previous.end() ||
+              base.offset() != symbol.offset() - dep.offset) {
+            context_.Say(errorSite,
+                "'%s' is storage associated with '%s' by EQUIVALENCE elsewhere in COMMON block /%s/"_err_en_US,
+                symbol.name(), base.name(), commonBlock.name());
+          }
+        } else { // F'2023 8.10.3 p1
           context_.Say(errorSite,
               "'%s' in COMMON block /%s/ must not be storage associated with '%s' in COMMON block /%s/ by EQUIVALENCE"_err_en_US,
               symbol.name(), commonBlock.name(), base.name(),
@@ -199,13 +277,24 @@ void ComputeOffsetsHelper::DoCommonBlock(Symbol &commonBlock) {
             "'%s' cannot backward-extend COMMON block /%s/ via EQUIVALENCE with '%s'"_err_en_US,
             symbol.name(), commonBlock.name(), base.name());
       } else {
+        eqIter = equivalenceBlock_.find(base);
         base.get<ObjectEntityDetails>().set_commonBlock(commonBlock);
         base.set_offset(symbol.offset() - dep.offset);
+        previous.emplace(base);
       }
+    }
+    // Get full extent of any EQUIVALENCE block into size of COMMON ( see
+    // 8.10.2.2 point 1 (2))
+    if (eqIter != equivalenceBlock_.end()) {
+      SizeAndAlignment &blockInfo{eqIter->second};
+      minSize = std::max(
+          minSize, std::max(offset_, eqIter->first->offset() + blockInfo.size));
+      minAlignment = std::max(minAlignment, blockInfo.alignment);
     }
   }
   commonBlock.set_size(std::max(minSize, offset_));
   details.set_alignment(std::max(minAlignment, alignment_));
+  context_.MapCommonBlockAndCheckConflicts(commonBlock);
 }
 
 void ComputeOffsetsHelper::DoEquivalenceBlockBase(
@@ -269,23 +358,25 @@ std::size_t ComputeOffsetsHelper::ComputeOffset(
     const EquivalenceObject &object) {
   std::size_t offset{0};
   if (!object.subscripts.empty()) {
-    const ArraySpec &shape{object.symbol.get<ObjectEntityDetails>().shape()};
-    auto lbound{[&](std::size_t i) {
-      return *ToInt64(shape[i].lbound().GetExplicit());
-    }};
-    auto ubound{[&](std::size_t i) {
-      return *ToInt64(shape[i].ubound().GetExplicit());
-    }};
-    for (std::size_t i{object.subscripts.size() - 1};;) {
-      offset += object.subscripts[i] - lbound(i);
-      if (i == 0) {
-        break;
+    if (const auto *details{object.symbol.detailsIf<ObjectEntityDetails>()}) {
+      const ArraySpec &shape{details->shape()};
+      auto lbound{[&](std::size_t i) {
+        return *ToInt64(shape[i].lbound().GetExplicit());
+      }};
+      auto ubound{[&](std::size_t i) {
+        return *ToInt64(shape[i].ubound().GetExplicit());
+      }};
+      for (std::size_t i{object.subscripts.size() - 1};;) {
+        offset += object.subscripts[i] - lbound(i);
+        if (i == 0) {
+          break;
+        }
+        --i;
+        offset *= ubound(i) - lbound(i) + 1;
       }
-      --i;
-      offset *= ubound(i) - lbound(i) + 1;
     }
   }
-  auto result{offset * GetElementSize(object.symbol).size};
+  auto result{offset * GetSizeAndAlignment(object.symbol, false).size};
   if (object.substringStart) {
     int kind{context_.defaultKinds().GetDefaultKind(TypeCategory::Character)};
     if (const DeclTypeSpec * type{object.symbol.GetType()}) {
@@ -298,116 +389,77 @@ std::size_t ComputeOffsetsHelper::ComputeOffset(
   return result;
 }
 
-void ComputeOffsetsHelper::DoSymbol(Symbol &symbol) {
+std::size_t ComputeOffsetsHelper::DoSymbol(
+    Symbol &symbol, std::optional<const size_t> newAlign) {
   if (!symbol.has<ObjectEntityDetails>() && !symbol.has<ProcEntityDetails>()) {
-    return;
+    return 0;
   }
-  SizeAndAlignment s{GetSizeAndAlignment(symbol)};
+  SizeAndAlignment s{GetSizeAndAlignment(symbol, true)};
   if (s.size == 0) {
-    return;
+    return 0;
   }
-  offset_ = Align(offset_, s.alignment);
+  std::size_t previousOffset{offset_};
+  size_t alignVal{newAlign.value_or(s.alignment)};
+  offset_ = Align(offset_, alignVal);
+  std::size_t padding{offset_ - previousOffset};
   symbol.set_size(s.size);
   symbol.set_offset(offset_);
   offset_ += s.size;
-  alignment_ = std::max(alignment_, s.alignment);
+  alignment_ = std::max(alignment_, alignVal);
+  return padding;
 }
 
-auto ComputeOffsetsHelper::GetSizeAndAlignment(const Symbol &symbol)
-    -> SizeAndAlignment {
-  SizeAndAlignment result{GetElementSize(symbol)};
-  std::size_t elements{CountElements(symbol)};
-  if (elements > 1) {
-    result.size = Align(result.size, result.alignment);
-  }
-  result.size *= elements;
-  return result;
-}
+auto ComputeOffsetsHelper::GetSizeAndAlignment(
+    const Symbol &symbol, bool entire) -> SizeAndAlignment {
+  auto &targetCharacteristics{context_.targetCharacteristics()};
+  if (IsDescriptor(symbol)) {
+    auto dyType{evaluate::DynamicType::From(symbol)};
+    const auto *derived{evaluate::GetDerivedTypeSpec(dyType)};
+    int lenParams{derived ? CountLenParameters(*derived) : 0};
+    bool needAddendum{derived || (dyType && dyType->IsUnlimitedPolymorphic())};
 
-auto ComputeOffsetsHelper::GetElementSize(const Symbol &symbol)
-    -> SizeAndAlignment {
-  const DeclTypeSpec *type{symbol.GetType()};
-  if (!evaluate::DynamicType::From(type).has_value()) {
-    return {};
+    // FIXME: Get descriptor size from targetCharacteristics instead
+    // overapproximation
+    std::size_t size{runtime::MaxDescriptorSizeInBytes(
+        symbol.Rank(), needAddendum, lenParams)};
+
+    return {size, targetCharacteristics.descriptorAlignment()};
   }
-  // TODO: The size of procedure pointers is not yet known
-  // and is independent of rank (and probably also the number
-  // of length type parameters).
-  if (IsDescriptor(symbol) || IsProcedurePointer(symbol)) {
-    int lenParams{0};
-    if (const DerivedTypeSpec * derived{type->AsDerived()}) {
-      lenParams = CountLenParameters(*derived);
-    }
-    std::size_t size{
-        runtime::Descriptor::SizeInBytes(symbol.Rank(), false, lenParams)};
-    return {size, maxAlignment};
+  if (IsProcedurePointer(symbol)) {
+    return {targetCharacteristics.procedurePointerByteSize(),
+        targetCharacteristics.procedurePointerAlignment()};
   }
   if (IsProcedure(symbol)) {
     return {};
   }
-  SizeAndAlignment result;
-  if (const IntrinsicTypeSpec * intrinsic{type->AsIntrinsic()}) {
-    if (auto kind{ToInt64(intrinsic->kind())}) {
-      result = GetIntrinsicSizeAndAlignment(intrinsic->category(), *kind);
-    }
-    if (type->category() == DeclTypeSpec::Character) {
-      ParamValue length{type->characterTypeSpec().length()};
-      CHECK(length.isExplicit()); // else should be descriptor
-      if (MaybeIntExpr lengthExpr{length.GetExplicit()}) {
-        if (auto lengthInt{ToInt64(*lengthExpr)}) {
-          result.size *= *lengthInt;
-        }
+  auto &foldingContext{context_.foldingContext()};
+  if (auto chars{evaluate::characteristics::TypeAndShape::Characterize(
+          symbol, foldingContext)}) {
+    if (entire) {
+      if (auto size{ToInt64(chars->MeasureSizeInBytes(foldingContext))}) {
+        return {static_cast<std::size_t>(*size),
+            chars->type().GetAlignment(targetCharacteristics)};
       }
-    }
-  } else if (const DerivedTypeSpec * derived{type->AsDerived()}) {
-    if (derived->scope()) {
-      DoScope(*const_cast<Scope *>(derived->scope()));
-      result.size = derived->scope()->size();
-      result.alignment = derived->scope()->alignment().value_or(0);
-    }
-  } else {
-    DIE("not intrinsic or derived");
-  }
-  return result;
-}
-
-std::size_t ComputeOffsetsHelper::CountElements(const Symbol &symbol) {
-  if (auto shape{GetShape(foldingContext_, symbol)}) {
-    if (auto sizeExpr{evaluate::GetSize(std::move(*shape))}) {
-      if (auto size{ToInt64(Fold(foldingContext_, std::move(*sizeExpr)))}) {
-        return *size;
+    } else { // element size only
+      if (auto size{ToInt64(chars->MeasureElementSizeInBytes(
+              foldingContext, true /*aligned*/))}) {
+        return {static_cast<std::size_t>(*size),
+            chars->type().GetAlignment(targetCharacteristics)};
       }
     }
   }
-  return 1;
+  return {};
 }
 
 // Align a size to its natural alignment, up to maxAlignment.
 std::size_t ComputeOffsetsHelper::Align(std::size_t x, std::size_t alignment) {
-  if (alignment > maxAlignment) {
-    alignment = maxAlignment;
-  }
+  alignment =
+      std::min(alignment, context_.targetCharacteristics().maxAlignment());
   return (x + alignment - 1) & -alignment;
 }
 
-auto ComputeOffsetsHelper::GetIntrinsicSizeAndAlignment(
-    TypeCategory category, int kind) -> SizeAndAlignment {
-  if (category == TypeCategory::Character) {
-    return {static_cast<std::size_t>(kind)};
-  }
-  auto bytes{evaluate::ToInt64(
-      evaluate::DynamicType{category, kind}.MeasureSizeInBytes())};
-  CHECK(bytes && *bytes > 0);
-  std::size_t size{static_cast<std::size_t>(*bytes)};
-  if (category == TypeCategory::Complex) {
-    return {size, size >> 1};
-  } else {
-    return {size};
-  }
-}
-
-void ComputeOffsets(SemanticsContext &context) {
-  ComputeOffsetsHelper{context}.Compute();
+void ComputeOffsets(SemanticsContext &context, Scope &scope) {
+  ComputeOffsetsHelper{context}.Compute(scope);
 }
 
 } // namespace Fortran::semantics

@@ -11,28 +11,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MCTargetDesc/LanaiInstPrinter.h"
 #include "LanaiAluCode.h"
 #include "LanaiCondCode.h"
-#include "LanaiInstrInfo.h"
 #include "LanaiMCInstLower.h"
 #include "LanaiTargetMachine.h"
+#include "MCTargetDesc/LanaiInstPrinter.h"
 #include "TargetInfo/LanaiTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
-#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Mangler.h"
-#include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "asm-printer"
@@ -123,8 +117,8 @@ bool LanaiAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
       const MachineOperand &FlagsOP = MI->getOperand(OpNo - 1);
       if (!FlagsOP.isImm())
         return true;
-      unsigned Flags = FlagsOP.getImm();
-      unsigned NumVals = InlineAsm::getNumOperandRegisters(Flags);
+      const InlineAsm::Flag Flags(FlagsOP.getImm());
+      const unsigned NumVals = Flags.getNumOperandRegisters();
       if (NumVals != 2)
         return true;
       unsigned RegOp = OpNo + 1;
@@ -195,6 +189,9 @@ void LanaiAsmPrinter::customEmitInstruction(const MachineInstr *MI) {
 }
 
 void LanaiAsmPrinter::emitInstruction(const MachineInstr *MI) {
+  Lanai_MC::verifyInstructionPredicates(MI->getOpcode(),
+                                        getSubtargetInfo().getFeatureBits());
+
   MachineBasicBlock::const_instr_iterator I = MI->getIterator();
   MachineBasicBlock::const_instr_iterator E = MI->getParent()->instr_end();
 

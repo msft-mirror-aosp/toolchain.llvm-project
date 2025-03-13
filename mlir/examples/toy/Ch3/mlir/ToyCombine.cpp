@@ -11,17 +11,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/IR/Matchers.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
 #include "toy/Dialect.h"
-#include <numeric>
 using namespace mlir;
 using namespace toy;
 
 namespace {
 /// Include the patterns defined in the Declarative Rewrite framework.
 #include "ToyCombine.inc"
-} // end anonymous namespace
+} // namespace
 
 /// This is an example of a c++ rewrite pattern for the TransposeOp. It
 /// optimizes the following scenario: transpose(transpose(x)) -> x
@@ -35,7 +35,7 @@ struct SimplifyRedundantTranspose : public mlir::OpRewritePattern<TransposeOp> {
   /// This method attempts to match a pattern and rewrite it. The rewriter
   /// argument is the orchestrator of the sequence of rewrites. The pattern is
   /// expected to interact with it to perform any changes to the IR from here.
-  mlir::LogicalResult
+  llvm::LogicalResult
   matchAndRewrite(TransposeOp op,
                   mlir::PatternRewriter &rewriter) const override {
     // Look through the input of the current transpose.
@@ -54,15 +54,15 @@ struct SimplifyRedundantTranspose : public mlir::OpRewritePattern<TransposeOp> {
 
 /// Register our patterns as "canonicalization" patterns on the TransposeOp so
 /// that they can be picked up by the Canonicalization framework.
-void TransposeOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void TransposeOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
-  results.insert<SimplifyRedundantTranspose>(context);
+  results.add<SimplifyRedundantTranspose>(context);
 }
 
 /// Register our patterns as "canonicalization" patterns on the ReshapeOp so
 /// that they can be picked up by the Canonicalization framework.
-void ReshapeOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void ReshapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
-  results.insert<ReshapeReshapeOptPattern, RedundantReshapeOptPattern,
-                 FoldConstantReshapeOptPattern>(context);
+  results.add<ReshapeReshapeOptPattern, RedundantReshapeOptPattern,
+              FoldConstantReshapeOptPattern>(context);
 }

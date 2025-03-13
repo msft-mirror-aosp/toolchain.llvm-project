@@ -6,6 +6,7 @@ import math
 import numbers
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -28,15 +29,15 @@ def pythonize_bool(value):
     if isinstance(value, numbers.Number):
         return value != 0
     if is_string(value):
-        if value.lower() in ('1', 'true', 'on', 'yes'):
+        if value.lower() in ("1", "true", "on", "yes"):
             return True
-        if value.lower() in ('', '0', 'false', 'off', 'no'):
+        if value.lower() in ("", "0", "false", "off", "no"):
             return False
     raise ValueError('"{}" is not a valid boolean'.format(value))
 
 
 def make_word_regex(word):
-    return r'\b' + word + r'\b'
+    return r"\b" + word + r"\b"
 
 
 def to_bytes(s):
@@ -53,7 +54,7 @@ def to_bytes(s):
     # In Python2, 's' is a 'unicode' object.
     # In Python3, 's' is a 'str' object.
     # Encode to UTF-8 to get 'bytes' data.
-    return s.encode('utf-8')
+    return s.encode("utf-8")
 
 
 def to_string(b):
@@ -72,7 +73,7 @@ def to_string(b):
         # In Python2, this branch is never taken ('bytes' is handled as 'str').
         # In Python3, this is true only for 'bytes'.
         try:
-            return b.decode('utf-8')
+            return b.decode("utf-8")
         except UnicodeDecodeError:
             # If the value is not valid Unicode, return the default
             # repr-line encoding.
@@ -90,9 +91,9 @@ def to_string(b):
     # 'unicode' type in Python3 (all the Python3 cases were already handled). In
     # order to get a 'str' object, we need to encode the 'unicode' object.
     try:
-        return b.encode('utf-8')
+        return b.encode("utf-8")
     except AttributeError:
-        raise TypeError('not sure how to convert %s to %s' % (type(b), str))
+        raise TypeError("not sure how to convert %s to %s" % (type(b), str))
 
 
 def to_unicode(s):
@@ -105,41 +106,49 @@ def to_unicode(s):
     if isinstance(s, bytes):
         # In Python2, this branch is taken for both 'str' and 'bytes'.
         # In Python3, this branch is taken only for 'bytes'.
-        return s.decode('utf-8')
+        return s.decode("utf-8")
     return s
 
 
-# TODO(yln): multiprocessing.cpu_count()
-# TODO(python3): len(os.sched_getaffinity(0)) and os.cpu_count()
-def detectCPUs():
-    """Detects the number of CPUs on a system.
-
-    Cribbed from pp.
+def usable_core_count():
+    """Return the number of cores the current process can use, if supported.
+    Otherwise, return the total number of cores (like `os.cpu_count()`).
+    Default to 1 if undetermined.
 
     """
-    # Linux, Unix and MacOS:
-    if hasattr(os, 'sysconf'):
-        if 'SC_NPROCESSORS_ONLN' in os.sysconf_names:
-            # Linux & Unix:
-            ncpus = os.sysconf('SC_NPROCESSORS_ONLN')
-            if isinstance(ncpus, int) and ncpus > 0:
-                return ncpus
-        else:  # OSX:
-            return int(subprocess.check_output(['sysctl', '-n', 'hw.ncpu'],
-                                               stderr=subprocess.STDOUT))
-    # Windows:
-    if 'NUMBER_OF_PROCESSORS' in os.environ:
-        ncpus = int(os.environ['NUMBER_OF_PROCESSORS'])
-        if ncpus > 0:
-            # With more than 32 processes, process creation often fails with
-            # "Too many open files".  FIXME: Check if there's a better fix.
-            return min(ncpus, 32)
-    return 1  # Default
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:
+        n = os.cpu_count() or 1
 
+    # On Windows with more than 60 processes, multiprocessing's call to
+    # _winapi.WaitForMultipleObjects() prints an error and lit hangs.
+    if platform.system() == "Windows":
+        return min(n, 60)
+
+    return n
+
+def abs_path_preserve_drive(path):
+    """Return the absolute path without resolving drive mappings on Windows.
+
+    """
+    if platform.system() == "Windows":
+        # Windows has limitations on path length (MAX_PATH) that
+        # can be worked around using substitute drives, which map
+        # a drive letter to a longer path on another drive.
+        # Since Python 3.8, os.path.realpath resolves sustitute drives,
+        # so we should not use it. In Python 3.7, os.path.realpath
+        # was implemented as os.path.abspath.
+        return os.path.abspath(path)
+    else:
+        # On UNIX, the current directory always has symbolic links resolved,
+        # so any program accepting relative paths cannot preserve symbolic
+        # links in paths and we should always use os.path.realpath.
+        return os.path.realpath(path)
 
 def mkdir(path):
     try:
-        if platform.system() == 'Windows':
+        if platform.system() == "Windows":
             from ctypes import windll
             from ctypes import GetLastError, WinError
 
@@ -147,8 +156,8 @@ def mkdir(path):
             # Make sure that the path uses backslashes here, in case
             # python would have happened to use forward slashes, as the
             # NT path format only supports backslashes.
-            path = path.replace('/', '\\')
-            NTPath = to_unicode(r'\\?\%s' % path)
+            path = path.replace("/", "\\")
+            NTPath = to_unicode(r"\\?\%s" % path)
             if not windll.kernel32.CreateDirectoryW(NTPath, None):
                 raise WinError(GetLastError())
         else:
@@ -204,12 +213,14 @@ def listdir_files(dirname, suffixes=None, exclude_filenames=None):
     if exclude_filenames is None:
         exclude_filenames = set()
     if suffixes is None:
-        suffixes = {''}
+        suffixes = {""}
     for filename in os.listdir(dirname):
-        if (os.path.isdir(os.path.join(dirname, filename)) or
-            filename.startswith('.') or
-            filename in exclude_filenames or
-                not any(filename.endswith(sfx) for sfx in suffixes)):
+        if (
+            os.path.isdir(os.path.join(dirname, filename))
+            or filename.startswith(".")
+            or filename in exclude_filenames
+            or not any(filename.endswith(sfx) for sfx in suffixes)
+        ):
             continue
         yield filename
 
@@ -219,7 +230,7 @@ def which(command, paths=None):
     (or the PATH environment variable, if unspecified)."""
 
     if paths is None:
-        paths = os.environ.get('PATH', '')
+        paths = os.environ.get("PATH", "")
 
     # Check for absolute match first.
     if os.path.isabs(command) and os.path.isfile(command):
@@ -231,17 +242,17 @@ def which(command, paths=None):
 
     # Get suffixes to search.
     # On Cygwin, 'PATHEXT' may exist but it should not be used.
-    if os.pathsep == ';':
-        pathext = os.environ.get('PATHEXT', '').split(';')
+    if os.pathsep == ";":
+        pathext = os.environ.get("PATHEXT", "").split(";")
     else:
-        pathext = ['']
+        pathext = [""]
 
     # Search the paths...
     for path in paths.split(os.pathsep):
         for ext in pathext:
             p = os.path.join(path, command + ext)
             if os.path.exists(p) and not os.path.isdir(p):
-                return os.path.normcase(os.path.normpath(p))
+                return os.path.normcase(os.path.abspath(p))
 
     return None
 
@@ -260,7 +271,7 @@ def whichTools(tools, paths):
     return None
 
 
-def printHistogram(items, title='Items'):
+def printHistogram(items, title="Items"):
     items.sort(key=lambda item: item[1])
 
     maxValue = max([v for _, v in items])
@@ -281,28 +292,47 @@ def printHistogram(items, title='Items'):
         histo[bin].add(name)
 
     barW = 40
-    hr = '-' * (barW + 34)
-    print('Slowest %s:' % title)
+    hr = "-" * (barW + 34)
+    print("Slowest %s:" % title)
     print(hr)
     for name, value in reversed(items[-20:]):
-        print('%.2fs: %s' % (value, name))
-    print('\n%s Times:' % title)
+        print("%.2fs: %s" % (value, name))
+    print("\n%s Times:" % title)
     print(hr)
     pDigits = int(math.ceil(math.log(maxValue, 10)))
     pfDigits = max(0, 3 - pDigits)
     if pfDigits:
         pDigits += pfDigits + 1
     cDigits = int(math.ceil(math.log(len(items), 10)))
-    print('[%s] :: [%s] :: [%s]' % ('Range'.center((pDigits + 1) * 2 + 3),
-                                    'Percentage'.center(barW),
-                                    'Count'.center(cDigits * 2 + 1)))
+    print(
+        "[%s] :: [%s] :: [%s]"
+        % (
+            "Range".center((pDigits + 1) * 2 + 3),
+            "Percentage".center(barW),
+            "Count".center(cDigits * 2 + 1),
+        )
+    )
     print(hr)
     for i, row in reversed(list(enumerate(histo))):
         pct = float(len(row)) / len(items)
         w = int(barW * pct)
-        print('[%*.*fs,%*.*fs) :: [%s%s] :: [%*d/%*d]' % (
-            pDigits, pfDigits, i * barH, pDigits, pfDigits, (i + 1) * barH,
-            '*' * w, ' ' * (barW - w), cDigits, len(row), cDigits, len(items)))
+        print(
+            "[%*.*fs,%*.*fs) :: [%s%s] :: [%*d/%*d]"
+            % (
+                pDigits,
+                pfDigits,
+                i * barH,
+                pDigits,
+                pfDigits,
+                (i + 1) * barH,
+                "*" * w,
+                " " * (barW - w),
+                cDigits,
+                len(row),
+                cDigits,
+                len(items),
+            )
+        )
     print(hr)
 
 
@@ -320,10 +350,12 @@ class ExecuteCommandTimeoutException(Exception):
 
 # Close extra file handles on UNIX (on Windows this cannot be done while
 # also redirecting input).
-kUseCloseFDs = not (platform.system() == 'Windows')
+kUseCloseFDs = not (platform.system() == "Windows")
 
 
-def executeCommand(command, cwd=None, env=None, input=None, timeout=0):
+def executeCommand(
+    command, cwd=None, env=None, input=None, timeout=0, redirect_stderr=False
+):
     """Execute command ``command`` (list of arguments or string) with.
 
     * working directory ``cwd`` (str), use None to use the current
@@ -332,6 +364,7 @@ def executeCommand(command, cwd=None, env=None, input=None, timeout=0):
     * Input to the command ``input`` (str), use string to pass
       no input.
     * Max execution time ``timeout`` (int) seconds. Use 0 for no timeout.
+    * ``redirect_stderr`` (bool), use True if redirect stderr to stdout
 
     Returns a tuple (out, err, exitCode) where
     * ``out`` (str) is the standard output of running the command
@@ -344,11 +377,16 @@ def executeCommand(command, cwd=None, env=None, input=None, timeout=0):
     """
     if input is not None:
         input = to_bytes(input)
-    p = subprocess.Popen(command, cwd=cwd,
-                         stdin=subprocess.PIPE,
-                         stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE,
-                         env=env, close_fds=kUseCloseFDs)
+    err_out = subprocess.STDOUT if redirect_stderr else subprocess.PIPE
+    p = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=err_out,
+        env=env,
+        close_fds=kUseCloseFDs,
+    )
     timerObject = None
     # FIXME: Because of the way nested function scopes work in Python 2.x we
     # need to use a reference to a mutable object rather than a plain
@@ -357,6 +395,7 @@ def executeCommand(command, cwd=None, env=None, input=None, timeout=0):
     hitTimeOut = [False]
     try:
         if timeout > 0:
+
             def killProcess():
                 # We may be invoking a shell so we need to kill the
                 # process and all its children.
@@ -369,19 +408,19 @@ def executeCommand(command, cwd=None, env=None, input=None, timeout=0):
         out, err = p.communicate(input=input)
         exitCode = p.wait()
     finally:
-        if timerObject != None:
+        if timerObject is not None:
             timerObject.cancel()
 
     # Ensure the resulting output is always of string type.
     out = to_string(out)
-    err = to_string(err)
+    err = "" if redirect_stderr else to_string(err)
 
     if hitTimeOut[0]:
         raise ExecuteCommandTimeoutException(
-            msg='Reached timeout of {} seconds'.format(timeout),
+            msg="Reached timeout of {} seconds".format(timeout),
             out=out,
             err=err,
-            exitCode=exitCode
+            exitCode=exitCode,
         )
 
     # Detect Ctrl-C in subprocess.
@@ -391,13 +430,39 @@ def executeCommand(command, cwd=None, env=None, input=None, timeout=0):
     return out, err, exitCode
 
 
+def isAIXTriple(target_triple):
+    """Whether the given target triple is for AIX,
+    e.g. powerpc64-ibm-aix
+    """
+    return "aix" in target_triple
+
+
+def addAIXVersion(target_triple):
+    """Add the AIX version to the given target triple,
+    e.g. powerpc64-ibm-aix7.2.5.6
+    """
+    os_cmd = "oslevel -s | awk -F\'-\' \'{printf \"%.1f.%d.%d\", $1/1000, $2, $3}\'"
+    os_version = subprocess.run(os_cmd, capture_output=True, shell=True).stdout.decode()
+    return re.sub("aix", "aix" + os_version, target_triple)
+
+
+def isMacOSTriple(target_triple):
+    """Whether the given target triple is for macOS,
+    e.g. x86_64-apple-darwin, arm64-apple-macos
+    """
+    return "darwin" in target_triple or "macos" in target_triple
+
+
 def usePlatformSdkOnDarwin(config, lit_config):
     # On Darwin, support relocatable SDKs by providing Clang with a
     # default system root path.
-    if 'darwin' in config.target_triple:
+    if isMacOSTriple(config.target_triple):
         try:
-            cmd = subprocess.Popen(['xcrun', '--show-sdk-path', '--sdk', 'macosx'],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            cmd = subprocess.Popen(
+                ["xcrun", "--show-sdk-path", "--sdk", "macosx"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
             out, err = cmd.communicate()
             out = out.strip()
             res = cmd.wait()
@@ -405,15 +470,18 @@ def usePlatformSdkOnDarwin(config, lit_config):
             res = -1
         if res == 0 and out:
             sdk_path = out.decode()
-            lit_config.note('using SDKROOT: %r' % sdk_path)
-            config.environment['SDKROOT'] = sdk_path
+            lit_config.note("using SDKROOT: %r" % sdk_path)
+            config.environment["SDKROOT"] = sdk_path
 
 
 def findPlatformSdkVersionOnMacOS(config, lit_config):
-    if 'darwin' in config.target_triple:
+    if isMacOSTriple(config.target_triple):
         try:
-            cmd = subprocess.Popen(['xcrun', '--show-sdk-version', '--sdk', 'macosx'],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            cmd = subprocess.Popen(
+                ["xcrun", "--show-sdk-version", "--sdk", "macosx"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
             out, err = cmd.communicate()
             out = out.strip()
             res = cmd.wait()
@@ -423,25 +491,31 @@ def findPlatformSdkVersionOnMacOS(config, lit_config):
             return out.decode()
     return None
 
+
 def killProcessAndChildrenIsSupported():
     """
-        Returns a tuple (<supported> , <error message>)
-        where
-        `<supported>` is True if `killProcessAndChildren()` is supported on
-            the current host, returns False otherwise.
-        `<error message>` is an empty string if `<supported>` is True,
-            otherwise is contains a string describing why the function is
-            not supported.
+    Returns a tuple (<supported> , <error message>)
+    where
+    `<supported>` is True if `killProcessAndChildren()` is supported on
+        the current host, returns False otherwise.
+    `<error message>` is an empty string if `<supported>` is True,
+        otherwise is contains a string describing why the function is
+        not supported.
     """
-    if platform.system() == 'AIX':
+    if platform.system() == "AIX" or platform.system() == "OS/390":
         return (True, "")
     try:
         import psutil  # noqa: F401
+
         return (True, "")
     except ImportError:
-        return (False,  "Requires the Python psutil module but it could"
-                        " not be found. Try installing it via pip or via"
-                        " your operating system's package manager.")
+        return (
+            False,
+            "Requires the Python psutil module but it could"
+            " not be found. Try installing it via pip or via"
+            " your operating system's package manager.",
+        )
+
 
 def killProcessAndChildren(pid):
     """This function kills a process with ``pid`` and all its running children
@@ -452,10 +526,14 @@ def killProcessAndChildren(pid):
     remove our dependency on it.
 
     """
-    if platform.system() == 'AIX':
-        subprocess.call('kill -kill $(ps -o pid= -L{})'.format(pid), shell=True)
+    if platform.system() == "AIX":
+        subprocess.call("kill -kill $(ps -o pid= -L{})".format(pid), shell=True)
+    elif platform.system() == "OS/390":
+        # FIXME: Only the process is killed.
+        subprocess.call("kill -KILL $(ps -s {} -o pid=)".format(pid), shell=True)
     else:
         import psutil
+
         try:
             psutilProc = psutil.Process(pid)
             # Handle the different psutil API versions

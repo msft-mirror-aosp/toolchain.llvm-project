@@ -1,12 +1,9 @@
 ; RUN: llvm-as -o %t.bc %s
-; RUN: wasm-ld --lto-new-pass-manager --lto-debug-pass-manager -o /dev/null %t.bc 2>&1 | FileCheck %s
-; RUN: wasm-ld --lto-new-pass-manager --lto-debug-pass-manager --no-lto-new-pass-manager -o /dev/null %t.bc 2>&1 | FileCheck %s --allow-empty --check-prefix=LPM
+; RUN: wasm-ld --lto-debug-pass-manager -o /dev/null %t.bc 2>&1 | FileCheck %s
 
-; CHECK: Starting llvm::Module pass manager run
-; CHECK: Finished llvm::Module pass manager run
-; LPM-NOT: Starting llvm::Module pass manager run
+; CHECK: Running pass: GlobalOptPass
 
-target datalayout = "e-m:e-p:32:32-i64:64-n32:64-S128"
+target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"
 target triple = "wasm32-unknown-unknown"
 
 define void @_start() local_unnamed_addr {

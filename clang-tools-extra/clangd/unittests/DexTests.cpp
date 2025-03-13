@@ -6,18 +6,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "FuzzyMatch.h"
 #include "TestFS.h"
 #include "TestIndex.h"
 #include "index/Index.h"
-#include "index/Merge.h"
 #include "index/SymbolID.h"
 #include "index/dex/Dex.h"
 #include "index/dex/Iterator.h"
 #include "index/dex/Token.h"
 #include "index/dex/Trigram.h"
 #include "llvm/Support/ScopedPrinter.h"
-#include "llvm/Support/raw_ostream.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <string>
@@ -255,7 +252,7 @@ TEST(DexIterators, StringRepresentation) {
   auto I2 = L1.iterator(&Tok);
   EXPECT_EQ(llvm::to_string(*I2), "T=L2");
 
-  auto Tree = C.limit(C.intersect(move(I1), move(I2)), 10);
+  auto Tree = C.limit(C.intersect(std::move(I1), std::move(I2)), 10);
   // AND reorders its children, we don't care which order it prints.
   EXPECT_THAT(llvm::to_string(*Tree), AnyOf("(LIMIT 10 (& [1 3 5] T=L2))",
                                             "(LIMIT 10 (& T=L2 [1 3 5]))"));
@@ -386,30 +383,36 @@ TEST(DexTrigrams, IdentifierTrigrams) {
               trigramsAre({"c", "cl", "cla", "lan", "ang", "ngd"}));
 
   EXPECT_THAT(identifierTrigramTokens("abc_def"),
-              trigramsAre({"a", "ab", "ad", "abc", "abd", "ade", "bcd", "bde",
-                           "cde", "def"}));
+              trigramsAre({"a", "d", "ab", "ad", "de", "abc", "abd", "ade",
+                           "bcd", "bde", "cde", "def"}));
 
   EXPECT_THAT(identifierTrigramTokens("a_b_c_d_e_"),
-              trigramsAre({"a", "a_", "ab", "abc", "bcd", "cde"}));
+              trigramsAre({"a", "b", "ab", "bc", "abc", "bcd", "cde"}));
 
   EXPECT_THAT(identifierTrigramTokens("unique_ptr"),
-              trigramsAre({"u", "un", "up", "uni", "unp", "upt", "niq", "nip",
-                           "npt", "iqu", "iqp", "ipt", "que", "qup", "qpt",
-                           "uep", "ept", "ptr"}));
+              trigramsAre({"u",   "p",   "un",  "up",  "pt",  "uni", "unp",
+                           "upt", "niq", "nip", "npt", "iqu", "iqp", "ipt",
+                           "que", "qup", "qpt", "uep", "ept", "ptr"}));
 
-  EXPECT_THAT(
-      identifierTrigramTokens("TUDecl"),
-      trigramsAre({"t", "tu", "td", "tud", "tde", "ude", "dec", "ecl"}));
+  EXPECT_THAT(identifierTrigramTokens("TUDecl"),
+              trigramsAre({"t", "d", "tu", "td", "de", "tud", "tde", "ude",
+                           "dec", "ecl"}));
 
   EXPECT_THAT(identifierTrigramTokens("IsOK"),
-              trigramsAre({"i", "is", "io", "iso", "iok", "sok"}));
+              trigramsAre({"i", "o", "is", "ok", "io", "iso", "iok", "sok"}));
 
-  EXPECT_THAT(
-      identifierTrigramTokens("abc_defGhij__klm"),
-      trigramsAre({"a",   "ab",  "ad",  "abc", "abd", "ade", "adg", "bcd",
-                   "bde", "bdg", "cde", "cdg", "def", "deg", "dgh", "dgk",
-                   "efg", "egh", "egk", "fgh", "fgk", "ghi", "ghk", "gkl",
-                   "hij", "hik", "hkl", "ijk", "ikl", "jkl", "klm"}));
+  EXPECT_THAT(identifierTrigramTokens("_pb"),
+              trigramsAre({"_", "_p", "p", "pb"}));
+  EXPECT_THAT(identifierTrigramTokens("__pb"),
+              trigramsAre({"_", "_p", "p", "pb"}));
+
+  EXPECT_THAT(identifierTrigramTokens("abc_defGhij__klm"),
+              trigramsAre({"a",   "d",   "ab",  "ad",  "dg",  "de",  "abc",
+                           "abd", "ade", "adg", "bcd", "bde", "bdg", "cde",
+                           "cdg", "def", "deg", "dgh", "dgk", "efg", "egh",
+                           "egk", "fgh", "fgk", "ghi", "ghk", "gkl", "hij",
+                           "hik", "hkl", "ijk", "ikl", "jkl", "klm"}));
+  EXPECT_THAT(identifierTrigramTokens(""), IsEmpty());
 }
 
 TEST(DexTrigrams, QueryTrigrams) {
@@ -419,8 +422,16 @@ TEST(DexTrigrams, QueryTrigrams) {
 
   EXPECT_THAT(generateQueryTrigrams(""), trigramsAre({}));
   EXPECT_THAT(generateQueryTrigrams("_"), trigramsAre({"_"}));
-  EXPECT_THAT(generateQueryTrigrams("__"), trigramsAre({"__"}));
-  EXPECT_THAT(generateQueryTrigrams("___"), trigramsAre({}));
+  EXPECT_THAT(generateQueryTrigrams("__"), trigramsAre({"_"}));
+  EXPECT_THAT(generateQueryTrigrams("___"), trigramsAre({"_"}));
+
+  EXPECT_THAT(generateQueryTrigrams("m_"), trigramsAre({"m"}));
+
+  EXPECT_THAT(generateQueryTrigrams("p_b"), trigramsAre({"pb"}));
+  EXPECT_THAT(generateQueryTrigrams("pb_"), trigramsAre({"pb"}));
+  EXPECT_THAT(generateQueryTrigrams("_p"), trigramsAre({"_p"}));
+  EXPECT_THAT(generateQueryTrigrams("_pb_"), trigramsAre({"pb"}));
+  EXPECT_THAT(generateQueryTrigrams("__pb"), trigramsAre({"pb"}));
 
   EXPECT_THAT(generateQueryTrigrams("X86"), trigramsAre({"x86"}));
 
@@ -465,7 +476,7 @@ TEST(DexSearchTokens, SymbolPath) {
 
 TEST(Dex, Lookup) {
   auto I = Dex::build(generateSymbols({"ns::abc", "ns::xyz"}), RefSlab(),
-                      RelationSlab());
+                      RelationSlab(), true);
   EXPECT_THAT(lookup(*I, SymbolID("ns::abc")), UnorderedElementsAre("ns::abc"));
   EXPECT_THAT(lookup(*I, {SymbolID("ns::abc"), SymbolID("ns::xyz")}),
               UnorderedElementsAre("ns::abc", "ns::xyz"));
@@ -478,7 +489,7 @@ TEST(Dex, FuzzyFind) {
   auto Index =
       Dex::build(generateSymbols({"ns::ABC", "ns::BCD", "::ABC",
                                   "ns::nested::ABC", "other::ABC", "other::A"}),
-                 RefSlab(), RelationSlab());
+                 RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "ABC";
   Req.Scopes = {"ns::"};
@@ -500,7 +511,8 @@ TEST(Dex, FuzzyFind) {
 }
 
 TEST(DexTest, DexLimitedNumMatches) {
-  auto I = Dex::build(generateNumSymbols(0, 100), RefSlab(), RelationSlab());
+  auto I =
+      Dex::build(generateNumSymbols(0, 100), RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "5";
   Req.AnyScope = true;
@@ -515,7 +527,7 @@ TEST(DexTest, DexLimitedNumMatches) {
 TEST(DexTest, FuzzyMatch) {
   auto I = Dex::build(
       generateSymbols({"LaughingOutLoud", "LionPopulation", "LittleOldLady"}),
-      RefSlab(), RelationSlab());
+      RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "lol";
   Req.AnyScope = true;
@@ -525,31 +537,51 @@ TEST(DexTest, FuzzyMatch) {
 }
 
 TEST(DexTest, ShortQuery) {
-  auto I = Dex::build(generateSymbols({"OneTwoThreeFour"}), RefSlab(),
-                      RelationSlab());
+  auto I = Dex::build(generateSymbols({"_OneTwoFourSix"}), RefSlab(),
+                      RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.AnyScope = true;
   bool Incomplete;
 
-  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("OneTwoThreeFour"));
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
   EXPECT_FALSE(Incomplete) << "Empty string is not a short query";
 
-  Req.Query = "t";
+  Req.Query = "o";
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
+  EXPECT_TRUE(Incomplete) << "Using first head as unigram";
+
+  Req.Query = "_o";
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
+  EXPECT_TRUE(Incomplete) << "Using delimiter and first head as bigram";
+
+  Req.Query = "on";
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
+  EXPECT_TRUE(Incomplete) << "Using first head and tail as bigram";
+
+  Req.Query = "ot";
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
+  EXPECT_TRUE(Incomplete) << "Using first two heads as bigram";
+
+  Req.Query = "tw";
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
+  EXPECT_TRUE(Incomplete) << "Using second head and tail as bigram";
+
+  Req.Query = "tf";
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
+  EXPECT_TRUE(Incomplete) << "Using second and third heads as bigram";
+
+  Req.Query = "fo";
   EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre());
   EXPECT_TRUE(Incomplete) << "Short queries have different semantics";
 
-  Req.Query = "tt";
-  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre());
-  EXPECT_TRUE(Incomplete) << "Short queries have different semantics";
-
-  Req.Query = "ttf";
-  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("OneTwoThreeFour"));
+  Req.Query = "tfs";
+  EXPECT_THAT(match(*I, Req, &Incomplete), ElementsAre("_OneTwoFourSix"));
   EXPECT_FALSE(Incomplete) << "3-char string is not a short query";
 }
 
 TEST(DexTest, MatchQualifiedNamesWithoutSpecificScope) {
   auto I = Dex::build(generateSymbols({"a::y1", "b::y2", "y3"}), RefSlab(),
-                      RelationSlab());
+                      RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.AnyScope = true;
   Req.Query = "y";
@@ -558,7 +590,7 @@ TEST(DexTest, MatchQualifiedNamesWithoutSpecificScope) {
 
 TEST(DexTest, MatchQualifiedNamesWithGlobalScope) {
   auto I = Dex::build(generateSymbols({"a::y1", "b::y2", "y3"}), RefSlab(),
-                      RelationSlab());
+                      RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {""};
@@ -568,7 +600,7 @@ TEST(DexTest, MatchQualifiedNamesWithGlobalScope) {
 TEST(DexTest, MatchQualifiedNamesWithOneScope) {
   auto I =
       Dex::build(generateSymbols({"a::y1", "a::y2", "a::x", "b::y2", "y3"}),
-                 RefSlab(), RelationSlab());
+                 RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {"a::"};
@@ -578,7 +610,7 @@ TEST(DexTest, MatchQualifiedNamesWithOneScope) {
 TEST(DexTest, MatchQualifiedNamesWithMultipleScopes) {
   auto I =
       Dex::build(generateSymbols({"a::y1", "a::y2", "a::x", "b::y3", "y3"}),
-                 RefSlab(), RelationSlab());
+                 RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {"a::", "b::"};
@@ -587,7 +619,7 @@ TEST(DexTest, MatchQualifiedNamesWithMultipleScopes) {
 
 TEST(DexTest, NoMatchNestedScopes) {
   auto I = Dex::build(generateSymbols({"a::y1", "a::b::y2"}), RefSlab(),
-                      RelationSlab());
+                      RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {"a::"};
@@ -596,7 +628,7 @@ TEST(DexTest, NoMatchNestedScopes) {
 
 TEST(DexTest, WildcardScope) {
   auto I = Dex::build(generateSymbols({"a::y1", "a::b::y2", "c::y3"}),
-                      RefSlab(), RelationSlab());
+                      RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.AnyScope = true;
   Req.Query = "y";
@@ -607,7 +639,7 @@ TEST(DexTest, WildcardScope) {
 
 TEST(DexTest, IgnoreCases) {
   auto I = Dex::build(generateSymbols({"ns::ABC", "ns::abc"}), RefSlab(),
-                      RelationSlab());
+                      RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Query = "AB";
   Req.Scopes = {"ns::"};
@@ -617,7 +649,7 @@ TEST(DexTest, IgnoreCases) {
 TEST(DexTest, UnknownPostingList) {
   // Regression test: we used to ignore unknown scopes and accept any symbol.
   auto I = Dex::build(generateSymbols({"ns::ABC", "ns::abc"}), RefSlab(),
-                      RelationSlab());
+                      RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.Scopes = {"ns2::"};
   EXPECT_THAT(match(*I, Req), UnorderedElementsAre());
@@ -625,7 +657,7 @@ TEST(DexTest, UnknownPostingList) {
 
 TEST(DexTest, Lookup) {
   auto I = Dex::build(generateSymbols({"ns::abc", "ns::xyz"}), RefSlab(),
-                      RelationSlab());
+                      RelationSlab(), true);
   EXPECT_THAT(lookup(*I, SymbolID("ns::abc")), UnorderedElementsAre("ns::abc"));
   EXPECT_THAT(lookup(*I, {SymbolID("ns::abc"), SymbolID("ns::xyz")}),
               UnorderedElementsAre("ns::abc", "ns::xyz"));
@@ -640,7 +672,7 @@ TEST(DexTest, SymbolIndexOptionsFilter) {
   CodeCompletionSymbol.Flags = Symbol::SymbolFlag::IndexedForCodeCompletion;
   NonCodeCompletionSymbol.Flags = Symbol::SymbolFlag::None;
   std::vector<Symbol> Symbols{CodeCompletionSymbol, NonCodeCompletionSymbol};
-  Dex I(Symbols, RefSlab(), RelationSlab());
+  Dex I(Symbols, RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.AnyScope = true;
   Req.RestrictForCodeCompletion = false;
@@ -656,7 +688,7 @@ TEST(DexTest, ProximityPathsBoosting) {
   CloseSymbol.CanonicalDeclaration.FileURI = "unittest:///a/b/c/d/e/f/file.h";
 
   std::vector<Symbol> Symbols{CloseSymbol, RootSymbol};
-  Dex I(Symbols, RefSlab(), RelationSlab());
+  Dex I(Symbols, RefSlab(), RelationSlab(), true);
 
   FuzzyFindRequest Req;
   Req.AnyScope = true;
@@ -695,7 +727,7 @@ TEST(DexTests, Refs) {
   Req.Filter = RefKind::Declaration | RefKind::Definition;
 
   std::vector<std::string> Files;
-  EXPECT_FALSE(Dex(std::vector<Symbol>{Foo, Bar}, Refs, RelationSlab())
+  EXPECT_FALSE(Dex(std::vector<Symbol>{Foo, Bar}, Refs, RelationSlab(), true)
                    .refs(Req, [&](const Ref &R) {
                      Files.push_back(R.Location.FileURI);
                    }));
@@ -703,7 +735,7 @@ TEST(DexTests, Refs) {
 
   Req.Limit = 1;
   Files.clear();
-  EXPECT_TRUE(Dex(std::vector<Symbol>{Foo, Bar}, Refs, RelationSlab())
+  EXPECT_TRUE(Dex(std::vector<Symbol>{Foo, Bar}, Refs, RelationSlab(), true)
                   .refs(Req, [&](const Ref &R) {
                     Files.push_back(R.Location.FileURI);
                   }));
@@ -720,7 +752,7 @@ TEST(DexTests, Relations) {
   std::vector<Relation> Relations{{Parent.ID, RelationKind::BaseOf, Child1.ID},
                                   {Parent.ID, RelationKind::BaseOf, Child2.ID}};
 
-  Dex I{Symbols, RefSlab(), Relations};
+  Dex I{Symbols, RefSlab(), Relations, true};
 
   std::vector<SymbolID> Results;
   RelationsRequest Req;
@@ -732,6 +764,20 @@ TEST(DexTests, Relations) {
   EXPECT_THAT(Results, UnorderedElementsAre(Child1.ID, Child2.ID));
 }
 
+TEST(DexIndex, IndexedFiles) {
+  SymbolSlab Symbols;
+  RefSlab Refs;
+  auto Size = Symbols.bytes() + Refs.bytes();
+  auto Data = std::make_pair(std::move(Symbols), std::move(Refs));
+  llvm::StringSet<> Files = {"unittest:///foo.cc", "unittest:///bar.cc"};
+  Dex I(std::move(Data.first), std::move(Data.second), RelationSlab(),
+        std::move(Files), IndexContents::All, std::move(Data), Size, true);
+  auto ContainsFile = I.indexedFiles();
+  EXPECT_EQ(ContainsFile("unittest:///foo.cc"), IndexContents::All);
+  EXPECT_EQ(ContainsFile("unittest:///bar.cc"), IndexContents::All);
+  EXPECT_EQ(ContainsFile("unittest:///foobar.cc"), IndexContents::None);
+}
+
 TEST(DexTest, PreferredTypesBoosting) {
   auto Sym1 = symbol("t1");
   Sym1.Type = "T1";
@@ -739,7 +785,7 @@ TEST(DexTest, PreferredTypesBoosting) {
   Sym2.Type = "T2";
 
   std::vector<Symbol> Symbols{Sym1, Sym2};
-  Dex I(Symbols, RefSlab(), RelationSlab());
+  Dex I(Symbols, RefSlab(), RelationSlab(), true);
 
   FuzzyFindRequest Req;
   Req.AnyScope = true;
@@ -775,7 +821,8 @@ TEST(DexTest, TemplateSpecialization) {
       index::SymbolProperty::TemplatePartialSpecialization);
   B.insert(S);
 
-  auto I = dex::Dex::build(std::move(B).build(), RefSlab(), RelationSlab());
+  auto I =
+      dex::Dex::build(std::move(B).build(), RefSlab(), RelationSlab(), true);
   FuzzyFindRequest Req;
   Req.AnyScope = true;
 

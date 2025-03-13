@@ -19,9 +19,7 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/MC/MCContext.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/Debug.h"
 
 using namespace llvm;
 
@@ -37,8 +35,13 @@ class AArch64CompressJumpTables : public MachineFunctionPass {
   MachineFunction *MF;
   SmallVector<int, 8> BlockInfo;
 
-  int computeBlockSize(MachineBasicBlock &MBB);
-  void scanFunction();
+  /// Returns the size of instructions in the block \p MBB, or std::nullopt if
+  /// we couldn't get a safe upper bound.
+  std::optional<int> computeBlockSize(MachineBasicBlock &MBB);
+
+  /// Gather information about the function, returns false if we can't perform
+  /// this optimization for some reason.
+  bool scanFunction();
 
   bool compressJumpTable(MachineInstr &MI, int Offset);
 
@@ -64,28 +67,41 @@ char AArch64CompressJumpTables::ID = 0;
 INITIALIZE_PASS(AArch64CompressJumpTables, DEBUG_TYPE,
                 "AArch64 compress jump tables pass", false, false)
 
-int AArch64CompressJumpTables::computeBlockSize(MachineBasicBlock &MBB) {
+std::optional<int>
+AArch64CompressJumpTables::computeBlockSize(MachineBasicBlock &MBB) {
   int Size = 0;
-  for (const MachineInstr &MI : MBB)
+  for (const MachineInstr &MI : MBB) {
+    // Inline asm may contain some directives like .bytes which we don't
+    // currently have the ability to parse accurately. To be safe, just avoid
+    // computing a size and bail out.
+    if (MI.getOpcode() == AArch64::INLINEASM ||
+        MI.getOpcode() == AArch64::INLINEASM_BR)
+      return std::nullopt;
     Size += TII->getInstSizeInBytes(MI);
+  }
   return Size;
 }
 
-void AArch64CompressJumpTables::scanFunction() {
+bool AArch64CompressJumpTables::scanFunction() {
   BlockInfo.clear();
   BlockInfo.resize(MF->getNumBlockIDs());
+
+  // NOTE: BlockSize, Offset, OffsetAfterAlignment are all upper bounds.
 
   unsigned Offset = 0;
   for (MachineBasicBlock &MBB : *MF) {
     const Align Alignment = MBB.getAlignment();
-    unsigned AlignedOffset;
-    if (Alignment == Align(1))
-      AlignedOffset = Offset;
-    else
-      AlignedOffset = alignTo(Offset, Alignment);
-    BlockInfo[MBB.getNumber()] = AlignedOffset;
-    Offset = AlignedOffset + computeBlockSize(MBB);
+    unsigned OffsetAfterAlignment = Offset;
+    // We don't know the exact size of MBB so assume worse case padding.
+    if (Alignment > Align(4))
+      OffsetAfterAlignment += Alignment.value() - 4;
+    BlockInfo[MBB.getNumber()] = OffsetAfterAlignment;
+    auto BlockSize = computeBlockSize(MBB);
+    if (!BlockSize)
+      return false;
+    Offset = OffsetAfterAlignment + *BlockSize;
   }
+  return true;
 }
 
 bool AArch64CompressJumpTables::compressJumpTable(MachineInstr &MI,
@@ -152,7 +168,8 @@ bool AArch64CompressJumpTables::runOnMachineFunction(MachineFunction &MFIn) {
   if (ST.force32BitJumpTables() && !MF->getFunction().hasMinSize())
     return false;
 
-  scanFunction();
+  if (!scanFunction())
+    return false;
 
   for (MachineBasicBlock &MBB : *MF) {
     int Offset = BlockInfo[MBB.getNumber()];

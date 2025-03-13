@@ -6,12 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-// XFAIL: with_system_cxx_lib=macosx10.14
-// XFAIL: with_system_cxx_lib=macosx10.13
-// XFAIL: with_system_cxx_lib=macosx10.12
-// XFAIL: with_system_cxx_lib=macosx10.11
-// XFAIL: with_system_cxx_lib=macosx10.10
-// XFAIL: with_system_cxx_lib=macosx10.9
+// Requires 396145d in the built library.
+// XFAIL: using-built-library-before-llvm-9
 
 // <istream>
 
@@ -19,6 +15,8 @@
 
 #include <istream>
 #include <cassert>
+#include <streambuf>
+
 #include "test_macros.h"
 
 template <class CharT>
@@ -82,6 +80,7 @@ int main(int, char**)
         assert(c == 'c');
         assert(is.gcount() == 1);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L" abc");
         std::wistream is(&sb);
@@ -107,6 +106,7 @@ int main(int, char**)
         assert(c == L'c');
         assert(is.gcount() == 1);
     }
+#endif // TEST_HAS_NO_WIDE_CHARACTERS
 #ifndef TEST_HAS_NO_EXCEPTIONS
     {
         testbuf<char> sb("rrrrrrrrr");
@@ -130,6 +130,7 @@ int main(int, char**)
         assert( is.eof());
         assert(threw);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L"rrrrrrrrr");
         std::basic_istream<wchar_t> is(&sb);
@@ -152,7 +153,8 @@ int main(int, char**)
         assert( is.eof());
         assert(threw);
     }
-#endif
+#endif // TEST_HAS_NO_WIDE_CHARACTERS
+#endif // TEST_HAS_NO_EXCEPTIONS
 
     return 0;
 }

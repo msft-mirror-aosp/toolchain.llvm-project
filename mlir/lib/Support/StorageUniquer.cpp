@@ -47,23 +47,26 @@ private:
   };
 
   /// Storage info for derived TypeStorage objects.
-  struct StorageKeyInfo : DenseMapInfo<HashedStorage> {
-    static HashedStorage getEmptyKey() {
+  struct StorageKeyInfo {
+    static inline HashedStorage getEmptyKey() {
       return HashedStorage(0, DenseMapInfo<BaseStorage *>::getEmptyKey());
     }
-    static HashedStorage getTombstoneKey() {
+    static inline HashedStorage getTombstoneKey() {
       return HashedStorage(0, DenseMapInfo<BaseStorage *>::getTombstoneKey());
     }
 
-    static unsigned getHashValue(const HashedStorage &key) {
+    static inline unsigned getHashValue(const HashedStorage &key) {
       return key.hashValue;
     }
-    static unsigned getHashValue(LookupKey key) { return key.hashValue; }
+    static inline unsigned getHashValue(const LookupKey &key) {
+      return key.hashValue;
+    }
 
-    static bool isEqual(const HashedStorage &lhs, const HashedStorage &rhs) {
+    static inline bool isEqual(const HashedStorage &lhs,
+                               const HashedStorage &rhs) {
       return lhs.storage == rhs.storage;
     }
-    static bool isEqual(const LookupKey &lhs, const HashedStorage &rhs) {
+    static inline bool isEqual(const LookupKey &lhs, const HashedStorage &rhs) {
       if (isEqual(rhs, getEmptyKey()) || isEqual(rhs, getTombstoneKey()))
         return false;
       // Invoke the equality function on the lookup key.
@@ -79,9 +82,6 @@ private:
     /// The set containing the allocated storage instances.
     StorageTypeSet instances;
 
-    /// Allocator to use when constructing derived instances.
-    StorageAllocator allocator;
-
 #if LLVM_ENABLE_THREADS != 0
     /// A mutex to keep uniquing thread-safe.
     llvm::sys::SmartRWMutex<true> mutex;
@@ -90,22 +90,32 @@ private:
 
   /// Get or create an instance of a param derived type in an thread-unsafe
   /// fashion.
-  BaseStorage *
-  getOrCreateUnsafe(Shard &shard, LookupKey &key,
-                    function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
+  BaseStorage *getOrCreateUnsafe(Shard &shard, LookupKey &key,
+                                 function_ref<BaseStorage *()> ctorFn) {
     auto existing = shard.instances.insert_as({key.hashValue}, key);
     BaseStorage *&storage = existing.first->storage;
     if (existing.second)
-      storage = ctorFn(shard.allocator);
+      storage = ctorFn();
     return storage;
+  }
+
+  /// Destroy all of the storage instances within the given shard.
+  void destroyShardInstances(Shard &shard) {
+    if (!destructorFn)
+      return;
+    for (HashedStorage &instance : shard.instances)
+      destructorFn(instance.storage);
   }
 
 public:
 #if LLVM_ENABLE_THREADS != 0
   /// Initialize the storage uniquer with a given number of storage shards to
-  /// use. The provided shard number is required to be a valid power of 2.
-  ParametricStorageUniquer(size_t numShards = 8)
-      : shards(new std::atomic<Shard *>[numShards]), numShards(numShards) {
+  /// use. The provided shard number is required to be a valid power of 2. The
+  /// destructor function is used to destroy any allocated storage instances.
+  ParametricStorageUniquer(function_ref<void(BaseStorage *)> destructorFn,
+                           size_t numShards = 8)
+      : shards(new std::atomic<Shard *>[numShards]), numShards(numShards),
+        destructorFn(destructorFn) {
     assert(llvm::isPowerOf2_64(numShards) &&
            "the number of shards is required to be a power of 2");
     for (size_t i = 0; i < numShards; i++)
@@ -113,15 +123,17 @@ public:
   }
   ~ParametricStorageUniquer() {
     // Free all of the allocated shards.
-    for (size_t i = 0; i != numShards; ++i)
-      if (Shard *shard = shards[i].load())
+    for (size_t i = 0; i != numShards; ++i) {
+      if (Shard *shard = shards[i].load()) {
+        destroyShardInstances(*shard);
         delete shard;
+      }
+    }
   }
   /// Get or create an instance of a parametric type.
-  BaseStorage *
-  getOrCreate(bool threadingIsEnabled, unsigned hashValue,
-              function_ref<bool(const BaseStorage *)> isEqual,
-              function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
+  BaseStorage *getOrCreate(bool threadingIsEnabled, unsigned hashValue,
+                           function_ref<bool(const BaseStorage *)> isEqual,
+                           function_ref<BaseStorage *()> ctorFn) {
     Shard &shard = getShard(hashValue);
     ParametricStorageUniquer::LookupKey lookupKey{hashValue, isEqual};
     if (!threadingIsEnabled)
@@ -146,17 +158,20 @@ public:
     llvm::sys::SmartScopedWriter<true> typeLock(shard.mutex);
     return localInst = getOrCreateUnsafe(shard, lookupKey, ctorFn);
   }
+
   /// Run a mutation function on the provided storage object in a thread-safe
   /// way.
-  LogicalResult
-  mutate(bool threadingIsEnabled, BaseStorage *storage,
-         function_ref<LogicalResult(StorageAllocator &)> mutationFn) {
-    Shard &shard = getShardFor(storage);
+  LogicalResult mutate(bool threadingIsEnabled, BaseStorage *storage,
+                       function_ref<LogicalResult()> mutationFn) {
     if (!threadingIsEnabled)
-      return mutationFn(shard.allocator);
+      return mutationFn();
 
+    // Get a shard to use for mutating this storage instance. It doesn't need to
+    // be the same shard as the original allocation, but does need to be
+    // deterministic.
+    Shard &shard = getShard(llvm::hash_value(storage));
     llvm::sys::SmartScopedWriter<true> lock(shard.mutex);
-    return mutationFn(shard.allocator);
+    return mutationFn();
   }
 
 private:
@@ -180,18 +195,6 @@ private:
     return *shard;
   }
 
-  /// Return the shard that allocated the provided storage object.
-  Shard &getShardFor(BaseStorage *storage) {
-    for (size_t i = 0; i != numShards; ++i) {
-      if (Shard *shard = shards[i].load(std::memory_order_acquire)) {
-        llvm::sys::SmartScopedReader<true> lock(shard->mutex);
-        if (shard->allocator.allocated(storage))
-          return *shard;
-      }
-    }
-    llvm_unreachable("expected storage object to have a valid shard");
-  }
-
   /// A thread local cache for storage objects. This helps to reduce the lock
   /// contention when an object already existing in the cache.
   ThreadLocalCache<StorageTypeSet> localCache;
@@ -204,16 +207,23 @@ private:
   /// The number of available shards.
   size_t numShards;
 
+  /// Function to used to destruct any allocated storage instances.
+  function_ref<void(BaseStorage *)> destructorFn;
+
 #else
   /// If multi-threading is disabled, ignore the shard parameter as we will
-  /// always use one shard.
-  ParametricStorageUniquer(size_t numShards = 0) {}
+  /// always use one shard. The destructor function is used to destroy any
+  /// allocated storage instances.
+  ParametricStorageUniquer(function_ref<void(BaseStorage *)> destructorFn,
+                           size_t numShards = 0)
+      : destructorFn(destructorFn) {}
+  ~ParametricStorageUniquer() { destroyShardInstances(shard); }
 
   /// Get or create an instance of a parametric type.
   BaseStorage *
   getOrCreate(bool threadingIsEnabled, unsigned hashValue,
               function_ref<bool(const BaseStorage *)> isEqual,
-              function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
+              function_ref<BaseStorage *()> ctorFn) {
     ParametricStorageUniquer::LookupKey lookupKey{hashValue, isEqual};
     return getOrCreateUnsafe(shard, lookupKey, ctorFn);
   }
@@ -221,16 +231,19 @@ private:
   /// way.
   LogicalResult
   mutate(bool threadingIsEnabled, BaseStorage *storage,
-         function_ref<LogicalResult(StorageAllocator &)> mutationFn) {
-    return mutationFn(shard.allocator);
+         function_ref<LogicalResult()> mutationFn) {
+    return mutationFn();
   }
 
 private:
   /// The main uniquer shard that is used for allocating storage instances.
   Shard shard;
+
+  /// Function to used to destruct any allocated storage instances.
+  function_ref<void(BaseStorage *)> destructorFn;
 #endif
 };
-} // end anonymous namespace
+} // namespace
 
 namespace mlir {
 namespace detail {
@@ -254,8 +267,9 @@ struct StorageUniquerImpl {
     assert(parametricUniquers.count(id) &&
            "creating unregistered storage instance");
     ParametricStorageUniquer &storageUniquer = *parametricUniquers[id];
-    return storageUniquer.getOrCreate(threadingIsEnabled, hashValue, isEqual,
-                                      ctorFn);
+    return storageUniquer.getOrCreate(
+        threadingIsEnabled, hashValue, isEqual,
+        [&] { return ctorFn(getThreadSafeAllocator()); });
   }
 
   /// Run a mutation function on the provided storage object in a thread-safe
@@ -266,7 +280,34 @@ struct StorageUniquerImpl {
     assert(parametricUniquers.count(id) &&
            "mutating unregistered storage instance");
     ParametricStorageUniquer &storageUniquer = *parametricUniquers[id];
-    return storageUniquer.mutate(threadingIsEnabled, storage, mutationFn);
+    return storageUniquer.mutate(threadingIsEnabled, storage, [&] {
+      return mutationFn(getThreadSafeAllocator());
+    });
+  }
+
+  /// Return an allocator that can be used to safely allocate instances on the
+  /// current thread.
+  StorageAllocator &getThreadSafeAllocator() {
+#if LLVM_ENABLE_THREADS != 0
+    if (!threadingIsEnabled)
+      return allocator;
+
+    // If the allocator has not been initialized, create a new one.
+    StorageAllocator *&threadAllocator = threadSafeAllocator.get();
+    if (!threadAllocator) {
+      threadAllocator = new StorageAllocator();
+
+      // Record this allocator, given that we don't want it to be destroyed when
+      // the thread dies.
+      llvm::sys::SmartScopedLock<true> lock(threadAllocatorMutex);
+      threadAllocators.push_back(
+          std::unique_ptr<StorageAllocator>(threadAllocator));
+    }
+
+    return *threadAllocator;
+#else
+    return allocator;
+#endif
   }
 
   //===--------------------------------------------------------------------===//
@@ -287,6 +328,22 @@ struct StorageUniquerImpl {
   // Instance Storage
   //===--------------------------------------------------------------------===//
 
+#if LLVM_ENABLE_THREADS != 0
+  /// A thread local set of allocators used for uniquing parametric instances,
+  /// or other data allocated in thread volatile situations.
+  ThreadLocalCache<StorageAllocator *> threadSafeAllocator;
+
+  /// All of the allocators that have been created for thread based allocation.
+  std::vector<std::unique_ptr<StorageAllocator>> threadAllocators;
+
+  /// A mutex used for safely adding a new thread allocator.
+  llvm::sys::SmartMutex<true> threadAllocatorMutex;
+#endif
+
+  /// Main allocator used for uniquing singleton instances, and other state when
+  /// thread safety is guaranteed.
+  StorageAllocator allocator;
+
   /// Map of type ids to the storage uniquer to use for registered objects.
   DenseMap<TypeID, std::unique_ptr<ParametricStorageUniquer>>
       parametricUniquers;
@@ -295,17 +352,14 @@ struct StorageUniquerImpl {
   /// singleton.
   DenseMap<TypeID, BaseStorage *> singletonInstances;
 
-  /// Allocator used for uniquing singleton instances.
-  StorageAllocator singletonAllocator;
-
   /// Flag specifying if multi-threading is enabled within the uniquer.
   bool threadingIsEnabled = true;
 };
-} // end namespace detail
+} // namespace detail
 } // namespace mlir
 
 StorageUniquer::StorageUniquer() : impl(new StorageUniquerImpl()) {}
-StorageUniquer::~StorageUniquer() {}
+StorageUniquer::~StorageUniquer() = default;
 
 /// Set the flag specifying if multi-threading is disabled within the uniquer.
 void StorageUniquer::disableMultithreading(bool disable) {
@@ -323,9 +377,10 @@ auto StorageUniquer::getParametricStorageTypeImpl(
 
 /// Implementation for registering an instance of a derived type with
 /// parametric storage.
-void StorageUniquer::registerParametricStorageTypeImpl(TypeID id) {
+void StorageUniquer::registerParametricStorageTypeImpl(
+    TypeID id, function_ref<void(BaseStorage *)> destructorFn) {
   impl->parametricUniquers.try_emplace(
-      id, std::make_unique<ParametricStorageUniquer>());
+      id, std::make_unique<ParametricStorageUniquer>(destructorFn));
 }
 
 /// Implementation for getting an instance of a derived type with default
@@ -350,7 +405,7 @@ void StorageUniquer::registerSingletonImpl(
     TypeID id, function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
   assert(!impl->singletonInstances.count(id) &&
          "storage class already registered");
-  impl->singletonInstances.try_emplace(id, ctorFn(impl->singletonAllocator));
+  impl->singletonInstances.try_emplace(id, ctorFn(impl->allocator));
 }
 
 /// Implementation for mutating an instance of a derived storage.

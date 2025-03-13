@@ -18,14 +18,14 @@
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-public.h"
 
-#include "lldb/Core/ValueObject.h"
+#include "lldb/ValueObject/ValueObject.h"
 
 namespace lldb_private {
 class TypeFormatImpl {
 public:
   class Flags {
   public:
-    Flags() : m_flags(lldb::eTypeOptionCascade) {}
+    Flags() {}
 
     Flags(const Flags &other) : m_flags(other.m_flags) {}
 
@@ -104,7 +104,7 @@ public:
     void SetValue(uint32_t value) { m_flags = value; }
 
   private:
-    uint32_t m_flags;
+    uint32_t m_flags = lldb::eTypeOptionCascade;
   };
 
   TypeFormatImpl(const Flags &flags = Flags());
@@ -149,7 +149,7 @@ public:
 
 protected:
   Flags m_flags;
-  uint32_t m_my_revision;
+  uint32_t m_my_revision = 0;
 
 private:
   TypeFormatImpl(const TypeFormatImpl &) = delete;

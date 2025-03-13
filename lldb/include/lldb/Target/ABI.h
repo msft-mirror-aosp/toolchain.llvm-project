@@ -11,6 +11,7 @@
 
 #include "lldb/Core/PluginInterface.h"
 #include "lldb/Symbol/UnwindPlan.h"
+#include "lldb/Target/DynamicRegisterInfo.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/lldb-private.h"
 
@@ -101,9 +102,9 @@ public:
 
   virtual bool RegisterIsVolatile(const RegisterInfo *reg_info) = 0;
 
-  virtual bool
-  GetFallbackRegisterLocation(const RegisterInfo *reg_info,
-                              UnwindPlan::Row::RegisterLocation &unwind_regloc);
+  virtual bool GetFallbackRegisterLocation(
+      const RegisterInfo *reg_info,
+      UnwindPlan::Row::AbstractRegisterLocation &unwind_regloc);
 
   // Should take a look at a call frame address (CFA) which is just the stack
   // pointer value upon entry to a function. ABIs usually impose alignment
@@ -117,18 +118,36 @@ public:
   // "pc".
   virtual bool CodeAddressIsValid(lldb::addr_t pc) = 0;
 
-  virtual lldb::addr_t FixCodeAddress(lldb::addr_t pc) {
-    // Some targets might use bits in a code address to indicate a mode switch.
-    // ARM uses bit zero to signify a code address is thumb, so any ARM ABI
-    // plug-ins would strip those bits.
-    return pc;
+  /// Some targets might use bits in a code address to indicate a mode switch.
+  /// ARM uses bit zero to signify a code address is thumb, so any ARM ABI
+  /// plug-ins would strip those bits.
+  /// @{
+  virtual lldb::addr_t FixCodeAddress(lldb::addr_t pc);
+  virtual lldb::addr_t FixDataAddress(lldb::addr_t pc);
+  /// @}
+
+  /// Use this method when you do not know, or do not care what kind of address
+  /// you are fixing. On platforms where there would be a difference between the
+  /// two types, it will pick the safest option.
+  ///
+  /// Its purpose is to signal that no specific choice was made and provide an
+  /// alternative to randomly picking FixCode/FixData address. Which could break
+  /// platforms where there is a difference (only Arm Thumb at this time).
+  virtual lldb::addr_t FixAnyAddress(lldb::addr_t pc) {
+    // On Arm Thumb fixing a code address zeroes the bottom bit, so FixData is
+    // the safe choice. On any other platform (so far) code and data addresses
+    // are fixed in the same way.
+    return FixDataAddress(pc);
   }
 
   llvm::MCRegisterInfo &GetMCRegisterInfo() { return *m_mc_register_info_up; }
 
-  virtual void AugmentRegisterInfo(RegisterInfo &info) = 0;
+  virtual void
+  AugmentRegisterInfo(std::vector<DynamicRegisterInfo::Register> &regs) = 0;
 
   virtual bool GetPointerReturnRegister(const char *&name) { return false; }
+
+  virtual uint64_t GetStackFrameSize() { return 512 * 1024; }
 
   static lldb::ABISP FindPlugin(lldb::ProcessSP process_sp, const ArchSpec &arch);
 
@@ -154,7 +173,8 @@ private:
 
 class RegInfoBasedABI : public ABI {
 public:
-  void AugmentRegisterInfo(RegisterInfo &info) override;
+  void AugmentRegisterInfo(
+      std::vector<DynamicRegisterInfo::Register> &regs) override;
 
 protected:
   using ABI::ABI;
@@ -166,12 +186,14 @@ protected:
 
 class MCBasedABI : public ABI {
 public:
-  void AugmentRegisterInfo(RegisterInfo &info) override;
+  void AugmentRegisterInfo(
+      std::vector<DynamicRegisterInfo::Register> &regs) override;
 
   /// If the register name is of the form "<from_prefix>[<number>]" then change
   /// the name to "<to_prefix>[<number>]". Otherwise, leave the name unchanged.
   static void MapRegisterName(std::string &reg, llvm::StringRef from_prefix,
-               llvm::StringRef to_prefix);
+                              llvm::StringRef to_prefix);
+
 protected:
   using ABI::ABI;
 

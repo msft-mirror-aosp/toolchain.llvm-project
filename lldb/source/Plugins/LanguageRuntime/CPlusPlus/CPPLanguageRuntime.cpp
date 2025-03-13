@@ -6,7 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <string.h>
+#include <cstring>
+#include <iostream>
 
 #include <memory>
 
@@ -26,6 +27,7 @@
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/StackFrame.h"
+#include "lldb/Target/StackFrameRecognizer.h"
 #include "lldb/Target/ThreadPlanRunToAddress.h"
 #include "lldb/Target/ThreadPlanStepInRange.h"
 #include "lldb/Utility/Timer.h"
@@ -34,26 +36,100 @@ using namespace lldb;
 using namespace lldb_private;
 
 static ConstString g_this = ConstString("this");
+// Artificial coroutine-related variables emitted by clang.
+static ConstString g_promise = ConstString("__promise");
+static ConstString g_coro_frame = ConstString("__coro_frame");
 
 char CPPLanguageRuntime::ID = 0;
 
+/// A frame recognizer that is installed to hide libc++ implementation
+/// details from the backtrace.
+class LibCXXFrameRecognizer : public StackFrameRecognizer {
+  std::array<RegularExpression, 2> m_hidden_regex;
+  RecognizedStackFrameSP m_hidden_frame;
+
+  struct LibCXXHiddenFrame : public RecognizedStackFrame {
+    bool ShouldHide() override { return true; }
+  };
+
+public:
+  LibCXXFrameRecognizer()
+      : m_hidden_regex{
+            // internal implementation details in the `std::` namespace
+            //    std::__1::__function::__alloc_func<void (*)(), std::__1::allocator<void (*)()>, void ()>::operator()[abi:ne200000]
+            //    std::__1::__function::__func<void (*)(), std::__1::allocator<void (*)()>, void ()>::operator()
+            //    std::__1::__function::__value_func<void ()>::operator()[abi:ne200000]() const
+            //    std::__2::__function::__policy_invoker<void (int, int)>::__call_impl[abi:ne200000]<std::__2::__function::__default_alloc_func<int (*)(int, int), int (int, int)>>
+            //    std::__1::__invoke[abi:ne200000]<void (*&)()>
+            //    std::__1::__invoke_void_return_wrapper<void, true>::__call[abi:ne200000]<void (*&)()>
+            RegularExpression{R"(^std::__[^:]*::__)"},
+            // internal implementation details in the `std::ranges` namespace
+            //    std::__1::ranges::__sort::__sort_fn_impl[abi:ne200000]<std::__1::__wrap_iter<int*>, std::__1::__wrap_iter<int*>, bool (*)(int, int), std::__1::identity>
+            RegularExpression{R"(^std::__[^:]*::ranges::__)"},
+        },
+        m_hidden_frame(new LibCXXHiddenFrame()) {}
+
+  std::string GetName() override { return "libc++ frame recognizer"; }
+
+  lldb::RecognizedStackFrameSP
+  RecognizeFrame(lldb::StackFrameSP frame_sp) override {
+    if (!frame_sp)
+      return {};
+    const auto &sc = frame_sp->GetSymbolContext(lldb::eSymbolContextFunction);
+    if (!sc.function)
+      return {};
+
+    // Check if we have a regex match
+    for (RegularExpression &r : m_hidden_regex) {
+      if (!r.Execute(sc.function->GetNameNoArguments()))
+        continue;
+
+      // Only hide this frame if the immediate caller is also within libc++.
+      lldb::ThreadSP thread_sp = frame_sp->GetThread();
+      if (!thread_sp)
+        return {};
+      lldb::StackFrameSP parent_frame_sp =
+          thread_sp->GetStackFrameAtIndex(frame_sp->GetFrameIndex() + 1);
+      if (!parent_frame_sp)
+        return {};
+      const auto &parent_sc =
+          parent_frame_sp->GetSymbolContext(lldb::eSymbolContextFunction);
+      if (!parent_sc.function)
+        return {};
+      if (parent_sc.function->GetNameNoArguments().GetStringRef().starts_with(
+              "std::"))
+        return m_hidden_frame;
+    }
+
+    return {};
+  }
+};
+
 CPPLanguageRuntime::CPPLanguageRuntime(Process *process)
-    : LanguageRuntime(process) {}
+    : LanguageRuntime(process) {
+  if (process)
+    process->GetTarget().GetFrameRecognizerManager().AddRecognizer(
+        StackFrameRecognizerSP(new LibCXXFrameRecognizer()), {},
+        std::make_shared<RegularExpression>("^std::__[^:]*::"),
+        /*mangling_preference=*/Mangled::ePreferDemangledWithoutArguments,
+        /*first_instruction_only=*/false);
+}
 
 bool CPPLanguageRuntime::IsAllowedRuntimeValue(ConstString name) {
-  return name == g_this;
+  return name == g_this || name == g_promise || name == g_coro_frame;
 }
 
-bool CPPLanguageRuntime::GetObjectDescription(Stream &str,
-                                              ValueObject &object) {
+llvm::Error CPPLanguageRuntime::GetObjectDescription(Stream &str,
+                                                     ValueObject &object) {
   // C++ has no generic way to do this.
-  return false;
+  return llvm::createStringError("C++ does not support object descriptions");
 }
 
-bool CPPLanguageRuntime::GetObjectDescription(
-    Stream &str, Value &value, ExecutionContextScope *exe_scope) {
+llvm::Error
+CPPLanguageRuntime::GetObjectDescription(Stream &str, Value &value,
+                                         ExecutionContextScope *exe_scope) {
   // C++ has no generic way to do this.
-  return false;
+  return llvm::createStringError("C++ does not support object descriptions");
 }
 
 bool contains_lambda_identifier(llvm::StringRef &str_ref) {
@@ -62,8 +138,7 @@ bool contains_lambda_identifier(llvm::StringRef &str_ref) {
 
 CPPLanguageRuntime::LibCppStdFunctionCallableInfo
 line_entry_helper(Target &target, const SymbolContext &sc, Symbol *symbol,
-                  llvm::StringRef first_template_param_sref,
-                  bool has___invoke) {
+                  llvm::StringRef first_template_param_sref, bool has_invoke) {
 
   CPPLanguageRuntime::LibCppStdFunctionCallableInfo optional_info;
 
@@ -78,7 +153,7 @@ line_entry_helper(Target &target, const SymbolContext &sc, Symbol *symbol,
     LineEntry line_entry;
     addr.CalculateSymbolContextLineEntry(line_entry);
 
-    if (contains_lambda_identifier(first_template_param_sref) || has___invoke) {
+    if (contains_lambda_identifier(first_template_param_sref) || has_invoke) {
       // Case 1 and 2
       optional_info.callable_case = lldb_private::CPPLanguageRuntime::
           LibCppStdFunctionCallableCase::Lambda;
@@ -99,9 +174,7 @@ line_entry_helper(Target &target, const SymbolContext &sc, Symbol *symbol,
 CPPLanguageRuntime::LibCppStdFunctionCallableInfo
 CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
     lldb::ValueObjectSP &valobj_sp) {
-  static Timer::Category func_cat(LLVM_PRETTY_FUNCTION);
-  Timer scoped_timer(func_cat,
-                     "CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo");
+  LLDB_SCOPED_TIMER();
 
   LibCppStdFunctionCallableInfo optional_info;
 
@@ -140,25 +213,23 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
   //    we will obtain the name from this pointer.
   // 5) a free function. A pointer to the function will stored after the vtable
   //    we will obtain the name from this pointer.
-  ValueObjectSP member__f_(
-      valobj_sp->GetChildMemberWithName(ConstString("__f_"), true));
+  ValueObjectSP member_f_(valobj_sp->GetChildMemberWithName("__f_"));
 
-  if (member__f_) {
-    ValueObjectSP sub_member__f_(
-       member__f_->GetChildMemberWithName(ConstString("__f_"), true));
+  if (member_f_) {
+    ValueObjectSP sub_member_f_(member_f_->GetChildMemberWithName("__f_"));
 
-    if (sub_member__f_)
-        member__f_ = sub_member__f_;
+    if (sub_member_f_)
+      member_f_ = sub_member_f_;
   }
 
-  if (!member__f_)
+  if (!member_f_)
     return optional_info;
 
-  lldb::addr_t member__f_pointer_value = member__f_->GetValueAsUnsigned(0);
+  lldb::addr_t member_f_pointer_value = member_f_->GetValueAsUnsigned(0);
 
-  optional_info.member__f_pointer_value = member__f_pointer_value;
+  optional_info.member_f_pointer_value = member_f_pointer_value;
 
-  if (!member__f_pointer_value)
+  if (!member_f_pointer_value)
     return optional_info;
 
   ExecutionContext exe_ctx(valobj_sp->GetExecutionContextRef());
@@ -173,7 +244,7 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
   // First item pointed to by __f_ should be the pointer to the vtable for
   // a __base object.
   lldb::addr_t vtable_address =
-      process->ReadPointerFromMemory(member__f_pointer_value, status);
+      process->ReadPointerFromMemory(member_f_pointer_value, status);
 
   if (status.Fail())
     return optional_info;
@@ -184,7 +255,7 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
   if (status.Fail())
     return optional_info;
 
-  lldb::addr_t address_after_vtable = member__f_pointer_value + address_size;
+  lldb::addr_t address_after_vtable = member_f_pointer_value + address_size;
   // As commented above we may not have a function pointer but if we do we will
   // need it.
   lldb::addr_t possible_function_address =
@@ -195,21 +266,20 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
 
   Target &target = process->GetTarget();
 
-  if (target.GetSectionLoadList().IsEmpty())
+  if (!target.HasLoadedSections())
     return optional_info;
 
   Address vtable_first_entry_resolved;
 
-  if (!target.GetSectionLoadList().ResolveLoadAddress(
-          vtable_address_first_entry, vtable_first_entry_resolved))
+  if (!target.ResolveLoadAddress(vtable_address_first_entry,
+                                 vtable_first_entry_resolved))
     return optional_info;
 
   Address vtable_addr_resolved;
   SymbolContext sc;
   Symbol *symbol = nullptr;
 
-  if (!target.GetSectionLoadList().ResolveLoadAddress(vtable_address,
-                                                      vtable_addr_resolved))
+  if (!target.ResolveLoadAddress(vtable_address, vtable_addr_resolved))
     return optional_info;
 
   target.GetImages().ResolveSymbolContextForAddress(
@@ -221,7 +291,7 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
 
   llvm::StringRef vtable_name(symbol->GetName().GetStringRef());
   bool found_expected_start_string =
-      vtable_name.startswith("vtable for std::__1::__function::__func<");
+      vtable_name.starts_with("vtable for std::__1::__function::__func<");
 
   if (!found_expected_start_string)
     return optional_info;
@@ -251,15 +321,15 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
   // Setup for cases 2, 4 and 5 we have a pointer to a function after the
   // vtable. We will use a process of elimination to drop through each case
   // and obtain the data we need.
-  if (target.GetSectionLoadList().ResolveLoadAddress(
-          possible_function_address, function_address_resolved)) {
+  if (target.ResolveLoadAddress(possible_function_address,
+                                function_address_resolved)) {
     target.GetImages().ResolveSymbolContextForAddress(
         function_address_resolved, eSymbolContextEverything, sc);
     symbol = sc.symbol;
   }
 
   // These conditions are used several times to simplify statements later on.
-  bool has___invoke =
+  bool has_invoke =
       (symbol ? symbol->GetName().GetStringRef().contains("__invoke") : false);
   auto calculate_symbol_context_helper = [](auto &t,
                                             SymbolContextList &sc_list) {
@@ -269,17 +339,17 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
   };
 
   // Case 2
-  if (has___invoke) {
+  if (has_invoke) {
     SymbolContextList scl;
     calculate_symbol_context_helper(symbol, scl);
 
     return line_entry_helper(target, scl[0], symbol, first_template_parameter,
-                             has___invoke);
+                             has_invoke);
   }
 
   // Case 4 or 5
-  if (symbol && !symbol->GetName().GetStringRef().startswith("vtable for") &&
-      !contains_lambda_identifier(first_template_parameter) && !has___invoke) {
+  if (symbol && !symbol->GetName().GetStringRef().starts_with("vtable for") &&
+      !contains_lambda_identifier(first_template_parameter) && !has_invoke) {
     optional_info.callable_case =
         LibCppStdFunctionCallableCase::FreeOrMemberFunction;
     optional_info.callable_address = function_address_resolved;
@@ -309,11 +379,11 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
   if (!contains_lambda_identifier(name_to_use))
     return optional_info;
 
-  if (vtable_cu && !has___invoke) {
+  if (vtable_cu && !has_invoke) {
     lldb::FunctionSP func_sp =
         vtable_cu->FindFunction([name_to_use](const FunctionSP &f) {
           auto name = f->GetName().GetStringRef();
-          if (name.startswith(name_to_use) && name.contains("operator"))
+          if (name.starts_with(name_to_use) && name.contains("operator"))
             return true;
 
           return false;
@@ -324,10 +394,13 @@ CPPLanguageRuntime::FindLibCppStdFunctionCallableInfo(
     }
   }
 
+  if (symbol == nullptr)
+    return optional_info;
+
   // Case 1 or 3
   if (scl.GetSize() >= 1) {
     optional_info = line_entry_helper(target, scl[0], symbol,
-                                      first_template_parameter, has___invoke);
+                                      first_template_parameter, has_invoke);
   }
 
   CallableLookupCache[func_to_match] = optional_info;
@@ -344,15 +417,14 @@ CPPLanguageRuntime::GetStepThroughTrampolinePlan(Thread &thread,
 
   TargetSP target_sp(thread.CalculateTarget());
 
-  if (target_sp->GetSectionLoadList().IsEmpty())
+  if (!target_sp->HasLoadedSections())
     return ret_plan_sp;
 
   Address pc_addr_resolved;
   SymbolContext sc;
   Symbol *symbol;
 
-  if (!target_sp->GetSectionLoadList().ResolveLoadAddress(curr_pc,
-                                                          pc_addr_resolved))
+  if (!target_sp->ResolveLoadAddress(curr_pc, pc_addr_resolved))
     return ret_plan_sp;
 
   target_sp->GetImages().ResolveSymbolContextForAddress(
@@ -371,7 +443,7 @@ CPPLanguageRuntime::GetStepThroughTrampolinePlan(Thread &thread,
   // step into the wrapped callable.
   //
   bool found_expected_start_string =
-      function_name.startswith("std::__1::function<");
+      function_name.starts_with("std::__1::function<");
 
   if (!found_expected_start_string)
     return ret_plan_sp;
@@ -399,8 +471,8 @@ CPPLanguageRuntime::GetStepThroughTrampolinePlan(Thread &thread,
       // We create a ThreadPlan to keep stepping through using the address range
       // of the current function.
       ret_plan_sp = std::make_shared<ThreadPlanStepInRange>(
-          thread, range_of_curr_func, sc, eOnlyThisThread, eLazyBoolYes,
-          eLazyBoolYes);
+          thread, range_of_curr_func, sc, nullptr, eOnlyThisThread,
+          eLazyBoolYes, eLazyBoolYes);
       return ret_plan_sp;
     }
   }

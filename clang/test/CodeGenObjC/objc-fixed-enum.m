@@ -32,15 +32,15 @@ enum : NSInteger
 };
 typedef NSInteger Enum3;
 
-int main() {
+int main(void) {
   Enum0 e0 = Enum0One;
-  // CHECK: call void @llvm.dbg.declare(metadata {{.*}}, metadata ![[ENUM0:[0-9]+]], metadata !{{.*}})
+  // CHECK: #dbg_declare({{.*}}, ![[ENUM0:[0-9]+]], !{{.*}})
   Enum1 e1 = Enum1One;
-  // CHECK: call void @llvm.dbg.declare(metadata {{.*}}, metadata ![[ENUM1:[0-9]+]], metadata !{{.*}})
+  // CHECK: #dbg_declare({{.*}}, ![[ENUM1:[0-9]+]], !{{.*}})
   Enum2 e2 = Enum2One;
-  // CHECK: call void @llvm.dbg.declare(metadata {{.*}}, metadata ![[ENUM2:[0-9]+]], metadata !{{.*}})
+  // CHECK: #dbg_declare({{.*}}, ![[ENUM2:[0-9]+]], !{{.*}})
   Enum3 e3 = Enum3One;
-  // CHECK: call void @llvm.dbg.declare(metadata {{.*}}, metadata ![[ENUM3:[0-9]+]], metadata !{{.*}})
+  // CHECK: #dbg_declare({{.*}}, ![[ENUM3:[0-9]+]], !{{.*}})
 
   // -Werror and the following line ensures that these enums are not
   // -treated as C++11 strongly typed enums.
@@ -54,7 +54,7 @@ int main() {
 // CHECK: ![[ENUMERATOR3]] = !DIDerivedType(tag: DW_TAG_typedef, name: "NSInteger"
 // CHECK-SAME:                              line: 6
 // CHECK-SAME:                              baseType: ![[LONGINT:[0-9]+]]
-// CHECK: ![[LONGINT]] = !DIBasicType(name: "long int"
+// CHECK: ![[LONGINT]] = !DIBasicType(name: "long"
 // CHECK: ![[ENUMERATOR2:[0-9]+]] = !DICompositeType(tag: DW_TAG_enumeration_type,
 // CHECK-SAME:                                       line: 22
 // CHECK-SAME:                                       baseType: ![[ENUMERATOR3]]

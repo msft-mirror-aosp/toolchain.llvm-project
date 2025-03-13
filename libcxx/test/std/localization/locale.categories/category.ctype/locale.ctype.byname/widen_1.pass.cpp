@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 // REQUIRES: locale.en_US.UTF-8
+// XFAIL: no-wide-characters
 
 // <locale>
 
@@ -55,7 +56,7 @@ int main(int, char**)
             assert(f.widen('.') == L'.');
             assert(f.widen('a') == L'a');
             assert(f.widen('1') == L'1');
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(_WIN32) || defined(_AIX)
             assert(f.widen(char(-5)) == L'\u00fb');
 #else
             assert(f.widen(char(-5)) == wchar_t(-1));

@@ -34,7 +34,8 @@ static const char *ompt_task_status_t_values[] = {
     "ompt_task_detach", // 4
     "ompt_task_early_fulfill", // 5
     "ompt_task_late_fulfill", // 6
-    "ompt_task_switch" // 7
+    "ompt_task_switch", // 7
+    "ompt_taskwait_complete" // 8
 };
 static const char* ompt_cancel_flag_t_values[] = {
   "ompt_cancel_parallel",
@@ -46,7 +47,37 @@ static const char* ompt_cancel_flag_t_values[] = {
   "ompt_cancel_discarded_task"
 };
 
-static const char *ompt_dependence_type_t_values[] = {
+static const char *ompt_work_t_values[] = {"undefined",
+                                           "ompt_work_loop",
+                                           "ompt_work_sections",
+                                           "ompt_work_single_executor",
+                                           "ompt_work_single_other",
+                                           "ompt_work_workshare",
+                                           "ompt_work_distribute",
+                                           "ompt_work_taskloop",
+                                           "ompt_work_scope",
+                                           "ompt_work_workdistribute",
+                                           "ompt_work_loop_static",
+                                           "ompt_work_loop_dynamic",
+                                           "ompt_work_loop_guided",
+                                           "ompt_work_loop_other"};
+
+static const char *ompt_work_events_t_values[] = {"undefined",
+                                                  "ompt_event_loop",
+                                                  "ompt_event_sections",
+                                                  "ompt_event_single_in_block",
+                                                  "ompt_event_single_others",
+                                                  "ompt_event_workshare",
+                                                  "ompt_event_distribute",
+                                                  "ompt_event_taskloop",
+                                                  "ompt_event_scope",
+                                                  "ompt_event_workdistribute",
+                                                  "ompt_event_loop_static",
+                                                  "ompt_event_loop_dynamic",
+                                                  "ompt_event_loop_guided",
+                                                  "ompt_event_loop_other"};
+
+static const char *ompt_dependence_type_t_values[36] = {
     "ompt_dependence_type_UNDEFINED",
     "ompt_dependence_type_in", // 1
     "ompt_dependence_type_out", // 2
@@ -54,8 +85,25 @@ static const char *ompt_dependence_type_t_values[] = {
     "ompt_dependence_type_mutexinoutset", // 4
     "ompt_dependence_type_source", // 5
     "ompt_dependence_type_sink", // 6
-    "ompt_dependence_type_inoutset" // 7
+    "ompt_dependence_type_inoutset", // 7
+    "", "", "", "", "", "", // 8-13
+    "", "", "", "", "", "", "", "", "", "", // 14-23
+    "", "", "", "", "", "", "", "", "", "", // 24-33
+    "ompt_dependence_type_out_all_memory", // 34
+    "ompt_dependence_type_inout_all_memory" // 35
 };
+
+static const char *ompt_sync_region_t_values[] = {"undefined",
+                                                  "barrier",
+                                                  "barrier_implicit",
+                                                  "barrier_explicit",
+                                                  "barrier_implementation",
+                                                  "taskwait",
+                                                  "taskgroup",
+                                                  "reduction",
+                                                  "barrier_implicit_workshare",
+                                                  "barrier_implicit_parallel",
+                                                  "barrier_teams"};
 
 static void format_task_type(int type, char *buffer) {
   char *progress = buffer;
@@ -67,6 +115,8 @@ static void format_task_type(int type, char *buffer) {
     progress += sprintf(progress, "ompt_task_explicit");
   if (type & ompt_task_target)
     progress += sprintf(progress, "ompt_task_target");
+  if (type & ompt_task_taskwait)
+    progress += sprintf(progress, "ompt_task_taskwait");
   if (type & ompt_task_undeferred)
     progress += sprintf(progress, "|ompt_task_undeferred");
   if (type & ompt_task_untied)
@@ -178,12 +228,17 @@ ompt_label_##id:
 #define print_possible_return_addresses(addr) \
   printf("%" PRIu64 ": current_address=%p or %p\n", ompt_get_thread_data()->value, \
          ((char *)addr) - 8, ((char *)addr) - 12)
-#elif KMP_ARCH_AARCH64
+#elif KMP_ARCH_AARCH64 || KMP_ARCH_AARCH64_32
 // On AArch64 the NOP instruction is 4 bytes long, can be followed by inserted
 // store instruction (another 4 bytes long).
-#define print_possible_return_addresses(addr) \
-  printf("%" PRIu64 ": current_address=%p or %p\n", ompt_get_thread_data()->value, \
-         ((char *)addr) - 4, ((char *)addr) - 8)
+// FIXME: PR #65696 addded a third possibility (12 byte offset) to make the
+// tests pass on Darwin. Adding the same for other OSes. However, the proper
+// fix for this is to remove the extra branch instruction being generated by
+// the AArch64 backend. See issue #69627.
+#define print_possible_return_addresses(addr)                                  \
+  printf("%" PRIu64 ": current_address=%p or %p or %p\n",                      \
+         ompt_get_thread_data()->value, ((char *)addr) - 4,                    \
+         ((char *)addr) - 8, ((char *)addr) - 12)
 #elif KMP_ARCH_RISCV64
 #if __riscv_compressed
 // On RV64GC the C.NOP instruction is 2 byte long. In addition, the compiler
@@ -204,6 +259,38 @@ ompt_label_##id:
   printf("%" PRIu64 ": current_address=%p or %p\n", \
          ompt_get_thread_data()->value, ((char *)addr) - 8, ((char *)addr) - 12)
 #endif
+#elif KMP_ARCH_LOONGARCH64
+// On LoongArch64 the NOP instruction is 4 bytes long, can be followed by
+// inserted jump instruction (another 4 bytes long). And an additional jump
+// instruction may appear (adding 4 more bytes) when the NOP is referenced
+// elsewhere (ie. another branch).
+#define print_possible_return_addresses(addr)                                  \
+  printf("%" PRIu64 ": current_address=%p or %p or %p\n",                      \
+         ompt_get_thread_data()->value, ((char *)addr) - 4,                    \
+         ((char *)addr) - 8, ((char *)addr) - 12)
+#elif KMP_ARCH_VE
+// On VE the NOP instruction is 8 byte long. In addition, the compiler inserts
+// a ??? instruction for non-void runtime functions which is ? bytes long.
+#define print_possible_return_addresses(addr)                                  \
+  printf("%" PRIu64 ": current_address=%p or %p\n",                            \
+         ompt_get_thread_data()->value, ((char *)addr) - 8,                    \
+         ((char *)addr) - 8)
+#elif KMP_ARCH_S390X
+// On s390x the NOP instruction is 2 bytes long. For non-void runtime
+// functions Clang inserts a STY instruction (but only if compiling under
+// -fno-PIC which will be the default with Clang 8.0, another 6 bytes).
+//
+// Another possibility is:
+//
+//                brasl %r14,__kmpc_end_master@plt
+//   a7 f4 00 02  j 0f
+//   47 00 00 00  0: nop
+//   a7 f4 00 02  j addr
+//                addr:
+#define print_possible_return_addresses(addr)                                  \
+  printf("%" PRIu64 ": current_address=%p or %p or %p\n",                      \
+         ompt_get_thread_data()->value, ((char *)addr) - 2,                    \
+         ((char *)addr) - 8, ((char *)addr) - 12)
 #else
 #error Unsupported target architecture, cannot determine address offset!
 #endif
@@ -234,14 +321,14 @@ ompt_label_##id:
          ((uint64_t)addr) / FUZZY_ADDRESS_DISCARD_BYTES + 1,                   \
          ((uint64_t)addr) / FUZZY_ADDRESS_DISCARD_BYTES + 2, addr)
 
-#define register_callback_t(name, type)                                        \
+#define register_ompt_callback_t(name, type)                                   \
   do {                                                                         \
     type f_##name = &on_##name;                                                \
     if (ompt_set_callback(name, (ompt_callback_t)f_##name) == ompt_set_never)  \
       printf("0: Could not register callback '" #name "'\n");                  \
   } while (0)
 
-#define register_callback(name) register_callback_t(name, name##_t)
+#define register_ompt_callback(name) register_ompt_callback_t(name, name##_t)
 
 #ifndef USE_PRIVATE_TOOL
 static void
@@ -260,10 +347,22 @@ on_ompt_callback_mutex_acquire(
              ", impl=%" PRIu32 ", codeptr_ra=%p \n",
              ompt_get_thread_data()->value, wait_id, hint, impl, codeptr_ra);
       break;
+    case ompt_mutex_test_lock:
+      printf("%" PRIu64 ":" _TOOL_PREFIX
+             " ompt_event_wait_test_lock: wait_id=%" PRIu64 ", hint=%" PRIu32
+             ", impl=%" PRIu32 ", codeptr_ra=%p \n",
+             ompt_get_thread_data()->value, wait_id, hint, impl, codeptr_ra);
+      break;
     case ompt_mutex_nest_lock:
       printf("%" PRIu64 ":" _TOOL_PREFIX
              " ompt_event_wait_nest_lock: wait_id=%" PRIu64 ", hint=%" PRIu32
              ", impl=%" PRIu32 ", codeptr_ra=%p \n",
+             ompt_get_thread_data()->value, wait_id, hint, impl, codeptr_ra);
+      break;
+    case ompt_mutex_test_nest_lock:
+      printf("%" PRIu64 ":" _TOOL_PREFIX
+             " ompt_event_wait_test_nest_lock: wait_id=%" PRIu64
+             ", hint=%" PRIu32 ", impl=%" PRIu32 ", codeptr_ra=%p \n",
              ompt_get_thread_data()->value, wait_id, hint, impl, codeptr_ra);
       break;
     case ompt_mutex_critical:
@@ -302,9 +401,21 @@ on_ompt_callback_mutex_acquired(
              " ompt_event_acquired_lock: wait_id=%" PRIu64 ", codeptr_ra=%p \n",
              ompt_get_thread_data()->value, wait_id, codeptr_ra);
       break;
+    case ompt_mutex_test_lock:
+      printf("%" PRIu64 ":" _TOOL_PREFIX
+             " ompt_event_acquired_test_lock: wait_id=%" PRIu64
+             ", codeptr_ra=%p \n",
+             ompt_get_thread_data()->value, wait_id, codeptr_ra);
+      break;
     case ompt_mutex_nest_lock:
       printf("%" PRIu64 ":" _TOOL_PREFIX
              " ompt_event_acquired_nest_lock_first: wait_id=%" PRIu64
+             ", codeptr_ra=%p \n",
+             ompt_get_thread_data()->value, wait_id, codeptr_ra);
+      break;
+    case ompt_mutex_test_nest_lock:
+      printf("%" PRIu64 ":" _TOOL_PREFIX
+             " ompt_event_acquired_test_nest_lock_first: wait_id=%" PRIu64
              ", codeptr_ra=%p \n",
              ompt_get_thread_data()->value, wait_id, codeptr_ra);
       break;
@@ -407,89 +518,32 @@ on_ompt_callback_sync_region(
   ompt_data_t *task_data,
   const void *codeptr_ra)
 {
-  switch(endpoint)
-  {
-    case ompt_scope_begin:
-      switch(kind)
-      {
-        case ompt_sync_region_barrier:
-        case ompt_sync_region_barrier_implicit:
-        case ompt_sync_region_barrier_implicit_workshare:
-        case ompt_sync_region_barrier_implicit_parallel:
-        case ompt_sync_region_barrier_teams:
-        case ompt_sync_region_barrier_explicit:
-        case ompt_sync_region_barrier_implementation:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_barrier_begin: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra);
-          print_ids(0);
-          break;
-        case ompt_sync_region_taskwait:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_taskwait_begin: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra);
-          break;
-        case ompt_sync_region_taskgroup:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_taskgroup_begin: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra);
-          break;
-        case ompt_sync_region_reduction:
-          printf("ompt_sync_region_reduction should never be passed to "
-                 "on_ompt_callback_sync_region\n");
-          exit(-1);
-          break;
-      }
-      break;
-    case ompt_scope_end:
-      switch(kind)
-      {
-        case ompt_sync_region_barrier:
-        case ompt_sync_region_barrier_implicit:
-        case ompt_sync_region_barrier_explicit:
-        case ompt_sync_region_barrier_implicit_workshare:
-        case ompt_sync_region_barrier_implicit_parallel:
-        case ompt_sync_region_barrier_teams:
-        case ompt_sync_region_barrier_implementation:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_barrier_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value,
-                 (parallel_data) ? parallel_data->value : 0, task_data->value,
-                 codeptr_ra);
-          break;
-        case ompt_sync_region_taskwait:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_taskwait_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value,
-                 (parallel_data) ? parallel_data->value : 0, task_data->value,
-                 codeptr_ra);
-          break;
-        case ompt_sync_region_taskgroup:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_taskgroup_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value,
-                 (parallel_data) ? parallel_data->value : 0, task_data->value,
-                 codeptr_ra);
-          break;
-        case ompt_sync_region_reduction:
-          printf("ompt_sync_region_reduction should never be passed to "
-                 "on_ompt_callback_sync_region\n");
-          exit(-1);
-          break;
-      }
-      break;
-    case ompt_scope_beginend:
-      printf("ompt_scope_beginend should never be passed to %s\n", __func__);
-      exit(-1);
+  if (endpoint == ompt_scope_beginend) {
+    printf("ompt_scope_beginend should never be passed to %s\n", __func__);
+    exit(-1);
+  }
+  if (kind == ompt_sync_region_reduction) {
+    printf("ompt_sync_region_reduction should never be passed to %s\n",
+           __func__);
+    exit(-1);
+  }
+  uint64_t parallel_data_value = parallel_data ? parallel_data->value : 0;
+  const char *begin_or_end = (endpoint == ompt_scope_begin) ? "begin" : "end";
+  printf("%" PRIu64 ":" _TOOL_PREFIX " ompt_event_%s_%s: parallel_id=%" PRIu64
+         ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
+         ompt_get_thread_data()->value, ompt_sync_region_t_values[kind],
+         begin_or_end, parallel_data_value, task_data->value, codeptr_ra);
+  switch (kind) {
+  case ompt_sync_region_barrier:
+  case ompt_sync_region_barrier_implicit:
+  case ompt_sync_region_barrier_implicit_workshare:
+  case ompt_sync_region_barrier_implicit_parallel:
+  case ompt_sync_region_barrier_teams:
+  case ompt_sync_region_barrier_explicit:
+  case ompt_sync_region_barrier_implementation:
+    if (endpoint == ompt_scope_begin)
+      print_ids(0);
+  default:;
   }
 }
 
@@ -501,89 +555,22 @@ on_ompt_callback_sync_region_wait(
   ompt_data_t *task_data,
   const void *codeptr_ra)
 {
-  switch(endpoint)
-  {
-    case ompt_scope_begin:
-      switch(kind)
-      {
-        case ompt_sync_region_barrier:
-        case ompt_sync_region_barrier_implicit:
-        case ompt_sync_region_barrier_implicit_workshare:
-        case ompt_sync_region_barrier_implicit_parallel:
-        case ompt_sync_region_barrier_teams:
-        case ompt_sync_region_barrier_explicit:
-        case ompt_sync_region_barrier_implementation:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_wait_barrier_begin: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra);
-          break;
-        case ompt_sync_region_taskwait:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_wait_taskwait_begin: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra);
-          break;
-        case ompt_sync_region_taskgroup:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_wait_taskgroup_begin: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra);
-          break;
-        case ompt_sync_region_reduction:
-          printf("ompt_sync_region_reduction should never be passed to "
-                 "on_ompt_callback_sync_region_wait\n");
-          exit(-1);
-          break;
-      }
-      break;
-    case ompt_scope_end:
-      switch(kind)
-      {
-        case ompt_sync_region_barrier:
-        case ompt_sync_region_barrier_implicit:
-        case ompt_sync_region_barrier_implicit_workshare:
-        case ompt_sync_region_barrier_implicit_parallel:
-        case ompt_sync_region_barrier_teams:
-        case ompt_sync_region_barrier_explicit:
-        case ompt_sync_region_barrier_implementation:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_wait_barrier_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value,
-                 (parallel_data) ? parallel_data->value : 0, task_data->value,
-                 codeptr_ra);
-          break;
-        case ompt_sync_region_taskwait:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_wait_taskwait_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value,
-                 (parallel_data) ? parallel_data->value : 0, task_data->value,
-                 codeptr_ra);
-          break;
-        case ompt_sync_region_taskgroup:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_wait_taskgroup_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p\n",
-                 ompt_get_thread_data()->value,
-                 (parallel_data) ? parallel_data->value : 0, task_data->value,
-                 codeptr_ra);
-          break;
-        case ompt_sync_region_reduction:
-          printf("ompt_sync_region_reduction should never be passed to "
-                 "on_ompt_callback_sync_region_wait\n");
-          exit(-1);
-          break;
-      }
-      break;
-    case ompt_scope_beginend:
-      printf("ompt_scope_beginend should never be passed to %s\n", __func__);
-      exit(-1);
+  if (endpoint == ompt_scope_beginend) {
+    printf("ompt_scope_beginend should never be passed to %s\n", __func__);
+    exit(-1);
   }
+  if (kind == ompt_sync_region_reduction) {
+    printf("ompt_sync_region_reduction should never be passed to %s\n",
+           __func__);
+    exit(-1);
+  }
+  uint64_t parallel_data_value = parallel_data ? parallel_data->value : 0;
+  const char *begin_or_end = (endpoint == ompt_scope_begin) ? "begin" : "end";
+  printf("%" PRIu64 ":" _TOOL_PREFIX
+         " ompt_event_wait_%s_%s: parallel_id=%" PRIu64 ", task_id=%" PRIu64
+         ", codeptr_ra=%p\n",
+         ompt_get_thread_data()->value, ompt_sync_region_t_values[kind],
+         begin_or_end, parallel_data_value, task_data->value, codeptr_ra);
 }
 
 static void on_ompt_callback_reduction(ompt_sync_region_t kind,
@@ -783,135 +770,59 @@ on_ompt_callback_work(
 {
   switch(endpoint)
   {
-    case ompt_scope_begin:
-      switch(wstype)
-      {
-        case ompt_work_loop:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_loop_begin: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_sections:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_sections_begin: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_single_executor:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_single_in_block_begin: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_single_other:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_single_others_begin: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_workshare:
-          //impl
-          break;
-        case ompt_work_distribute:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_distribute_begin: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_taskloop:
-          //impl
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_taskloop_begin: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_scope:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_scope_begin: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-      }
-      break;
-    case ompt_scope_end:
-      switch(wstype)
-      {
-        case ompt_work_loop:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_loop_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_sections:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_sections_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_single_executor:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_single_in_block_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_single_other:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_single_others_end: parallel_id=%" PRIu64
-                 ", task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_workshare:
-          //impl
-          break;
-        case ompt_work_distribute:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_distribute_end: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_taskloop:
-          //impl
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_taskloop_end: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-        case ompt_work_scope:
-          printf("%" PRIu64 ":" _TOOL_PREFIX
-                 " ompt_event_scope_end: parallel_id=%" PRIu64
-                 ", parent_task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64
-                 "\n",
-                 ompt_get_thread_data()->value, parallel_data->value,
-                 task_data->value, codeptr_ra, count);
-          break;
-      }
-      break;
-    case ompt_scope_beginend:
-      printf("ompt_scope_beginend should never be passed to %s\n", __func__);
-      exit(-1);
+  case ompt_scope_begin:
+    printf("%" PRIu64 ":" _TOOL_PREFIX " %s_begin: parallel_id=%" PRIu64
+           ", task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64 "\n",
+           ompt_get_thread_data()->value, ompt_work_events_t_values[wstype],
+           parallel_data->value, task_data->value, codeptr_ra, count);
+    break;
+  case ompt_scope_end:
+    printf("%" PRIu64 ":" _TOOL_PREFIX " %s_end: parallel_id=%" PRIu64
+           ", task_id=%" PRIu64 ", codeptr_ra=%p, count=%" PRIu64 "\n",
+           ompt_get_thread_data()->value, ompt_work_events_t_values[wstype],
+           parallel_data->value, task_data->value, codeptr_ra, count);
+    break;
+  case ompt_scope_beginend:
+    printf("ompt_scope_beginend should never be passed to %s\n", __func__);
+    exit(-1);
   }
+}
+
+static void on_ompt_callback_dispatch(
+    ompt_data_t *parallel_data,
+    ompt_data_t *task_data,
+    ompt_dispatch_t kind,
+    ompt_data_t instance) {
+  char *event_name = NULL;
+  void *codeptr_ra = NULL;
+  ompt_dispatch_chunk_t *dispatch_chunk = NULL;
+  switch (kind) {
+  case ompt_dispatch_section:
+    event_name = "ompt_event_section_begin";
+    codeptr_ra = instance.ptr;
+    break;
+  case ompt_dispatch_ws_loop_chunk:
+    event_name = "ompt_event_ws_loop_chunk_begin";
+    dispatch_chunk = (ompt_dispatch_chunk_t *)instance.ptr;
+    break;
+  case ompt_dispatch_taskloop_chunk:
+    event_name = "ompt_event_taskloop_chunk_begin";
+    dispatch_chunk = (ompt_dispatch_chunk_t *)instance.ptr;
+    break;
+  case ompt_dispatch_distribute_chunk:
+    event_name = "ompt_event_distribute_chunk_begin";
+    dispatch_chunk = (ompt_dispatch_chunk_t *)instance.ptr;
+    break;
+  default:
+    event_name = "ompt_ws_loop_iteration_begin";
+  }
+  printf("%" PRIu64 ":" _TOOL_PREFIX
+         " %s: parallel_id=%" PRIu64 ", task_id=%" PRIu64
+         ", codeptr_ra=%p, chunk_start=%" PRIu64 ", chunk_iterations=%" PRIu64
+         "\n", ompt_get_thread_data()->value, event_name, parallel_data->value,
+         task_data->value, codeptr_ra,
+         dispatch_chunk ? dispatch_chunk->start : 0,
+         dispatch_chunk ? dispatch_chunk->iterations : 0);
 }
 
 static void on_ompt_callback_masked(ompt_scope_endpoint_t endpoint,
@@ -1015,7 +926,8 @@ on_ompt_callback_task_schedule(
          (second_task_data ? second_task_data->value : -1),
          ompt_task_status_t_values[prior_task_status], prior_task_status);
   if (prior_task_status == ompt_task_complete ||
-      prior_task_status == ompt_task_late_fulfill) {
+      prior_task_status == ompt_task_late_fulfill ||
+      prior_task_status == ompt_taskwait_complete) {
     printf("%" PRIu64 ":" _TOOL_PREFIX " ompt_event_task_end: task_id=%" PRIu64
            "\n", ompt_get_thread_data()->value, first_task_data->value);
   }
@@ -1029,7 +941,8 @@ on_ompt_callback_dependences(
 {
   char buffer[2048];
   char *progress = buffer;
-  for (int i = 0; i < ndeps && progress < buffer + 2000; i++) {
+  int i;
+  for (i = 0; i < ndeps && progress < buffer + 2000; i++) {
     if (deps[i].dependence_type == ompt_dependence_type_source ||
         deps[i].dependence_type == ompt_dependence_type_sink)
       progress +=
@@ -1124,6 +1037,15 @@ on_ompt_callback_control_tool(
   return 0; //success
 }
 
+static void on_ompt_callback_error(ompt_severity_t severity,
+                                   const char *message, size_t length,
+                                   const void *codeptr_ra) {
+  printf("%" PRIu64 ": ompt_event_runtime_error: severity=%" PRIu32
+         ", message=%s, length=%" PRIu64 ", codeptr_ra=%p\n",
+         ompt_get_thread_data()->value, severity, message, (uint64_t)length,
+         codeptr_ra);
+}
+
 int ompt_initialize(
   ompt_function_lookup_t lookup,
   int initial_device_num,
@@ -1150,29 +1072,31 @@ int ompt_initialize(
   ompt_enumerate_states = (ompt_enumerate_states_t) lookup("ompt_enumerate_states");
   ompt_enumerate_mutex_impls = (ompt_enumerate_mutex_impls_t) lookup("ompt_enumerate_mutex_impls");
 
-  register_callback(ompt_callback_mutex_acquire);
-  register_callback_t(ompt_callback_mutex_acquired, ompt_callback_mutex_t);
-  register_callback_t(ompt_callback_mutex_released, ompt_callback_mutex_t);
-  register_callback(ompt_callback_nest_lock);
-  register_callback(ompt_callback_sync_region);
-  register_callback_t(ompt_callback_sync_region_wait, ompt_callback_sync_region_t);
-  register_callback_t(ompt_callback_reduction, ompt_callback_sync_region_t);
-  register_callback(ompt_callback_control_tool);
-  register_callback(ompt_callback_flush);
-  register_callback(ompt_callback_cancel);
-  register_callback(ompt_callback_implicit_task);
-  register_callback_t(ompt_callback_lock_init, ompt_callback_mutex_acquire_t);
-  register_callback_t(ompt_callback_lock_destroy, ompt_callback_mutex_t);
-  register_callback(ompt_callback_work);
-  register_callback(ompt_callback_masked);
-  register_callback(ompt_callback_parallel_begin);
-  register_callback(ompt_callback_parallel_end);
-  register_callback(ompt_callback_task_create);
-  register_callback(ompt_callback_task_schedule);
-  register_callback(ompt_callback_dependences);
-  register_callback(ompt_callback_task_dependence);
-  register_callback(ompt_callback_thread_begin);
-  register_callback(ompt_callback_thread_end);
+  register_ompt_callback(ompt_callback_mutex_acquire);
+  register_ompt_callback_t(ompt_callback_mutex_acquired, ompt_callback_mutex_t);
+  register_ompt_callback_t(ompt_callback_mutex_released, ompt_callback_mutex_t);
+  register_ompt_callback(ompt_callback_nest_lock);
+  register_ompt_callback(ompt_callback_sync_region);
+  register_ompt_callback_t(ompt_callback_sync_region_wait, ompt_callback_sync_region_t);
+  register_ompt_callback_t(ompt_callback_reduction, ompt_callback_sync_region_t);
+  register_ompt_callback(ompt_callback_control_tool);
+  register_ompt_callback(ompt_callback_flush);
+  register_ompt_callback(ompt_callback_cancel);
+  register_ompt_callback(ompt_callback_implicit_task);
+  register_ompt_callback_t(ompt_callback_lock_init, ompt_callback_mutex_acquire_t);
+  register_ompt_callback_t(ompt_callback_lock_destroy, ompt_callback_mutex_t);
+  register_ompt_callback(ompt_callback_work);
+  register_ompt_callback(ompt_callback_dispatch);
+  register_ompt_callback(ompt_callback_masked);
+  register_ompt_callback(ompt_callback_parallel_begin);
+  register_ompt_callback(ompt_callback_parallel_end);
+  register_ompt_callback(ompt_callback_task_create);
+  register_ompt_callback(ompt_callback_task_schedule);
+  register_ompt_callback(ompt_callback_dependences);
+  register_ompt_callback(ompt_callback_task_dependence);
+  register_ompt_callback(ompt_callback_thread_begin);
+  register_ompt_callback(ompt_callback_thread_end);
+  register_ompt_callback(ompt_callback_error);
   printf("0: NULL_POINTER=%p\n", (void*)NULL);
   return 1; //success
 }

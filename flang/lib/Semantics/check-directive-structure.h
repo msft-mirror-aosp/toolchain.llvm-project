@@ -15,6 +15,7 @@
 #include "flang/Common/enum-set.h"
 #include "flang/Semantics/semantics.h"
 #include "flang/Semantics/tools.h"
+#include "llvm/ADT/iterator_range.h"
 
 #include <unordered_map>
 
@@ -36,8 +37,8 @@ public:
       parser::CharBlock sourcePosition, D directive,
       std::string &&upperCaseDirName)
       : context_{context}, sourcePosition_{sourcePosition},
-        upperCaseDirName_{std::move(upperCaseDirName)}, currentDirective_{
-                                                            directive} {}
+        upperCaseDirName_{std::move(upperCaseDirName)},
+        currentDirective_{directive}, numDoConstruct_{0} {}
   template <typename T> bool Pre(const T &) { return true; }
   template <typename T> void Post(const T &) {}
 
@@ -46,13 +47,58 @@ public:
     return true;
   }
 
+  bool Pre(const parser::DoConstruct &) {
+    numDoConstruct_++;
+    return true;
+  }
+  void Post(const parser::DoConstruct &) { numDoConstruct_--; }
   void Post(const parser::ReturnStmt &) { EmitBranchOutError("RETURN"); }
   void Post(const parser::ExitStmt &exitStmt) {
     if (const auto &exitName{exitStmt.v}) {
       CheckConstructNameBranching("EXIT", exitName.value());
+    } else {
+      CheckConstructNameBranching("EXIT");
     }
   }
-  void Post(const parser::StopStmt &) { EmitBranchOutError("STOP"); }
+  void Post(const parser::CycleStmt &cycleStmt) {
+    if (const auto &cycleName{cycleStmt.v}) {
+      CheckConstructNameBranching("CYCLE", cycleName.value());
+    } else {
+      if constexpr (std::is_same_v<D, llvm::omp::Directive>) {
+        switch ((llvm::omp::Directive)currentDirective_) {
+        // exclude directives which do not need a check for unlabelled CYCLES
+        case llvm::omp::Directive::OMPD_do:
+        case llvm::omp::Directive::OMPD_simd:
+        case llvm::omp::Directive::OMPD_parallel_do:
+        case llvm::omp::Directive::OMPD_parallel_do_simd:
+        case llvm::omp::Directive::OMPD_distribute_parallel_do:
+        case llvm::omp::Directive::OMPD_distribute_parallel_do_simd:
+        case llvm::omp::Directive::OMPD_distribute_parallel_for:
+        case llvm::omp::Directive::OMPD_distribute_simd:
+        case llvm::omp::Directive::OMPD_distribute_parallel_for_simd:
+        case llvm::omp::Directive::OMPD_target_teams_distribute_parallel_do:
+        case llvm::omp::Directive::
+            OMPD_target_teams_distribute_parallel_do_simd:
+          return;
+        default:
+          break;
+        }
+      } else if constexpr (std::is_same_v<D, llvm::acc::Directive>) {
+        switch ((llvm::acc::Directive)currentDirective_) {
+        // exclude loop directives which do not need a check for unlabelled
+        // CYCLES
+        case llvm::acc::Directive::ACCD_loop:
+        case llvm::acc::Directive::ACCD_kernels_loop:
+        case llvm::acc::Directive::ACCD_parallel_loop:
+        case llvm::acc::Directive::ACCD_serial_loop:
+          return;
+        default:
+          break;
+        }
+      }
+      CheckConstructNameBranching("CYCLE");
+    }
+  }
 
 private:
   parser::MessageFormattedText GetEnclosingMsg() const {
@@ -64,6 +110,14 @@ private:
         .Say(currentStatementSourcePosition_,
             "%s statement is not allowed in a %s construct"_err_en_US, stmt,
             upperCaseDirName_)
+        .Attach(sourcePosition_, GetEnclosingMsg());
+  }
+
+  inline void EmitUnlabelledBranchOutError(const char *stmt) {
+    context_
+        .Say(currentStatementSourcePosition_,
+            "%s to construct outside of %s construct is not allowed"_err_en_US,
+            stmt, upperCaseDirName_)
         .Attach(sourcePosition_, GetEnclosingMsg());
   }
 
@@ -98,27 +152,41 @@ private:
     }
   }
 
+  // Check branching for unlabelled CYCLES and EXITs
+  void CheckConstructNameBranching(const char *stmt) {
+    // found an enclosing looping construct for the unlabelled EXIT/CYCLE
+    if (numDoConstruct_ > 0) {
+      return;
+    }
+    // did not found an enclosing looping construct within the OpenMP/OpenACC
+    // directive
+    EmitUnlabelledBranchOutError(stmt);
+  }
+
   SemanticsContext &context_;
   parser::CharBlock currentStatementSourcePosition_;
   parser::CharBlock sourcePosition_;
   std::string upperCaseDirName_;
   D currentDirective_;
+  int numDoConstruct_; // tracks number of DoConstruct found AFTER encountering
+                       // an OpenMP/OpenACC directive
 };
 
 // Generic structure checker for directives/clauses language such as OpenMP
 // and OpenACC.
 // typename D is the directive enumeration.
-// tyepname C is the clause enumeration.
+// typename C is the clause enumeration.
 // typename PC is the parser class defined in parse-tree.h for the clauses.
 template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
 class DirectiveStructureChecker : public virtual BaseChecker {
 protected:
   DirectiveStructureChecker(SemanticsContext &context,
-      std::unordered_map<D, DirectiveClauses<C, ClauseEnumSize>>
-          directiveClausesMap)
+      const std::unordered_map<D, DirectiveClauses<C, ClauseEnumSize>>
+          &directiveClausesMap)
       : context_{context}, directiveClausesMap_(directiveClausesMap) {}
   virtual ~DirectiveStructureChecker() {}
 
+  using ClauseMapTy = std::multimap<C, const PC *>;
   struct DirectiveContext {
     DirectiveContext(parser::CharBlock source, D d)
         : directiveSource{source}, directive{d} {}
@@ -132,14 +200,23 @@ protected:
     common::EnumSet<C, ClauseEnumSize> requiredClauses{};
 
     const PC *clause{nullptr};
-    std::multimap<C, const PC *> clauseInfo;
+    ClauseMapTy clauseInfo;
     std::list<C> actualClauses;
+    std::list<C> crtGroup;
+    Symbol *loopIV{nullptr};
   };
+
+  void SetLoopIv(Symbol *symbol) { GetContext().loopIV = symbol; }
 
   // back() is the top of the stack
   DirectiveContext &GetContext() {
     CHECK(!dirContext_.empty());
     return dirContext_.back();
+  }
+
+  DirectiveContext &GetContextParent() {
+    CHECK(dirContext_.size() >= 2);
+    return dirContext_[dirContext_.size() - 2];
   }
 
   void SetContextClause(const PC &clause) {
@@ -155,6 +232,7 @@ protected:
     GetContext().allowedExclusiveClauses = {};
     GetContext().requiredClauses = {};
     GetContext().clauseInfo = {};
+    GetContext().loopIV = {nullptr};
   }
 
   void SetContextDirectiveSource(const parser::CharBlock &directive) {
@@ -189,10 +267,43 @@ protected:
     GetContext().actualClauses.push_back(type);
   }
 
-  const PC *FindClause(C type) {
-    auto it{GetContext().clauseInfo.find(type)};
-    if (it != GetContext().clauseInfo.end()) {
+  void AddClauseToCrtGroupInContext(C type) {
+    GetContext().crtGroup.push_back(type);
+  }
+
+  void ResetCrtGroup() { GetContext().crtGroup.clear(); }
+
+  // Check if the given clause is present in the current context
+  const PC *FindClause(C type) { return FindClause(GetContext(), type); }
+
+  // Check if the given clause is present in the given context
+  const PC *FindClause(DirectiveContext &context, C type) {
+    auto it{context.clauseInfo.find(type)};
+    if (it != context.clauseInfo.end()) {
       return it->second;
+    }
+    return nullptr;
+  }
+
+  // Check if the given clause is present in the parent context
+  const PC *FindClauseParent(C type) {
+    auto it{GetContextParent().clauseInfo.find(type)};
+    if (it != GetContextParent().clauseInfo.end()) {
+      return it->second;
+    }
+    return nullptr;
+  }
+
+  llvm::iterator_range<typename ClauseMapTy::iterator> FindClauses(C type) {
+    auto it{GetContext().clauseInfo.equal_range(type)};
+    return llvm::make_range(it);
+  }
+
+  DirectiveContext *GetEnclosingDirContext() {
+    CHECK(!dirContext_.empty());
+    auto it{dirContext_.rbegin()};
+    if (++it != dirContext_.rend()) {
+      return &(*it);
     }
     return nullptr;
   }
@@ -201,7 +312,18 @@ protected:
     dirContext_.emplace_back(source, dir);
   }
 
-  bool CurrentDirectiveIsNested() { return dirContext_.size() > 0; };
+  DirectiveContext *GetEnclosingContextWithDir(D dir) {
+    CHECK(!dirContext_.empty());
+    auto it{dirContext_.rbegin()};
+    while (++it != dirContext_.rend()) {
+      if (it->directive == dir) {
+        return &(*it);
+      }
+    }
+    return nullptr;
+  }
+
+  bool CurrentDirectiveIsNested() { return dirContext_.size() > 1; };
 
   void SetClauseSets(D dir) {
     dirContext_.back().allowedClauses = directiveClausesMap_[dir].allowed;
@@ -226,17 +348,26 @@ protected:
       SayNotMatching(beginDir.source, endDir.source);
     }
   }
+  // Check illegal branching out of `Parser::Block` for `Parser::Name` based
+  // nodes (example `Parser::ExitStmt`)
   void CheckNoBranching(const parser::Block &block, D directive,
       const parser::CharBlock &directiveSource);
 
   // Check that only clauses in set are after the specific clauses.
   void CheckOnlyAllowedAfter(C clause, common::EnumSet<C, ClauseEnumSize> set);
 
-  void CheckRequired(C clause);
+  void CheckRequireAtLeastOneOf(bool warnInsteadOfError = false);
 
-  void CheckRequireAtLeastOneOf();
+  // Check if a clause is allowed on a directive. Returns true if is and
+  // false otherwise.
+  bool CheckAllowed(C clause, bool warnInsteadOfError = false);
 
-  void CheckAllowed(C clause);
+  // Check that the clause appears only once. The counter is reset when the
+  // separator clause appears.
+  void CheckAllowedOncePerGroup(C clause, C separator);
+
+  void CheckMutuallyExclusivePerGroup(
+      C clause, C separator, common::EnumSet<C, ClauseEnumSize> set);
 
   void CheckAtLeastOneClause();
 
@@ -325,16 +456,28 @@ DirectiveStructureChecker<D, C, PC, ClauseEnumSize>::ClauseSetToString(
 // directive.
 template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
 void DirectiveStructureChecker<D, C, PC,
-    ClauseEnumSize>::CheckRequireAtLeastOneOf() {
+    ClauseEnumSize>::CheckRequireAtLeastOneOf(bool warnInsteadOfError) {
+  if (GetContext().requiredClauses.empty()) {
+    return;
+  }
   for (auto cl : GetContext().actualClauses) {
-    if (GetContext().requiredClauses.test(cl))
+    if (GetContext().requiredClauses.test(cl)) {
       return;
+    }
   }
   // No clause matched in the actual clauses list
-  context_.Say(GetContext().directiveSource,
-      "At least one of %s clause must appear on the %s directive"_err_en_US,
-      ClauseSetToString(GetContext().requiredClauses),
-      ContextDirectiveAsFortran());
+  if (warnInsteadOfError) {
+    context_.Warn(common::UsageWarning::Portability,
+        GetContext().directiveSource,
+        "At least one of %s clause should appear on the %s directive"_port_en_US,
+        ClauseSetToString(GetContext().requiredClauses),
+        ContextDirectiveAsFortran());
+  } else {
+    context_.Say(GetContext().directiveSource,
+        "At least one of %s clause must appear on the %s directive"_err_en_US,
+        ClauseSetToString(GetContext().requiredClauses),
+        ContextDirectiveAsFortran());
+  }
 }
 
 template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
@@ -346,17 +489,25 @@ std::string DirectiveStructureChecker<D, C, PC,
 
 // Check that clauses present on the directive are allowed clauses.
 template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
-void DirectiveStructureChecker<D, C, PC, ClauseEnumSize>::CheckAllowed(
-    C clause) {
+bool DirectiveStructureChecker<D, C, PC, ClauseEnumSize>::CheckAllowed(
+    C clause, bool warnInsteadOfError) {
   if (!GetContext().allowedClauses.test(clause) &&
       !GetContext().allowedOnceClauses.test(clause) &&
       !GetContext().allowedExclusiveClauses.test(clause) &&
       !GetContext().requiredClauses.test(clause)) {
-    context_.Say(GetContext().clauseSource,
-        "%s clause is not allowed on the %s directive"_err_en_US,
-        parser::ToUpperCaseLetters(getClauseName(clause).str()),
-        parser::ToUpperCaseLetters(GetContext().directiveSource.ToString()));
-    return;
+    if (warnInsteadOfError) {
+      context_.Warn(common::UsageWarning::Portability,
+          GetContext().clauseSource,
+          "%s clause is not allowed on the %s directive and will be ignored"_port_en_US,
+          parser::ToUpperCaseLetters(getClauseName(clause).str()),
+          parser::ToUpperCaseLetters(GetContext().directiveSource.ToString()));
+    } else {
+      context_.Say(GetContext().clauseSource,
+          "%s clause is not allowed on the %s directive"_err_en_US,
+          parser::ToUpperCaseLetters(getClauseName(clause).str()),
+          parser::ToUpperCaseLetters(GetContext().directiveSource.ToString()));
+    }
+    return false;
   }
   if ((GetContext().allowedOnceClauses.test(clause) ||
           GetContext().allowedExclusiveClauses.test(clause)) &&
@@ -365,7 +516,7 @@ void DirectiveStructureChecker<D, C, PC, ClauseEnumSize>::CheckAllowed(
         "At most one %s clause can appear on the %s directive"_err_en_US,
         parser::ToUpperCaseLetters(getClauseName(clause).str()),
         parser::ToUpperCaseLetters(GetContext().directiveSource.ToString()));
-    return;
+    return false;
   }
   if (GetContext().allowedExclusiveClauses.test(clause)) {
     std::vector<C> others;
@@ -383,11 +534,13 @@ void DirectiveStructureChecker<D, C, PC, ClauseEnumSize>::CheckAllowed(
           parser::ToUpperCaseLetters(GetContext().directiveSource.ToString()));
     }
     if (!others.empty()) {
-      return;
+      return false;
     }
   }
   SetContextClauseInfo(clause);
   AddClauseToCrtContext(clause);
+  AddClauseToCrtGroupInContext(clause);
+  return true;
 }
 
 // Enforce restriction where clauses in the given set are not allowed if the
@@ -396,9 +549,7 @@ template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
 void DirectiveStructureChecker<D, C, PC,
     ClauseEnumSize>::CheckNotAllowedIfClause(C clause,
     common::EnumSet<C, ClauseEnumSize> set) {
-  if (std::find(GetContext().actualClauses.begin(),
-          GetContext().actualClauses.end(),
-          clause) == GetContext().actualClauses.end()) {
+  if (!llvm::is_contained(GetContext().actualClauses, clause)) {
     return; // Clause is not present
   }
 
@@ -408,6 +559,58 @@ void DirectiveStructureChecker<D, C, PC,
           "Clause %s is not allowed if clause %s appears on the %s directive"_err_en_US,
           parser::ToUpperCaseLetters(getClauseName(cl).str()),
           parser::ToUpperCaseLetters(getClauseName(clause).str()),
+          ContextDirectiveAsFortran());
+    }
+  }
+}
+
+template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
+void DirectiveStructureChecker<D, C, PC,
+    ClauseEnumSize>::CheckAllowedOncePerGroup(C clause, C separator) {
+  bool clauseIsPresent = false;
+  for (auto cl : GetContext().actualClauses) {
+    if (cl == clause) {
+      if (clauseIsPresent) {
+        context_.Say(GetContext().clauseSource,
+            "At most one %s clause can appear on the %s directive or in group separated by the %s clause"_err_en_US,
+            parser::ToUpperCaseLetters(getClauseName(clause).str()),
+            parser::ToUpperCaseLetters(GetContext().directiveSource.ToString()),
+            parser::ToUpperCaseLetters(getClauseName(separator).str()));
+      } else {
+        clauseIsPresent = true;
+      }
+    }
+    if (cl == separator)
+      clauseIsPresent = false;
+  }
+}
+
+template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
+void DirectiveStructureChecker<D, C, PC,
+    ClauseEnumSize>::CheckMutuallyExclusivePerGroup(C clause, C separator,
+    common::EnumSet<C, ClauseEnumSize> set) {
+
+  // Checking of there is any offending clauses before the first separator.
+  for (auto cl : GetContext().actualClauses) {
+    if (cl == separator) {
+      break;
+    }
+    if (set.test(cl)) {
+      context_.Say(GetContext().directiveSource,
+          "Clause %s is not allowed if clause %s appears on the %s directive"_err_en_US,
+          parser::ToUpperCaseLetters(getClauseName(clause).str()),
+          parser::ToUpperCaseLetters(getClauseName(cl).str()),
+          ContextDirectiveAsFortran());
+    }
+  }
+
+  // Checking for mutually exclusive clauses in the current group.
+  for (auto cl : GetContext().crtGroup) {
+    if (set.test(cl)) {
+      context_.Say(GetContext().directiveSource,
+          "Clause %s is not allowed if clause %s appears on the %s directive"_err_en_US,
+          parser::ToUpperCaseLetters(getClauseName(clause).str()),
+          parser::ToUpperCaseLetters(getClauseName(cl).str()),
           ContextDirectiveAsFortran());
     }
   }
@@ -447,24 +650,13 @@ void DirectiveStructureChecker<D, C, PC, ClauseEnumSize>::SayNotMatching(
       .Attach(beginSource, "Does not match directive"_en_US);
 }
 
-// Check that at least one of the required clauses is present on the directive.
-template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
-void DirectiveStructureChecker<D, C, PC, ClauseEnumSize>::CheckRequired(C c) {
-  if (!FindClause(c)) {
-    context_.Say(GetContext().directiveSource,
-        "At least one %s clause must appear on the %s directive"_err_en_US,
-        parser::ToUpperCaseLetters(getClauseName(c).str()),
-        ContextDirectiveAsFortran());
-  }
-}
-
 // Check the value of the clause is a positive parameter.
 template <typename D, typename C, typename PC, std::size_t ClauseEnumSize>
 void DirectiveStructureChecker<D, C, PC,
     ClauseEnumSize>::RequiresPositiveParameter(const C &clause,
     const parser::ScalarIntExpr &i, llvm::StringRef paramName) {
   if (const auto v{GetIntValue(i)}) {
-    if (*v <= 0) {
+    if (*v < 0) {
       context_.Say(GetContext().clauseSource,
           "The %s of the %s clause must be "
           "a positive integer expression"_err_en_US,

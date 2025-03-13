@@ -336,3 +336,46 @@ entry:
   ret i32 %xor
 }
 
+define i32 @csinc_to_csinv(i32 %a) {
+; CHECK-LABEL: csinc_to_csinv:
+; CHECK:       @ %bb.0: @ %entry
+; CHECK-NEXT:    cmp r0, #46
+; CHECK-NEXT:    csetm r0, lt
+; CHECK-NEXT:    bx lr
+entry:
+  %cmp = icmp sgt i32 %a, 45
+  %spec.select = select i1 %cmp, i32 0, i32 1
+  %s = sub i32 0, %spec.select
+  ret i32 %s
+}
+
+define i32 @csinc_to_csinv_multi(i32 %a) {
+; CHECK-LABEL: csinc_to_csinv_multi:
+; CHECK:       @ %bb.0: @ %entry
+; CHECK-NEXT:    cmp r0, #46
+; CHECK-NEXT:    cset r0, lt
+; CHECK-NEXT:    rsbs r1, r0, #0
+; CHECK-NEXT:    eors r0, r1
+; CHECK-NEXT:    bx lr
+entry:
+  %cmp = icmp sgt i32 %a, 45
+  %spec.select = select i1 %cmp, i32 0, i32 1
+  %s = sub i32 0, %spec.select
+  %t = xor i32 %s, %spec.select
+  ret i32 %t
+}
+
+define i32 @test_known_bits(i32 %a, i32 %b) {
+; CHECK-LABEL: test_known_bits:
+; CHECK:       @ %bb.0: @ %entry
+; CHECK-NEXT:    movs r2, #1
+; CHECK-NEXT:    cmp r0, #0
+; CHECK-NEXT:    cneg r0, r2, mi
+; CHECK-NEXT:    add r0, r1
+; CHECK-NEXT:    bx lr
+entry:
+  %c = icmp slt i32 %a, 0
+  %s = select i1 %c, i32 -1, i32 1
+  %t = add i32 %s, %b
+  ret i32 %t
+}

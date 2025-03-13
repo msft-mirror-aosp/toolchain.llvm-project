@@ -1,4 +1,5 @@
 // RUN: %clang_cc1 -fsyntax-only -verify -Wswitch-enum -Wcovered-switch-default -triple x86_64-linux-gnu %s
+// RUN: %clang_cc1 -fsyntax-only -verify -Wswitch-enum -Wcovered-switch-default -triple x86_64-linux-gnu %s -fexperimental-new-constant-interpreter
 void f (int z) { 
   while (z) { 
     default: z--;            // expected-error {{statement not in switch}}
@@ -29,9 +30,9 @@ void test3(void) {
               // expected-note{{put the semicolon on a separate line to silence this warning}}
 }
 
-extern int g();
+extern int g(void);
 
-void test4()
+void test4(void)
 {
   int cond;
   switch (cond) {
@@ -73,7 +74,7 @@ void test5(int z) {
   }
 } 
 
-void test6() {
+void test6(void) {
   char ch = 'a';
   switch(ch) {
     case 1234:  // expected-warning {{overflow converting case value}}
@@ -92,7 +93,7 @@ int f0(int var) {
   return 2;
 }
 
-void test7() {
+void test7(void) {
   enum {
     A = 1,
     B
@@ -109,14 +110,14 @@ void test7() {
   switch(a) {
     case A:
     case B:
-    case 3: // expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 3: // expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
       break;
   }
   switch(a) {
     case A:
     case B:
-    case 3 ... //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
-        4: //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 3 ... //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
+        4: //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
       break;
   }
   switch(a) {
@@ -124,22 +125,22 @@ void test7() {
       break;
   }
   switch(a) {
-    case 0 ... 2: //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 0 ... 2: //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
       break;
   }
   switch(a) {
-    case 1 ... 3: //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 1 ... 3: //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
       break;
   }
   switch(a) {
-    case 0 ...  //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
-      3:  //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 0 ...  //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
+      3:  //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
       break;
   }
 
 }
 
-void test8() {
+void test8(void) {
   enum {
     A,
     B,
@@ -161,22 +162,22 @@ void test8() {
   }
 }
 
-void test9() {
+void test9(void) {
   enum {
     A = 3,
     C = 1
   } a;
   switch(a) {
-    case 0: //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 0: //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
     case 1:
-    case 2: //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 2: //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
     case 3:
-    case 4: //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 4: //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
       break;
   }
 }
 
-void test10() {
+void test10(void) {
   enum {
     A = 10,
     C = 2,
@@ -184,19 +185,19 @@ void test10() {
     D = 12
   } a;
   switch(a) {
-    case 0 ...  //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
-	    1:  //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 0 ...  //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
+	    1:  //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
     case 2 ... 4:
-    case 5 ...  //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}	
-	      9:  //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 5 ...  //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}	
+	      9:  //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
     case 10 ... 12:
-    case 13 ...  //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
-              16: //expected-warning{{case value not in enumerated type 'enum (anonymous enum}}
+    case 13 ...  //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
+              16: //expected-warning{{case value not in enumerated type 'enum (unnamed enum}}
       break;
   }
 }
 
-void test11() {
+void test11(void) {
   enum {
     A = -1,
     B,
@@ -218,7 +219,7 @@ void test11() {
   }
 }
 
-void test12() {
+void test12(void) {
   enum {
     A = -1,
     B = 4294967286
@@ -230,7 +231,6 @@ void test12() {
   }
 }
 
-// <rdar://problem/7643909>
 typedef enum {
     val1,
     val2,
@@ -247,7 +247,6 @@ int test13(my_type_t t) {
   return -1;
 }
 
-// <rdar://problem/7658121>
 enum {
   EC0 = 0xFFFF0000,
   EC1 = 0xFFFF0001,
@@ -268,7 +267,7 @@ void f1(unsigned x) {
   }
 }
 
-void test15() {
+void test15(void) {
   int i = 0;
   switch (1) { // expected-warning {{no case matching constant switch condition '1'}}
   case 0: i = 0; break;
@@ -276,7 +275,7 @@ void test15() {
   }
 }
 
-void test16() {
+void test16(void) {
   const char c = '5';
   switch (c) { // expected-warning {{no case matching constant switch condition '53'}}
   case '6': return;
@@ -305,7 +304,7 @@ void test17(int x) {
   }
 }
 
-int test18() {
+int test18(void) {
   enum { A, B } a;
   switch (a) {
   case A: return 0;
@@ -315,7 +314,6 @@ int test18() {
   }
 }
 
-// rdar://110822110
 typedef enum {
         kOne = 1,
 } Ints;

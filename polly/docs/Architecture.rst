@@ -27,7 +27,7 @@ executed in the so-called **Inliner cycle**, This is again a set of **Scalar
 Simplification** passes, a set of **Simple Loop Optimizations**, and the
 **Inliner** itself. Even though these passes make up the majority of the LLVM
 pass pipeline, the primary goal of these passes is still canonicalization
-without loosing semantic information that complicates later analysis. As part of
+without losing semantic information that complicates later analysis. As part of
 the inliner cycle, the LLVM inliner step-by-step tries to inline functions, runs
 canonicalization passes to exploit newly exposed simplification opportunities,
 and then tries to inline the further simplified functions. Some simple loop
@@ -68,7 +68,7 @@ benefit if Polly is scheduled at this position. The additional set of
 canonicalization passes required will result in a small, but general compile
 time increase and some random run-time performance changes due to slightly
 different IR being passed through the optimizers. To force Polly to run early in
-the pass pipleline use the option *-polly-position=early* (default today).
+the pass pipeline use the option *-polly-position=early* (default today).
 
 .. image:: images/LLVM-Passes-early.png
     :align: center
@@ -83,7 +83,7 @@ kernels is generally very fast and the actual optimization and cleanup passes
 are only run on functions which contain loop kernels that are worth optimizing.
 However, due to the many optimizations that LLVM runs before Polly the IR that
 reaches Polly often has additional scalar dependences that make Polly a lot less
-efficient. To force Polly to run before the vectorizer in the pass pipleline use
+efficient. To force Polly to run before the vectorizer in the pass pipeline use
 the option *-polly-position=before-vectorizer*. This position is not yet the
 default for Polly, but work is on its way to be effective even in presence of
 scalar dependences. After this work has been completed, Polly will likely use

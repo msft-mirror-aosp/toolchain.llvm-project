@@ -32,7 +32,7 @@ TEST(LICMTest, TestSCEVInvalidationOnHoisting) {
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  StringRef PipelineStr = "require<opt-remark-emit>,loop(licm)";
+  StringRef PipelineStr = "require<opt-remark-emit>,loop-mssa(licm)";
   ASSERT_THAT_ERROR(PB.parsePassPipeline(MPM, PipelineStr), Succeeded());
 
   SMDiagnostic Error;
@@ -63,7 +63,7 @@ TEST(LICMTest, TestSCEVInvalidationOnHoisting) {
   BasicBlock *LoopBB = EntryBB.getUniqueSuccessor();
 
   // Select `load i64, i64* %ptr`.
-  Instruction *IBefore = LoopBB->getFirstNonPHI();
+  Instruction *IBefore = &*LoopBB->getFirstNonPHIIt();
   // Make sure the right instruction was selected.
   ASSERT_TRUE(isa<LoadInst>(IBefore));
   // Upon this query SCEV caches disposition of <load i64, i64* %ptr> SCEV.
@@ -73,7 +73,7 @@ TEST(LICMTest, TestSCEVInvalidationOnHoisting) {
   MPM.run(*M, MAM);
 
   // Select `load i64, i64* %ptr` after it was hoisted.
-  Instruction *IAfter = EntryBB.getFirstNonPHI();
+  Instruction *IAfter = &*EntryBB.getFirstNonPHIIt();
   // Make sure the right instruction was selected.
   ASSERT_TRUE(isa<LoadInst>(IAfter));
 

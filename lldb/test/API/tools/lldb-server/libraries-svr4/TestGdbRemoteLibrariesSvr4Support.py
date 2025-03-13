@@ -1,18 +1,16 @@
 import xml.etree.ElementTree as ET
-
 import gdbremote_testcase
 from lldbsuite.test.decorators import *
 from lldbsuite.test.lldbtest import *
 
 
+# Windows does not allow quotes in file names.
+@skipIf(hostoslist=["windows"])
+@skipIfRemote
 class TestGdbRemoteLibrariesSvr4Support(gdbremote_testcase.GdbRemoteTestCaseBase):
-
-    mydir = TestBase.compute_mydir(__file__)
-
     FEATURE_NAME = "qXfer:libraries-svr4:read"
 
     def setup_test(self):
-        self.init_llgs_test()
         self.build()
         self.set_inferior_startup_launch()
         env = {}
@@ -77,7 +75,7 @@ class TestGdbRemoteLibrariesSvr4Support(gdbremote_testcase.GdbRemoteTestCaseBase
         self.assertEqual(xml_root.tag, "library-list-svr4")
         for child in xml_root:
             self.assertEqual(child.tag, "library")
-            self.assertItemsEqual(child.attrib.keys(), ["name", "lm", "l_addr", "l_ld"])
+            self.assertCountEqual(child.attrib.keys(), ["name", "lm", "l_addr", "l_ld"])
 
     def libraries_svr4_has_correct_load_addr(self):
         xml_root = self.get_libraries_svr4_xml()
@@ -103,29 +101,27 @@ class TestGdbRemoteLibrariesSvr4Support(gdbremote_testcase.GdbRemoteTestCaseBase
             name = child.attrib.get("name")
             libraries_svr4_names.append(os.path.realpath(name))
         for lib in self.get_expected_libs():
-            self.assertIn(os.path.realpath(self.getBuildDir() + "/" + lib), libraries_svr4_names)
+            self.assertIn(
+                os.path.realpath(self.getBuildDir() + "/" + lib), libraries_svr4_names
+            )
 
-    @llgs_test
     @skipUnlessPlatform(["linux", "android", "freebsd", "netbsd"])
     def test_supports_libraries_svr4(self):
         self.setup_test()
         self.assertTrue(self.has_libraries_svr4_support())
 
-    @llgs_test
     @skipUnlessPlatform(["linux", "android", "freebsd", "netbsd"])
     @expectedFailureNetBSD
     def test_libraries_svr4_well_formed(self):
         self.setup_test()
         self.libraries_svr4_well_formed()
 
-    @llgs_test
     @skipUnlessPlatform(["linux", "android", "freebsd", "netbsd"])
-    @expectedFailureAll(oslist=["freebsd", "netbsd"])
+    @expectedFailureNetBSD
     def test_libraries_svr4_load_addr(self):
         self.setup_test()
         self.libraries_svr4_has_correct_load_addr()
 
-    @llgs_test
     @skipUnlessPlatform(["linux", "android", "freebsd", "netbsd"])
     @expectedFailureNetBSD
     def test_libraries_svr4_libs_present(self):

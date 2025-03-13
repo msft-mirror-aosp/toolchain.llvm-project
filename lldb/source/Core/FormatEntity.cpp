@@ -13,8 +13,6 @@
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/DumpRegisterValue.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/ValueObject.h"
-#include "lldb/Core/ValueObjectVariable.h"
 #include "lldb/DataFormatters/DataVisualization.h"
 #include "lldb/DataFormatters/FormatClasses.h"
 #include "lldb/DataFormatters/FormatManager.h"
@@ -41,28 +39,33 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/AnsiTerminal.h"
 #include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/CompletionRequest.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Logging.h"
 #include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/Status.h"
 #include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/StringList.h"
 #include "lldb/Utility/StructuredData.h"
+#include "lldb/ValueObject/ValueObject.h"
+#include "lldb/ValueObject/ValueObjectVariable.h"
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-forward.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Regex.h"
+#include "llvm/TargetParser/Triple.h"
 
-#include <ctype.h>
-#include <inttypes.h>
+#include <cctype>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <type_traits>
 #include <utility>
 
@@ -76,203 +79,197 @@ struct RegisterInfo;
 using namespace lldb;
 using namespace lldb_private;
 
+using Definition = lldb_private::FormatEntity::Entry::Definition;
+using Entry = FormatEntity::Entry;
+using EntryType = FormatEntity::Entry::Type;
+
 enum FileKind { FileError = 0, Basename, Dirname, Fullpath };
 
-#define ENTRY(n, t)                                                            \
-  { n, nullptr, FormatEntity::Entry::Type::t, 0, 0, nullptr, false }
-#define ENTRY_VALUE(n, t, v)                                                   \
-  { n, nullptr, FormatEntity::Entry::Type::t, v, 0, nullptr, false }
-#define ENTRY_CHILDREN(n, t, c)                                                \
-  {                                                                            \
-    n, nullptr, FormatEntity::Entry::Type::t, 0,                               \
-        static_cast<uint32_t>(llvm::array_lengthof(c)), c, false               \
-  }
-#define ENTRY_CHILDREN_KEEP_SEP(n, t, c)                                       \
-  {                                                                            \
-    n, nullptr, FormatEntity::Entry::Type::t, 0,                               \
-        static_cast<uint32_t>(llvm::array_lengthof(c)), c, true                \
-  }
-#define ENTRY_STRING(n, s)                                                     \
-  { n, s, FormatEntity::Entry::Type::EscapeCode, 0, 0, nullptr, false }
-static FormatEntity::Entry::Definition g_string_entry[] = {
-    ENTRY("*", ParentString)};
+constexpr Definition g_string_entry[] = {
+    Definition("*", EntryType::ParentString)};
 
-static FormatEntity::Entry::Definition g_addr_entries[] = {
-    ENTRY("load", AddressLoad),
-    ENTRY("file", AddressFile),
-    ENTRY("load", AddressLoadOrFile),
+constexpr Definition g_addr_entries[] = {
+    Definition("load", EntryType::AddressLoad),
+    Definition("file", EntryType::AddressFile)};
+
+constexpr Definition g_file_child_entries[] = {
+    Definition("basename", EntryType::ParentNumber, FileKind::Basename),
+    Definition("dirname", EntryType::ParentNumber, FileKind::Dirname),
+    Definition("fullpath", EntryType::ParentNumber, FileKind::Fullpath)};
+
+constexpr Definition g_frame_child_entries[] = {
+    Definition("index", EntryType::FrameIndex),
+    Definition("pc", EntryType::FrameRegisterPC),
+    Definition("fp", EntryType::FrameRegisterFP),
+    Definition("sp", EntryType::FrameRegisterSP),
+    Definition("flags", EntryType::FrameRegisterFlags),
+    Definition("no-debug", EntryType::FrameNoDebug),
+    Entry::DefinitionWithChildren("reg", EntryType::FrameRegisterByName,
+                                  g_string_entry),
+    Definition("is-artificial", EntryType::FrameIsArtificial),
 };
 
-static FormatEntity::Entry::Definition g_file_child_entries[] = {
-    ENTRY_VALUE("basename", ParentNumber, FileKind::Basename),
-    ENTRY_VALUE("dirname", ParentNumber, FileKind::Dirname),
-    ENTRY_VALUE("fullpath", ParentNumber, FileKind::Fullpath)};
+constexpr Definition g_function_child_entries[] = {
+    Definition("id", EntryType::FunctionID),
+    Definition("name", EntryType::FunctionName),
+    Definition("name-without-args", EntryType::FunctionNameNoArgs),
+    Definition("name-with-args", EntryType::FunctionNameWithArgs),
+    Definition("mangled-name", EntryType::FunctionMangledName),
+    Definition("addr-offset", EntryType::FunctionAddrOffset),
+    Definition("concrete-only-addr-offset-no-padding",
+               EntryType::FunctionAddrOffsetConcrete),
+    Definition("line-offset", EntryType::FunctionLineOffset),
+    Definition("pc-offset", EntryType::FunctionPCOffset),
+    Definition("initial-function", EntryType::FunctionInitial),
+    Definition("changed", EntryType::FunctionChanged),
+    Definition("is-optimized", EntryType::FunctionIsOptimized)};
 
-static FormatEntity::Entry::Definition g_frame_child_entries[] = {
-    ENTRY("index", FrameIndex),
-    ENTRY("pc", FrameRegisterPC),
-    ENTRY("fp", FrameRegisterFP),
-    ENTRY("sp", FrameRegisterSP),
-    ENTRY("flags", FrameRegisterFlags),
-    ENTRY("no-debug", FrameNoDebug),
-    ENTRY_CHILDREN("reg", FrameRegisterByName, g_string_entry),
-    ENTRY("is-artificial", FrameIsArtificial),
+constexpr Definition g_line_child_entries[] = {
+    Entry::DefinitionWithChildren("file", EntryType::LineEntryFile,
+                                  g_file_child_entries),
+    Definition("number", EntryType::LineEntryLineNumber),
+    Definition("column", EntryType::LineEntryColumn),
+    Definition("start-addr", EntryType::LineEntryStartAddress),
+    Definition("end-addr", EntryType::LineEntryEndAddress),
 };
 
-static FormatEntity::Entry::Definition g_function_child_entries[] = {
-    ENTRY("id", FunctionID),
-    ENTRY("name", FunctionName),
-    ENTRY("name-without-args", FunctionNameNoArgs),
-    ENTRY("name-with-args", FunctionNameWithArgs),
-    ENTRY("mangled-name", FunctionMangledName),
-    ENTRY("addr-offset", FunctionAddrOffset),
-    ENTRY("concrete-only-addr-offset-no-padding", FunctionAddrOffsetConcrete),
-    ENTRY("line-offset", FunctionLineOffset),
-    ENTRY("pc-offset", FunctionPCOffset),
-    ENTRY("initial-function", FunctionInitial),
-    ENTRY("changed", FunctionChanged),
-    ENTRY("is-optimized", FunctionIsOptimized)};
+constexpr Definition g_module_child_entries[] = {Entry::DefinitionWithChildren(
+    "file", EntryType::ModuleFile, g_file_child_entries)};
 
-static FormatEntity::Entry::Definition g_line_child_entries[] = {
-    ENTRY_CHILDREN("file", LineEntryFile, g_file_child_entries),
-    ENTRY("number", LineEntryLineNumber),
-    ENTRY("column", LineEntryColumn),
-    ENTRY("start-addr", LineEntryStartAddress),
-    ENTRY("end-addr", LineEntryEndAddress),
-};
+constexpr Definition g_process_child_entries[] = {
+    Definition("id", EntryType::ProcessID),
+    Definition("name", EntryType::ProcessFile, FileKind::Basename),
+    Entry::DefinitionWithChildren("file", EntryType::ProcessFile,
+                                  g_file_child_entries)};
 
-static FormatEntity::Entry::Definition g_module_child_entries[] = {
-    ENTRY_CHILDREN("file", ModuleFile, g_file_child_entries),
-};
+constexpr Definition g_svar_child_entries[] = {
+    Definition("*", EntryType::ParentString)};
 
-static FormatEntity::Entry::Definition g_process_child_entries[] = {
-    ENTRY("id", ProcessID),
-    ENTRY_VALUE("name", ProcessFile, FileKind::Basename),
-    ENTRY_CHILDREN("file", ProcessFile, g_file_child_entries),
-};
+constexpr Definition g_var_child_entries[] = {
+    Definition("*", EntryType::ParentString)};
 
-static FormatEntity::Entry::Definition g_svar_child_entries[] = {
-    ENTRY("*", ParentString)};
+constexpr Definition g_thread_child_entries[] = {
+    Definition("id", EntryType::ThreadID),
+    Definition("protocol_id", EntryType::ThreadProtocolID),
+    Definition("index", EntryType::ThreadIndexID),
+    Entry::DefinitionWithChildren("info", EntryType::ThreadInfo,
+                                  g_string_entry),
+    Definition("queue", EntryType::ThreadQueue),
+    Definition("name", EntryType::ThreadName),
+    Definition("stop-reason", EntryType::ThreadStopReason),
+    Definition("stop-reason-raw", EntryType::ThreadStopReasonRaw),
+    Definition("return-value", EntryType::ThreadReturnValue),
+    Definition("completed-expression", EntryType::ThreadCompletedExpression)};
 
-static FormatEntity::Entry::Definition g_var_child_entries[] = {
-    ENTRY("*", ParentString)};
-
-static FormatEntity::Entry::Definition g_thread_child_entries[] = {
-    ENTRY("id", ThreadID),
-    ENTRY("protocol_id", ThreadProtocolID),
-    ENTRY("index", ThreadIndexID),
-    ENTRY_CHILDREN("info", ThreadInfo, g_string_entry),
-    ENTRY("queue", ThreadQueue),
-    ENTRY("name", ThreadName),
-    ENTRY("stop-reason", ThreadStopReason),
-    ENTRY("stop-reason-raw", ThreadStopReasonRaw),
-    ENTRY("return-value", ThreadReturnValue),
-    ENTRY("completed-expression", ThreadCompletedExpression),
-};
-
-static FormatEntity::Entry::Definition g_target_child_entries[] = {
-    ENTRY("arch", TargetArch),
-};
+constexpr Definition g_target_child_entries[] = {
+    Definition("arch", EntryType::TargetArch),
+    Entry::DefinitionWithChildren("file", EntryType::TargetFile,
+                                  g_file_child_entries)};
 
 #define _TO_STR2(_val) #_val
 #define _TO_STR(_val) _TO_STR2(_val)
 
-static FormatEntity::Entry::Definition g_ansi_fg_entries[] = {
-    ENTRY_STRING("black",
-                 ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_BLACK) ANSI_ESC_END),
-    ENTRY_STRING("red", ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_RED) ANSI_ESC_END),
-    ENTRY_STRING("green",
-                 ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_GREEN) ANSI_ESC_END),
-    ENTRY_STRING("yellow",
-                 ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_YELLOW) ANSI_ESC_END),
-    ENTRY_STRING("blue",
-                 ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_BLUE) ANSI_ESC_END),
-    ENTRY_STRING("purple",
-                 ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_PURPLE) ANSI_ESC_END),
-    ENTRY_STRING("cyan",
-                 ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_CYAN) ANSI_ESC_END),
-    ENTRY_STRING("white",
-                 ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_WHITE) ANSI_ESC_END),
+constexpr Definition g_ansi_fg_entries[] = {
+    Definition("black",
+               ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_BLACK) ANSI_ESC_END),
+    Definition("red", ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_RED) ANSI_ESC_END),
+    Definition("green",
+               ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_GREEN) ANSI_ESC_END),
+    Definition("yellow",
+               ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_YELLOW) ANSI_ESC_END),
+    Definition("blue", ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_BLUE) ANSI_ESC_END),
+    Definition("purple",
+               ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_PURPLE) ANSI_ESC_END),
+    Definition("cyan", ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_CYAN) ANSI_ESC_END),
+    Definition("white",
+               ANSI_ESC_START _TO_STR(ANSI_FG_COLOR_WHITE) ANSI_ESC_END),
 };
 
-static FormatEntity::Entry::Definition g_ansi_bg_entries[] = {
-    ENTRY_STRING("black",
-                 ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_BLACK) ANSI_ESC_END),
-    ENTRY_STRING("red", ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_RED) ANSI_ESC_END),
-    ENTRY_STRING("green",
-                 ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_GREEN) ANSI_ESC_END),
-    ENTRY_STRING("yellow",
-                 ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_YELLOW) ANSI_ESC_END),
-    ENTRY_STRING("blue",
-                 ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_BLUE) ANSI_ESC_END),
-    ENTRY_STRING("purple",
-                 ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_PURPLE) ANSI_ESC_END),
-    ENTRY_STRING("cyan",
-                 ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_CYAN) ANSI_ESC_END),
-    ENTRY_STRING("white",
-                 ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_WHITE) ANSI_ESC_END),
+constexpr Definition g_ansi_bg_entries[] = {
+    Definition("black",
+               ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_BLACK) ANSI_ESC_END),
+    Definition("red", ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_RED) ANSI_ESC_END),
+    Definition("green",
+               ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_GREEN) ANSI_ESC_END),
+    Definition("yellow",
+               ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_YELLOW) ANSI_ESC_END),
+    Definition("blue", ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_BLUE) ANSI_ESC_END),
+    Definition("purple",
+               ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_PURPLE) ANSI_ESC_END),
+    Definition("cyan", ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_CYAN) ANSI_ESC_END),
+    Definition("white",
+               ANSI_ESC_START _TO_STR(ANSI_BG_COLOR_WHITE) ANSI_ESC_END),
 };
 
-static FormatEntity::Entry::Definition g_ansi_entries[] = {
-    ENTRY_CHILDREN("fg", Invalid, g_ansi_fg_entries),
-    ENTRY_CHILDREN("bg", Invalid, g_ansi_bg_entries),
-    ENTRY_STRING("normal",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_NORMAL) ANSI_ESC_END),
-    ENTRY_STRING("bold", ANSI_ESC_START _TO_STR(ANSI_CTRL_BOLD) ANSI_ESC_END),
-    ENTRY_STRING("faint", ANSI_ESC_START _TO_STR(ANSI_CTRL_FAINT) ANSI_ESC_END),
-    ENTRY_STRING("italic",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_ITALIC) ANSI_ESC_END),
-    ENTRY_STRING("underline",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_UNDERLINE) ANSI_ESC_END),
-    ENTRY_STRING("slow-blink",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_SLOW_BLINK) ANSI_ESC_END),
-    ENTRY_STRING("fast-blink",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_FAST_BLINK) ANSI_ESC_END),
-    ENTRY_STRING("negative",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_IMAGE_NEGATIVE) ANSI_ESC_END),
-    ENTRY_STRING("conceal",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_CONCEAL) ANSI_ESC_END),
-    ENTRY_STRING("crossed-out",
-                 ANSI_ESC_START _TO_STR(ANSI_CTRL_CROSSED_OUT) ANSI_ESC_END),
+constexpr Definition g_ansi_entries[] = {
+    Entry::DefinitionWithChildren("fg", EntryType::Invalid, g_ansi_fg_entries),
+    Entry::DefinitionWithChildren("bg", EntryType::Invalid, g_ansi_bg_entries),
+    Definition("normal", ANSI_ESC_START _TO_STR(ANSI_CTRL_NORMAL) ANSI_ESC_END),
+    Definition("bold", ANSI_ESC_START _TO_STR(ANSI_CTRL_BOLD) ANSI_ESC_END),
+    Definition("faint", ANSI_ESC_START _TO_STR(ANSI_CTRL_FAINT) ANSI_ESC_END),
+    Definition("italic", ANSI_ESC_START _TO_STR(ANSI_CTRL_ITALIC) ANSI_ESC_END),
+    Definition("underline",
+               ANSI_ESC_START _TO_STR(ANSI_CTRL_UNDERLINE) ANSI_ESC_END),
+    Definition("slow-blink",
+               ANSI_ESC_START _TO_STR(ANSI_CTRL_SLOW_BLINK) ANSI_ESC_END),
+    Definition("fast-blink",
+               ANSI_ESC_START _TO_STR(ANSI_CTRL_FAST_BLINK) ANSI_ESC_END),
+    Definition("negative",
+               ANSI_ESC_START _TO_STR(ANSI_CTRL_IMAGE_NEGATIVE) ANSI_ESC_END),
+    Definition("conceal",
+               ANSI_ESC_START _TO_STR(ANSI_CTRL_CONCEAL) ANSI_ESC_END),
+    Definition("crossed-out",
+               ANSI_ESC_START _TO_STR(ANSI_CTRL_CROSSED_OUT) ANSI_ESC_END),
 };
 
-static FormatEntity::Entry::Definition g_script_child_entries[] = {
-    ENTRY("frame", ScriptFrame),   ENTRY("process", ScriptProcess),
-    ENTRY("target", ScriptTarget), ENTRY("thread", ScriptThread),
-    ENTRY("var", ScriptVariable),  ENTRY("svar", ScriptVariableSynthetic),
-    ENTRY("thread", ScriptThread),
-};
+constexpr Definition g_script_child_entries[] = {
+    Definition("frame", EntryType::ScriptFrame),
+    Definition("process", EntryType::ScriptProcess),
+    Definition("target", EntryType::ScriptTarget),
+    Definition("thread", EntryType::ScriptThread),
+    Definition("var", EntryType::ScriptVariable),
+    Definition("svar", EntryType::ScriptVariableSynthetic),
+    Definition("thread", EntryType::ScriptThread)};
 
-static FormatEntity::Entry::Definition g_top_level_entries[] = {
-    ENTRY_CHILDREN("addr", AddressLoadOrFile, g_addr_entries),
-    ENTRY("addr-file-or-load", AddressLoadOrFile),
-    ENTRY_CHILDREN("ansi", Invalid, g_ansi_entries),
-    ENTRY("current-pc-arrow", CurrentPCArrow),
-    ENTRY_CHILDREN("file", File, g_file_child_entries),
-    ENTRY("language", Lang),
-    ENTRY_CHILDREN("frame", Invalid, g_frame_child_entries),
-    ENTRY_CHILDREN("function", Invalid, g_function_child_entries),
-    ENTRY_CHILDREN("line", Invalid, g_line_child_entries),
-    ENTRY_CHILDREN("module", Invalid, g_module_child_entries),
-    ENTRY_CHILDREN("process", Invalid, g_process_child_entries),
-    ENTRY_CHILDREN("script", Invalid, g_script_child_entries),
-    ENTRY_CHILDREN_KEEP_SEP("svar", VariableSynthetic, g_svar_child_entries),
-    ENTRY_CHILDREN("thread", Invalid, g_thread_child_entries),
-    ENTRY_CHILDREN("target", Invalid, g_target_child_entries),
-    ENTRY_CHILDREN_KEEP_SEP("var", Variable, g_var_child_entries),
-};
+constexpr Definition g_top_level_entries[] = {
+    Entry::DefinitionWithChildren("addr", EntryType::AddressLoadOrFile,
+                                  g_addr_entries),
+    Definition("addr-file-or-load", EntryType::AddressLoadOrFile),
+    Entry::DefinitionWithChildren("ansi", EntryType::Invalid, g_ansi_entries),
+    Definition("current-pc-arrow", EntryType::CurrentPCArrow),
+    Entry::DefinitionWithChildren("file", EntryType::File,
+                                  g_file_child_entries),
+    Definition("language", EntryType::Lang),
+    Entry::DefinitionWithChildren("frame", EntryType::Invalid,
+                                  g_frame_child_entries),
+    Entry::DefinitionWithChildren("function", EntryType::Invalid,
+                                  g_function_child_entries),
+    Entry::DefinitionWithChildren("line", EntryType::Invalid,
+                                  g_line_child_entries),
+    Entry::DefinitionWithChildren("module", EntryType::Invalid,
+                                  g_module_child_entries),
+    Entry::DefinitionWithChildren("process", EntryType::Invalid,
+                                  g_process_child_entries),
+    Entry::DefinitionWithChildren("script", EntryType::Invalid,
+                                  g_script_child_entries),
+    Entry::DefinitionWithChildren("svar", EntryType::VariableSynthetic,
+                                  g_svar_child_entries, true),
+    Entry::DefinitionWithChildren("thread", EntryType::Invalid,
+                                  g_thread_child_entries),
+    Entry::DefinitionWithChildren("target", EntryType::Invalid,
+                                  g_target_child_entries),
+    Entry::DefinitionWithChildren("var", EntryType::Variable,
+                                  g_var_child_entries, true)};
 
-static FormatEntity::Entry::Definition g_root =
-    ENTRY_CHILDREN("<root>", Root, g_top_level_entries);
+constexpr Definition g_root = Entry::DefinitionWithChildren(
+    "<root>", EntryType::Root, g_top_level_entries);
 
 FormatEntity::Entry::Entry(llvm::StringRef s)
     : string(s.data(), s.size()), printf_format(), children(),
-      definition(nullptr), type(Type::String), fmt(lldb::eFormatDefault),
-      number(0), deref(false) {}
+      type(Type::String) {}
 
 FormatEntity::Entry::Entry(char ch)
-    : string(1, ch), printf_format(), children(), definition(nullptr),
-      type(Type::String), fmt(lldb::eFormatDefault), number(0), deref(false) {}
+    : string(1, ch), printf_format(), children(), type(Type::String) {}
 
 void FormatEntity::Entry::AppendChar(char ch) {
   if (children.empty() || children.back().type != Entry::Type::String)
@@ -290,13 +287,6 @@ void FormatEntity::Entry::AppendText(const llvm::StringRef &s) {
 
 void FormatEntity::Entry::AppendText(const char *cstr) {
   return AppendText(llvm::StringRef(cstr));
-}
-
-Status FormatEntity::Parse(const llvm::StringRef &format_str, Entry &entry) {
-  entry.Clear();
-  entry.type = Entry::Type::Root;
-  llvm::StringRef modifiable_format(format_str);
-  return ParseInternal(modifiable_format, entry, 0);
 }
 
 #define ENUM_TO_CSTR(eee)                                                      \
@@ -334,6 +324,7 @@ const char *FormatEntity::Entry::TypeToCString(Type t) {
     ENUM_TO_CSTR(ScriptThread);
     ENUM_TO_CSTR(ThreadInfo);
     ENUM_TO_CSTR(TargetArch);
+    ENUM_TO_CSTR(TargetFile);
     ENUM_TO_CSTR(ScriptTarget);
     ENUM_TO_CSTR(ModuleFile);
     ENUM_TO_CSTR(File);
@@ -422,31 +413,31 @@ static bool DumpAddressAndContent(Stream &s, const SymbolContext *sc,
                                   const Address &addr,
                                   bool print_file_addr_or_load_addr) {
   Target *target = Target::GetTargetFromContexts(exe_ctx, sc);
+
   addr_t vaddr = LLDB_INVALID_ADDRESS;
-  if (exe_ctx && !target->GetSectionLoadList().IsEmpty())
+  if (target && target->HasLoadedSections())
     vaddr = addr.GetLoadAddress(target);
   if (vaddr == LLDB_INVALID_ADDRESS)
     vaddr = addr.GetFileAddress();
+  if (vaddr == LLDB_INVALID_ADDRESS)
+    return false;
 
-  if (vaddr != LLDB_INVALID_ADDRESS) {
-    int addr_width = 0;
-    if (exe_ctx && target) {
-      addr_width = target->GetArchitecture().GetAddressByteSize() * 2;
-    }
-    if (addr_width == 0)
-      addr_width = 16;
-    if (print_file_addr_or_load_addr) {
-      ExecutionContextScope *exe_scope = nullptr;
-      if (exe_ctx)
-        exe_scope = exe_ctx->GetBestExecutionContextScope();
-      addr.Dump(&s, exe_scope, Address::DumpStyleLoadAddress,
-                Address::DumpStyleModuleWithFileAddress, 0);
-    } else {
-      s.Printf("0x%*.*" PRIx64, addr_width, addr_width, vaddr);
-    }
-    return true;
+  int addr_width = 0;
+  if (target)
+    addr_width = target->GetArchitecture().GetAddressByteSize() * 2;
+  if (addr_width == 0)
+    addr_width = 16;
+
+  if (print_file_addr_or_load_addr) {
+    ExecutionContextScope *exe_scope =
+        exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr;
+    addr.Dump(&s, exe_scope, Address::DumpStyleLoadAddress,
+              Address::DumpStyleModuleWithFileAddress, 0);
+  } else {
+    s.Printf("0x%*.*" PRIx64, addr_width, addr_width, vaddr);
   }
-  return false;
+
+  return true;
 }
 
 static bool DumpAddressOffsetFromFunction(Stream &s, const SymbolContext *sc,
@@ -514,7 +505,7 @@ static bool ScanBracketedRange(llvm::StringRef subpath,
                                size_t &close_bracket_index,
                                const char *&var_name_final_if_array_range,
                                int64_t &index_lower, int64_t &index_higher) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_DATAFORMATTERS));
+  Log *log = GetLog(LLDBLog::DataFormatters);
   close_bracket_index = llvm::StringRef::npos;
   const size_t open_bracket_index = subpath.find('[');
   if (open_bracket_index == llvm::StringRef::npos) {
@@ -598,9 +589,7 @@ static bool DumpFile(Stream &s, const FileSpec &file, FileKind file_kind) {
 }
 
 static bool DumpRegister(Stream &s, StackFrame *frame, RegisterKind reg_kind,
-                         uint32_t reg_num, Format format)
-
-{
+                         uint32_t reg_num, Format format) {
   if (frame) {
     RegisterContext *reg_ctx = frame->GetRegisterContext().get();
 
@@ -613,7 +602,7 @@ static bool DumpRegister(Stream &s, StackFrame *frame, RegisterKind reg_kind,
         if (reg_info) {
           RegisterValue reg_value;
           if (reg_ctx->ReadRegister(reg_info, reg_value)) {
-            DumpRegisterValue(reg_value, &s, reg_info, false, false, format);
+            DumpRegisterValue(reg_value, s, *reg_info, false, false, format);
             return true;
           }
         }
@@ -624,14 +613,10 @@ static bool DumpRegister(Stream &s, StackFrame *frame, RegisterKind reg_kind,
 }
 
 static ValueObjectSP ExpandIndexedExpression(ValueObject *valobj, size_t index,
-                                             StackFrame *frame,
                                              bool deref_pointer) {
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_DATAFORMATTERS));
-  const char *ptr_deref_format = "[%d]";
-  std::string ptr_deref_buffer(10, 0);
-  ::sprintf(&ptr_deref_buffer[0], ptr_deref_format, index);
-  LLDB_LOGF(log, "[ExpandIndexedExpression] name to deref: %s",
-            ptr_deref_buffer.c_str());
+  Log *log = GetLog(LLDBLog::DataFormatters);
+  std::string name_to_deref = llvm::formatv("[{0}]", index);
+  LLDB_LOG(log, "[ExpandIndexedExpression] name to deref: {0}", name_to_deref);
   ValueObject::GetValueForExpressionPathOptions options;
   ValueObject::ExpressionPathEndResultType final_value_type;
   ValueObject::ExpressionPathScanEndReason reason_to_stop;
@@ -639,8 +624,7 @@ static ValueObjectSP ExpandIndexedExpression(ValueObject *valobj, size_t index,
       (deref_pointer ? ValueObject::eExpressionPathAftermathDereference
                      : ValueObject::eExpressionPathAftermathNothing);
   ValueObjectSP item = valobj->GetValueForExpressionPath(
-      ptr_deref_buffer.c_str(), &reason_to_stop, &final_value_type, options,
-      &what_next);
+      name_to_deref, &reason_to_stop, &final_value_type, options, &what_next);
   if (!item) {
     LLDB_LOGF(log,
               "[ExpandIndexedExpression] ERROR: why stopping = %d,"
@@ -678,13 +662,44 @@ static char ConvertValueObjectStyleToChar(
   return '\0';
 }
 
+/// Options supported by format_provider<T> for integral arithmetic types.
+/// See table in FormatProviders.h.
+static llvm::Regex LLVMFormatPattern{"x[-+]?\\d*|n|d", llvm::Regex::IgnoreCase};
+
+static bool DumpValueWithLLVMFormat(Stream &s, llvm::StringRef options,
+                                    ValueObject &valobj) {
+  std::string formatted;
+  std::string llvm_format = ("{0:" + options + "}").str();
+
+  auto type_info = valobj.GetTypeInfo();
+  if ((type_info & eTypeIsInteger) && LLVMFormatPattern.match(options)) {
+    if (type_info & eTypeIsSigned) {
+      bool success = false;
+      int64_t integer = valobj.GetValueAsSigned(0, &success);
+      if (success)
+        formatted = llvm::formatv(llvm_format.data(), integer);
+    } else {
+      bool success = false;
+      uint64_t integer = valobj.GetValueAsUnsigned(0, &success);
+      if (success)
+        formatted = llvm::formatv(llvm_format.data(), integer);
+    }
+  }
+
+  if (formatted.empty())
+    return false;
+
+  s.Write(formatted.data(), formatted.size());
+  return true;
+}
+
 static bool DumpValue(Stream &s, const SymbolContext *sc,
                       const ExecutionContext *exe_ctx,
                       const FormatEntity::Entry &entry, ValueObject *valobj) {
   if (valobj == nullptr)
     return false;
 
-  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_DATAFORMATTERS));
+  Log *log = GetLog(LLDBLog::DataFormatters);
   Format custom_format = eFormatInvalid;
   ValueObject::ValueObjectRepresentationStyle val_obj_display =
       entry.string.empty()
@@ -705,7 +720,7 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
 
   case FormatEntity::Entry::Type::ScriptVariableSynthetic:
     is_script = true;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case FormatEntity::Entry::Type::VariableSynthetic:
     custom_format = entry.fmt;
     val_obj_display = (ValueObject::ValueObjectRepresentationStyle)entry.number;
@@ -719,9 +734,6 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
   default:
     return false;
   }
-
-  if (valobj == nullptr)
-    return false;
 
   ValueObject::ExpressionPathAftermath what_next =
       (do_deref_pointer ? ValueObject::eExpressionPathAftermathDereference
@@ -751,9 +763,12 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
     return RunScriptFormatKeyword(s, sc, exe_ctx, valobj, entry.string.c_str());
   }
 
-  llvm::StringRef subpath(entry.string);
+  auto split = llvm::StringRef(entry.string).split(':');
+  auto subpath = split.first;
+  auto llvm_format = split.second;
+
   // simplest case ${var}, just print valobj's value
-  if (entry.string.empty()) {
+  if (subpath.empty()) {
     if (entry.printf_format.empty() && entry.fmt == eFormatDefault &&
         entry.number == ValueObject::eValueObjectRepresentationStyleValue)
       was_plain_var = true;
@@ -762,7 +777,7 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
     target = valobj;
   } else // this is ${var.something} or multiple .something nested
   {
-    if (entry.string[0] == '[')
+    if (subpath[0] == '[')
       was_var_indexed = true;
     ScanBracketedRange(subpath, close_bracket_index,
                        var_name_final_if_array_range, index_lower,
@@ -770,14 +785,11 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
 
     Status error;
 
-    const std::string &expr_path = entry.string;
-
-    LLDB_LOGF(log, "[Debugger::FormatPrompt] symbol to expand: %s",
-              expr_path.c_str());
+    LLDB_LOG(log, "[Debugger::FormatPrompt] symbol to expand: {0}", subpath);
 
     target =
         valobj
-            ->GetValueForExpressionPath(expr_path.c_str(), &reason_to_stop,
+            ->GetValueForExpressionPath(subpath, &reason_to_stop,
                                         &final_value_type, options, &what_next)
             .get();
 
@@ -837,7 +849,7 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
     bitfield_name.Printf("%s:%d", target->GetTypeName().AsCString(),
                          target->GetBitfieldBitSize());
     auto type_sp = std::make_shared<TypeNameSpecifierImpl>(
-        bitfield_name.GetString(), false);
+        bitfield_name.GetString(), lldb::eFormatterMatchExact);
     if (val_obj_display ==
             ValueObject::eValueObjectRepresentationStyleSummary &&
         !DataVisualization::GetSummaryForType(type_sp))
@@ -906,8 +918,18 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
   }
 
   if (!is_array_range) {
-    LLDB_LOGF(log,
-              "[Debugger::FormatPrompt] dumping ordinary printable output");
+    if (!llvm_format.empty()) {
+      if (DumpValueWithLLVMFormat(s, llvm_format, *target)) {
+        LLDB_LOGF(log, "dumping using llvm format");
+        return true;
+      } else {
+        LLDB_LOG(
+            log,
+            "empty output using llvm format '{0}' - with type info flags {1}",
+            entry.printf_format, target->GetTypeInfo());
+      }
+    }
+    LLDB_LOGF(log, "dumping ordinary printable output");
     return target->DumpPrintableRepresentation(s, val_obj_display,
                                                custom_format);
   } else {
@@ -949,16 +971,14 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
     s.PutChar('[');
 
     if (index_higher < 0)
-      index_higher = valobj->GetNumChildren() - 1;
+      index_higher = valobj->GetNumChildrenIgnoringErrors() - 1;
 
     uint32_t max_num_children =
         target->GetTargetSP()->GetMaximumNumberOfChildrenToDisplay();
 
     bool success = true;
     for (int64_t index = index_lower; index <= index_higher; ++index) {
-      ValueObject *item =
-          ExpandIndexedExpression(target, index, exe_ctx->GetFramePtr(), false)
-              .get();
+      ValueObject *item = ExpandIndexedExpression(target, index, false).get();
 
       if (!item) {
         LLDB_LOGF(log,
@@ -1003,7 +1023,7 @@ static bool DumpRegister(Stream &s, StackFrame *frame, const char *reg_name,
       if (reg_info) {
         RegisterValue reg_value;
         if (reg_ctx->ReadRegister(reg_info, reg_value)) {
-          DumpRegisterValue(reg_value, &s, reg_info, false, false, format);
+          DumpRegisterValue(reg_value, s, *reg_info, false, false, format);
           return true;
         }
       }
@@ -1026,7 +1046,7 @@ static bool FormatThreadExtendedInfoRecurse(
       const char *token_format = "0x%4.4" PRIx64;
       if (!entry.printf_format.empty())
         token_format = entry.printf_format.c_str();
-      s.Printf(token_format, value->GetAsInteger()->GetValue());
+      s.Printf(token_format, value->GetUnsignedIntegerValue());
       return true;
     } else if (value->GetType() == eStructuredDataTypeFloat) {
       s.Printf("%f", value->GetAsFloat()->GetValue());
@@ -1051,6 +1071,84 @@ static bool FormatThreadExtendedInfoRecurse(
 
 static inline bool IsToken(const char *var_name_begin, const char *var) {
   return (::strncmp(var_name_begin, var, strlen(var)) == 0);
+}
+
+/// Parses the basename out of a demangled function name
+/// that may include function arguments. Supports
+/// template functions.
+///
+/// Returns pointers to the opening and closing parenthesis of
+/// `full_name`. Can return nullptr for either parenthesis if
+/// none is exists.
+static std::pair<char const *, char const *>
+ParseBaseName(char const *full_name) {
+  const char *open_paren = strchr(full_name, '(');
+  const char *close_paren = nullptr;
+  const char *generic = strchr(full_name, '<');
+  // if before the arguments list begins there is a template sign
+  // then scan to the end of the generic args before you try to find
+  // the arguments list
+  if (generic && open_paren && generic < open_paren) {
+    int generic_depth = 1;
+    ++generic;
+    for (; *generic && generic_depth > 0; generic++) {
+      if (*generic == '<')
+        generic_depth++;
+      if (*generic == '>')
+        generic_depth--;
+    }
+    if (*generic)
+      open_paren = strchr(generic, '(');
+    else
+      open_paren = nullptr;
+  }
+
+  if (open_paren) {
+    if (IsToken(open_paren, "(anonymous namespace)")) {
+      open_paren = strchr(open_paren + strlen("(anonymous namespace)"), '(');
+      if (open_paren)
+        close_paren = strchr(open_paren, ')');
+    } else
+      close_paren = strchr(open_paren, ')');
+  }
+
+  return {open_paren, close_paren};
+}
+
+/// Writes out the function name in 'full_name' to 'out_stream'
+/// but replaces each argument type with the variable name
+/// and the corresponding pretty-printed value
+static void PrettyPrintFunctionNameWithArgs(Stream &out_stream,
+                                            char const *full_name,
+                                            ExecutionContextScope *exe_scope,
+                                            VariableList const &args) {
+  auto [open_paren, close_paren] = ParseBaseName(full_name);
+  if (open_paren)
+    out_stream.Write(full_name, open_paren - full_name + 1);
+  else {
+    out_stream.PutCString(full_name);
+    out_stream.PutChar('(');
+  }
+
+  FormatEntity::PrettyPrintFunctionArguments(out_stream, args, exe_scope);
+
+  if (close_paren)
+    out_stream.PutCString(close_paren);
+  else
+    out_stream.PutChar(')');
+}
+
+static void FormatInlinedBlock(Stream &out_stream, Block *block) {
+  if (!block)
+    return;
+  Block *inline_block = block->GetContainingInlinedBlock();
+  if (inline_block) {
+    if (const InlineFunctionInfo *inline_info =
+            inline_block->GetInlinedFunctionInfo()) {
+      out_stream.PutCString(" [inlined] ");
+      inline_info->GetName().Dump(&out_stream);
+    }
+  }
 }
 
 bool FormatEntity::FormatStringRef(const llvm::StringRef &format_str, Stream &s,
@@ -1205,9 +1303,10 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
             llvm::Triple::OSType ostype = arch.IsValid()
                                               ? arch.GetTriple().getOS()
                                               : llvm::Triple::UnknownOS;
-            if ((ostype == llvm::Triple::FreeBSD) ||
-                (ostype == llvm::Triple::Linux) ||
-                (ostype == llvm::Triple::NetBSD)) {
+            if (ostype == llvm::Triple::FreeBSD ||
+                ostype == llvm::Triple::Linux ||
+                ostype == llvm::Triple::NetBSD ||
+                ostype == llvm::Triple::OpenBSD) {
               format = "%" PRIu64;
             }
           } else {
@@ -1305,7 +1404,10 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
           ValueObjectSP return_valobj_sp =
               StopInfo::GetReturnValueObject(stop_info_sp);
           if (return_valobj_sp) {
-            return_valobj_sp->Dump(s);
+            if (llvm::Error error = return_valobj_sp->Dump(s)) {
+              s << "error: " << toString(std::move(error));
+              return false;
+            }
             return true;
           }
         }
@@ -1322,7 +1424,11 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
           ExpressionVariableSP expression_var_sp =
               StopInfo::GetExpressionVariable(stop_info_sp);
           if (expression_var_sp && expression_var_sp->GetValueObject()) {
-            expression_var_sp->GetValueObject()->Dump(s);
+            if (llvm::Error error =
+                    expression_var_sp->GetValueObject()->Dump(s)) {
+              s << "error: " << toString(std::move(error));
+              return false;
+            }
             return true;
           }
         }
@@ -1361,6 +1467,17 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
         if (arch.IsValid()) {
           s.PutCString(arch.GetArchitectureName());
           return true;
+        }
+      }
+    }
+    return false;
+
+  case Entry::Type::TargetFile:
+    if (exe_ctx) {
+      if (Target *target = exe_ctx->GetTargetPtr()) {
+        if (Module *exe_module = target->GetExecutableModulePointer()) {
+          if (DumpFile(s, exe_module->GetFileSpec(), (FileKind)entry.number))
+            return true;
         }
       }
     }
@@ -1523,17 +1640,22 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     return initial_function;
 
   case Entry::Type::FunctionName: {
+    if (!sc)
+      return false;
+
     Language *language_plugin = nullptr;
     bool language_plugin_handled = false;
     StreamString ss;
+
     if (sc->function)
       language_plugin = Language::FindPlugin(sc->function->GetLanguage());
     else if (sc->symbol)
       language_plugin = Language::FindPlugin(sc->symbol->GetLanguage());
-    if (language_plugin) {
+
+    if (language_plugin)
       language_plugin_handled = language_plugin->GetFunctionDisplayName(
           sc, exe_ctx, Language::FunctionNameRepresentation::eName, ss);
-    }
+
     if (language_plugin_handled) {
       s << ss.GetString();
       return true;
@@ -1543,20 +1665,10 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
         name = sc->function->GetName().AsCString(nullptr);
       else if (sc->symbol)
         name = sc->symbol->GetName().AsCString(nullptr);
+
       if (name) {
         s.PutCString(name);
-
-        if (sc->block) {
-          Block *inline_block = sc->block->GetContainingInlinedBlock();
-          if (inline_block) {
-            const InlineFunctionInfo *inline_info =
-                sc->block->GetInlinedFunctionInfo();
-            if (inline_info) {
-              s.PutCString(" [inlined] ");
-              inline_info->GetName().Dump(&s);
-            }
-          }
-        }
+        FormatInlinedBlock(s, sc->block);
         return true;
       }
     }
@@ -1564,6 +1676,9 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     return false;
 
   case Entry::Type::FunctionNameNoArgs: {
+    if (!sc)
+      return false;
+
     Language *language_plugin = nullptr;
     bool language_plugin_handled = false;
     StreamString ss;
@@ -1571,11 +1686,12 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
       language_plugin = Language::FindPlugin(sc->function->GetLanguage());
     else if (sc->symbol)
       language_plugin = Language::FindPlugin(sc->symbol->GetLanguage());
-    if (language_plugin) {
+
+    if (language_plugin)
       language_plugin_handled = language_plugin->GetFunctionDisplayName(
           sc, exe_ctx, Language::FunctionNameRepresentation::eNameWithNoArgs,
           ss);
-    }
+
     if (language_plugin_handled) {
       s << ss.GetString();
       return true;
@@ -1587,6 +1703,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
         name = sc->symbol->GetNameNoArguments();
       if (name) {
         s.PutCString(name.GetCString());
+        FormatInlinedBlock(s, sc->block);
         return true;
       }
     }
@@ -1594,6 +1711,9 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     return false;
 
   case Entry::Type::FunctionNameWithArgs: {
+    if (!sc)
+      return false;
+
     Language *language_plugin = nullptr;
     bool language_plugin_handled = false;
     StreamString ss;
@@ -1601,10 +1721,11 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
       language_plugin = Language::FindPlugin(sc->function->GetLanguage());
     else if (sc->symbol)
       language_plugin = Language::FindPlugin(sc->symbol->GetLanguage());
-    if (language_plugin) {
+
+    if (language_plugin)
       language_plugin_handled = language_plugin->GetFunctionDisplayName(
           sc, exe_ctx, Language::FunctionNameRepresentation::eNameWithArgs, ss);
-    }
+
     if (language_plugin_handled) {
       s << ss.GetString();
       return true;
@@ -1623,7 +1744,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
 
             if (inline_block) {
               get_function_vars = false;
-              inline_info = sc->block->GetInlinedFunctionInfo();
+              inline_info = inline_block->GetInlinedFunctionInfo();
               if (inline_info)
                 variable_list_sp = inline_block->GetBlockVariableList(true);
             }
@@ -1645,100 +1766,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
             variable_list_sp->AppendVariablesWithScope(
                 eValueTypeVariableArgument, args);
           if (args.GetSize() > 0) {
-            const char *open_paren = strchr(cstr, '(');
-            const char *close_paren = nullptr;
-            const char *generic = strchr(cstr, '<');
-            // if before the arguments list begins there is a template sign
-            // then scan to the end of the generic args before you try to find
-            // the arguments list
-            if (generic && open_paren && generic < open_paren) {
-              int generic_depth = 1;
-              ++generic;
-              for (; *generic && generic_depth > 0; generic++) {
-                if (*generic == '<')
-                  generic_depth++;
-                if (*generic == '>')
-                  generic_depth--;
-              }
-              if (*generic)
-                open_paren = strchr(generic, '(');
-              else
-                open_paren = nullptr;
-            }
-            if (open_paren) {
-              if (IsToken(open_paren, "(anonymous namespace)")) {
-                open_paren =
-                    strchr(open_paren + strlen("(anonymous namespace)"), '(');
-                if (open_paren)
-                  close_paren = strchr(open_paren, ')');
-              } else
-                close_paren = strchr(open_paren, ')');
-            }
-
-            if (open_paren)
-              s.Write(cstr, open_paren - cstr + 1);
-            else {
-              s.PutCString(cstr);
-              s.PutChar('(');
-            }
-            const size_t num_args = args.GetSize();
-            for (size_t arg_idx = 0; arg_idx < num_args; ++arg_idx) {
-              std::string buffer;
-
-              VariableSP var_sp(args.GetVariableAtIndex(arg_idx));
-              ValueObjectSP var_value_sp(
-                  ValueObjectVariable::Create(exe_scope, var_sp));
-              StreamString ss;
-              llvm::StringRef var_representation;
-              const char *var_name = var_value_sp->GetName().GetCString();
-              if (var_value_sp->GetCompilerType().IsValid()) {
-                if (var_value_sp && exe_scope->CalculateTarget())
-                  var_value_sp =
-                      var_value_sp->GetQualifiedRepresentationIfAvailable(
-                          exe_scope->CalculateTarget()
-                              ->TargetProperties::GetPreferDynamicValue(),
-                          exe_scope->CalculateTarget()
-                              ->TargetProperties::GetEnableSyntheticValue());
-                if (var_value_sp->GetCompilerType().IsAggregateType() &&
-                    DataVisualization::ShouldPrintAsOneLiner(*var_value_sp)) {
-                  static StringSummaryFormat format(
-                      TypeSummaryImpl::Flags()
-                          .SetHideItemNames(false)
-                          .SetShowMembersOneLiner(true),
-                      "");
-                  format.FormatObject(var_value_sp.get(), buffer,
-                                      TypeSummaryOptions());
-                  var_representation = buffer;
-                } else
-                  var_value_sp->DumpPrintableRepresentation(
-                      ss,
-                      ValueObject::ValueObjectRepresentationStyle::
-                          eValueObjectRepresentationStyleSummary,
-                      eFormatDefault,
-                      ValueObject::PrintableRepresentationSpecialCases::eAllow,
-                      false);
-              }
-
-              if (!ss.GetString().empty())
-                var_representation = ss.GetString();
-              if (arg_idx > 0)
-                s.PutCString(", ");
-              if (var_value_sp->GetError().Success()) {
-                if (!var_representation.empty())
-                  s.Printf("%s=%s", var_name, var_representation.str().c_str());
-                else
-                  s.Printf("%s=%s at %s", var_name,
-                           var_value_sp->GetTypeName().GetCString(),
-                           var_value_sp->GetLocationAsCString());
-              } else
-                s.Printf("%s=<unavailable>", var_name);
-            }
-
-            if (close_paren)
-              s.PutCString(close_paren);
-            else
-              s.PutChar(')');
-
+            PrettyPrintFunctionNameWithArgs(s, cstr, exe_scope, args);
           } else {
             s.PutCString(cstr);
           }
@@ -1756,6 +1784,9 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     return false;
 
   case Entry::Type::FunctionMangledName: {
+    if (!sc)
+      return false;
+
     const char *name = nullptr;
     if (sc->symbol)
       name =
@@ -1768,17 +1799,9 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     if (!name)
       return false;
     s.PutCString(name);
-
-    if (sc->block->GetContainingInlinedBlock()) {
-      if (const InlineFunctionInfo *inline_info =
-              sc->block->GetInlinedFunctionInfo()) {
-        s.PutCString(" [inlined] ");
-        inline_info->GetName().Dump(&s);
-      }
-    }
+    FormatInlinedBlock(s, sc->block);
     return true;
   }
-
   case Entry::Type::FunctionAddrOffset:
     if (addr) {
       if (DumpAddressOffsetFromFunction(s, sc, exe_ctx, *addr, false, false,
@@ -1796,9 +1819,11 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     return false;
 
   case Entry::Type::FunctionLineOffset:
-    return (DumpAddressOffsetFromFunction(s, sc, exe_ctx,
-                                          sc->line_entry.range.GetBaseAddress(),
-                                          false, false, false));
+    if (sc)
+      return (DumpAddressOffsetFromFunction(
+          s, sc, exe_ctx, sc->line_entry.range.GetBaseAddress(), false, false,
+          false));
+    return false;
 
   case Entry::Type::FunctionPCOffset:
     if (exe_ctx) {
@@ -1817,7 +1842,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
 
   case Entry::Type::FunctionIsOptimized: {
     bool is_optimized = false;
-    if (sc->function && sc->function->GetIsOptimized()) {
+    if (sc && sc->function && sc->function->GetIsOptimized()) {
       is_optimized = true;
     }
     return is_optimized;
@@ -1830,7 +1855,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     if (sc && sc->line_entry.IsValid()) {
       Module *module = sc->module_sp.get();
       if (module) {
-        if (DumpFile(s, sc->line_entry.file, (FileKind)entry.number))
+        if (DumpFile(s, sc->line_entry.GetFile(), (FileKind)entry.number))
           return true;
       }
     }
@@ -1891,8 +1916,8 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
   return false;
 }
 
-static bool DumpCommaSeparatedChildEntryNames(
-    Stream &s, const FormatEntity::Entry::Definition *parent) {
+static bool DumpCommaSeparatedChildEntryNames(Stream &s,
+                                              const Definition *parent) {
   if (parent->children) {
     const size_t n = parent->num_children;
     for (size_t i = 0; i < n; ++i) {
@@ -1906,8 +1931,7 @@ static bool DumpCommaSeparatedChildEntryNames(
 }
 
 static Status ParseEntry(const llvm::StringRef &format_str,
-                         const FormatEntity::Entry::Definition *parent,
-                         FormatEntity::Entry &entry) {
+                         const Definition *parent, FormatEntity::Entry &entry) {
   Status error;
 
   const size_t sep_pos = format_str.find_first_of(".[:");
@@ -1917,8 +1941,8 @@ static Status ParseEntry(const llvm::StringRef &format_str,
 
   const size_t n = parent->num_children;
   for (size_t i = 0; i < n; ++i) {
-    const FormatEntity::Entry::Definition *entry_def = parent->children + i;
-    if (key.equals(entry_def->name) || entry_def->name[0] == '*') {
+    const Definition *entry_def = parent->children + i;
+    if (key == entry_def->name || entry_def->name[0] == '*') {
       llvm::StringRef value;
       if (sep_char)
         value =
@@ -1950,14 +1974,16 @@ static Status ParseEntry(const llvm::StringRef &format_str,
                               "access one of its children: ",
                               entry_def->name);
             DumpCommaSeparatedChildEntryNames(error_strm, entry_def);
-            error.SetErrorStringWithFormat("%s", error_strm.GetData());
+            error =
+                Status::FromErrorStringWithFormat("%s", error_strm.GetData());
           } else if (sep_char == ':') {
             // Any value whose separator is a with a ':' means this value has a
             // string argument that needs to be stored in the entry (like
             // "${script.var:}"). In this case the string value is the empty
             // string which is ok.
           } else {
-            error.SetErrorStringWithFormat("%s", "invalid entry definitions");
+            error = Status::FromErrorStringWithFormat(
+                "%s", "invalid entry definitions");
           }
         }
       } else {
@@ -1969,7 +1995,7 @@ static Status ParseEntry(const llvm::StringRef &format_str,
           // "${script.var:modulename.function}")
           entry.string = value.str();
         } else {
-          error.SetErrorStringWithFormat(
+          error = Status::FromErrorStringWithFormat(
               "'%s' followed by '%s' but it has no children", key.str().c_str(),
               value.str().c_str());
         }
@@ -1986,21 +2012,20 @@ static Status ParseEntry(const llvm::StringRef &format_str,
     error_strm.Printf("invalid member '%s' in '%s'. Valid members are: ",
                       key.str().c_str(), parent->name);
   DumpCommaSeparatedChildEntryNames(error_strm, parent);
-  error.SetErrorStringWithFormat("%s", error_strm.GetData());
+  error = Status::FromErrorStringWithFormat("%s", error_strm.GetData());
   return error;
 }
 
-static const FormatEntity::Entry::Definition *
-FindEntry(const llvm::StringRef &format_str,
-          const FormatEntity::Entry::Definition *parent,
-          llvm::StringRef &remainder) {
+static const Definition *FindEntry(const llvm::StringRef &format_str,
+                                   const Definition *parent,
+                                   llvm::StringRef &remainder) {
   Status error;
 
   std::pair<llvm::StringRef, llvm::StringRef> p = format_str.split('.');
   const size_t n = parent->num_children;
   for (size_t i = 0; i < n; ++i) {
-    const FormatEntity::Entry::Definition *entry_def = parent->children + i;
-    if (p.first.equals(entry_def->name) || entry_def->name[0] == '*') {
+    const Definition *entry_def = parent->children + i;
+    if (p.first == entry_def->name || entry_def->name[0] == '*') {
       if (p.second.empty()) {
         if (format_str.back() == '.')
           remainder = format_str.drop_front(format_str.size() - 1);
@@ -2021,8 +2046,8 @@ FindEntry(const llvm::StringRef &format_str,
   return parent;
 }
 
-Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
-                                   uint32_t depth) {
+static Status ParseInternal(llvm::StringRef &format, Entry &parent_entry,
+                            uint32_t depth) {
   Status error;
   while (!format.empty() && error.Success()) {
     const size_t non_special_chars = format.find_first_of("${}\\");
@@ -2047,7 +2072,7 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
     case '{': {
       format = format.drop_front(); // Skip the '{'
       Entry scope_entry(Entry::Type::Scope);
-      error = FormatEntity::ParseInternal(format, scope_entry, depth + 1);
+      error = ParseInternal(format, scope_entry, depth + 1);
       if (error.Fail())
         return error;
       parent_entry.AppendEntry(std::move(scope_entry));
@@ -2055,7 +2080,7 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
 
     case '}':
       if (depth == 0)
-        error.SetErrorString("unmatched '}' character");
+        error = Status::FromErrorString("unmatched '}' character");
       else
         format =
             format
@@ -2065,7 +2090,7 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
     case '\\': {
       format = format.drop_front(); // Skip the '\' character
       if (format.empty()) {
-        error.SetErrorString(
+        error = Status::FromErrorString(
             "'\\' character was not followed by another character");
         return error;
       }
@@ -2119,7 +2144,8 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
           if (octal_value <= UINT8_MAX) {
             parent_entry.AppendChar((char)octal_value);
           } else {
-            error.SetErrorString("octal number is larger than a single byte");
+            error = Status::FromErrorString(
+                "octal number is larger than a single byte");
             return error;
           }
         }
@@ -2144,7 +2170,8 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
           if (hex_value <= UINT8_MAX) {
             parent_entry.AppendChar((char)hex_value);
           } else {
-            error.SetErrorString("hex number is larger than a single byte");
+            error = Status::FromErrorString(
+                "hex number is larger than a single byte");
             return error;
           }
         } else {
@@ -2161,148 +2188,149 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
     } break;
 
     case '$':
-      if (format.size() == 1) {
-        // '$' at the end of a format string, just print the '$'
+      format = format.drop_front(); // Skip the '$'
+      if (format.empty() || format.front() != '{') {
+        // Print '$' when not followed by '{'.
         parent_entry.AppendText("$");
       } else {
-        format = format.drop_front(); // Skip the '$'
+        format = format.drop_front(); // Skip the '{'
 
-        if (format[0] == '{') {
-          format = format.drop_front(); // Skip the '{'
+        llvm::StringRef variable, variable_format;
+        error = FormatEntity::ExtractVariableInfo(format, variable,
+                                                  variable_format);
+        if (error.Fail())
+          return error;
+        bool verify_is_thread_id = false;
+        Entry entry;
+        if (!variable_format.empty()) {
+          entry.printf_format = variable_format.str();
 
-          llvm::StringRef variable, variable_format;
-          error = FormatEntity::ExtractVariableInfo(format, variable,
-                                                    variable_format);
-          if (error.Fail())
-            return error;
-          bool verify_is_thread_id = false;
-          Entry entry;
-          if (!variable_format.empty()) {
-            entry.printf_format = variable_format.str();
+          // If the format contains a '%' we are going to assume this is a
+          // printf style format. So if you want to format your thread ID
+          // using "0x%llx" you can use: ${thread.id%0x%llx}
+          //
+          // If there is no '%' in the format, then it is assumed to be a
+          // LLDB format name, or one of the extended formats specified in
+          // the switch statement below.
 
-            // If the format contains a '%' we are going to assume this is a
-            // printf style format. So if you want to format your thread ID
-            // using "0x%llx" you can use: ${thread.id%0x%llx}
-            //
-            // If there is no '%' in the format, then it is assumed to be a
-            // LLDB format name, or one of the extended formats specified in
-            // the switch statement below.
+          if (entry.printf_format.find('%') == std::string::npos) {
+            bool clear_printf = false;
 
-            if (entry.printf_format.find('%') == std::string::npos) {
-              bool clear_printf = false;
-
-              if (FormatManager::GetFormatFromCString(
-                      entry.printf_format.c_str(), false, entry.fmt)) {
-                // We have an LLDB format, so clear the printf format
+            if (entry.printf_format.size() == 1) {
+              switch (entry.printf_format[0]) {
+              case '@': // if this is an @ sign, print ObjC description
+                entry.number = ValueObject::
+                    eValueObjectRepresentationStyleLanguageSpecific;
                 clear_printf = true;
-              } else if (entry.printf_format.size() == 1) {
-                switch (entry.printf_format[0]) {
-                case '@': // if this is an @ sign, print ObjC description
-                  entry.number = ValueObject::
-                      eValueObjectRepresentationStyleLanguageSpecific;
-                  clear_printf = true;
-                  break;
-                case 'V': // if this is a V, print the value using the default
-                          // format
-                  entry.number =
-                      ValueObject::eValueObjectRepresentationStyleValue;
-                  clear_printf = true;
-                  break;
-                case 'L': // if this is an L, print the location of the value
-                  entry.number =
-                      ValueObject::eValueObjectRepresentationStyleLocation;
-                  clear_printf = true;
-                  break;
-                case 'S': // if this is an S, print the summary after all
-                  entry.number =
-                      ValueObject::eValueObjectRepresentationStyleSummary;
-                  clear_printf = true;
-                  break;
-                case '#': // if this is a '#', print the number of children
-                  entry.number =
-                      ValueObject::eValueObjectRepresentationStyleChildrenCount;
-                  clear_printf = true;
-                  break;
-                case 'T': // if this is a 'T', print the type
-                  entry.number =
-                      ValueObject::eValueObjectRepresentationStyleType;
-                  clear_printf = true;
-                  break;
-                case 'N': // if this is a 'N', print the name
-                  entry.number =
-                      ValueObject::eValueObjectRepresentationStyleName;
-                  clear_printf = true;
-                  break;
-                case '>': // if this is a '>', print the expression path
-                  entry.number = ValueObject::
-                      eValueObjectRepresentationStyleExpressionPath;
-                  clear_printf = true;
-                  break;
-                default:
-                  error.SetErrorStringWithFormat("invalid format: '%s'",
-                                                 entry.printf_format.c_str());
-                  return error;
-                }
-              } else if (FormatManager::GetFormatFromCString(
-                             entry.printf_format.c_str(), true, entry.fmt)) {
+                break;
+              case 'V': // if this is a V, print the value using the default
+                        // format
+                entry.number =
+                    ValueObject::eValueObjectRepresentationStyleValue;
+                clear_printf = true;
+                break;
+              case 'L': // if this is an L, print the location of the value
+                entry.number =
+                    ValueObject::eValueObjectRepresentationStyleLocation;
+                clear_printf = true;
+                break;
+              case 'S': // if this is an S, print the summary after all
+                entry.number =
+                    ValueObject::eValueObjectRepresentationStyleSummary;
+                clear_printf = true;
+                break;
+              case '#': // if this is a '#', print the number of children
+                entry.number =
+                    ValueObject::eValueObjectRepresentationStyleChildrenCount;
+                clear_printf = true;
+                break;
+              case 'T': // if this is a 'T', print the type
+                entry.number = ValueObject::eValueObjectRepresentationStyleType;
+                clear_printf = true;
+                break;
+              case 'N': // if this is a 'N', print the name
+                entry.number = ValueObject::eValueObjectRepresentationStyleName;
+                clear_printf = true;
+                break;
+              case '>': // if this is a '>', print the expression path
+                entry.number =
+                    ValueObject::eValueObjectRepresentationStyleExpressionPath;
+                clear_printf = true;
+                break;
+              }
+            }
+
+            if (entry.number == 0) {
+              if (FormatManager::GetFormatFromCString(
+                      entry.printf_format.c_str(), entry.fmt)) {
                 clear_printf = true;
               } else if (entry.printf_format == "tid") {
                 verify_is_thread_id = true;
               } else {
-                error.SetErrorStringWithFormat("invalid format: '%s'",
-                                               entry.printf_format.c_str());
+                error = Status::FromErrorStringWithFormat(
+                    "invalid format: '%s'", entry.printf_format.c_str());
                 return error;
               }
-
-              // Our format string turned out to not be a printf style format
-              // so lets clear the string
-              if (clear_printf)
-                entry.printf_format.clear();
             }
-          }
 
-          // Check for dereferences
-          if (variable[0] == '*') {
-            entry.deref = true;
-            variable = variable.drop_front();
+            // Our format string turned out to not be a printf style format
+            // so lets clear the string
+            if (clear_printf)
+              entry.printf_format.clear();
           }
-
-          error = ParseEntry(variable, &g_root, entry);
-          if (error.Fail())
-            return error;
-
-          if (verify_is_thread_id) {
-            if (entry.type != Entry::Type::ThreadID &&
-                entry.type != Entry::Type::ThreadProtocolID) {
-              error.SetErrorString("the 'tid' format can only be used on "
-                                   "${thread.id} and ${thread.protocol_id}");
-            }
-          }
-
-          switch (entry.type) {
-          case Entry::Type::Variable:
-          case Entry::Type::VariableSynthetic:
-            if (entry.number == 0) {
-              if (entry.string.empty())
-                entry.number =
-                    ValueObject::eValueObjectRepresentationStyleValue;
-              else
-                entry.number =
-                    ValueObject::eValueObjectRepresentationStyleSummary;
-            }
-            break;
-          default:
-            // Make sure someone didn't try to dereference anything but ${var}
-            // or ${svar}
-            if (entry.deref) {
-              error.SetErrorStringWithFormat(
-                  "${%s} can't be dereferenced, only ${var} and ${svar} can.",
-                  variable.str().c_str());
-              return error;
-            }
-          }
-          parent_entry.AppendEntry(std::move(entry));
         }
+
+        // Check for dereferences
+        if (variable[0] == '*') {
+          entry.deref = true;
+          variable = variable.drop_front();
+        }
+
+        error = ParseEntry(variable, &g_root, entry);
+        if (error.Fail())
+          return error;
+
+        llvm::StringRef entry_string(entry.string);
+        if (entry_string.contains(':')) {
+          auto [_, llvm_format] = entry_string.split(':');
+          if (!llvm_format.empty() && !LLVMFormatPattern.match(llvm_format)) {
+            error = Status::FromErrorStringWithFormat(
+                "invalid llvm format: '%s'", llvm_format.data());
+            return error;
+          }
+        }
+
+        if (verify_is_thread_id) {
+          if (entry.type != Entry::Type::ThreadID &&
+              entry.type != Entry::Type::ThreadProtocolID) {
+            error = Status::FromErrorString(
+                "the 'tid' format can only be used on "
+                "${thread.id} and ${thread.protocol_id}");
+          }
+        }
+
+        switch (entry.type) {
+        case Entry::Type::Variable:
+        case Entry::Type::VariableSynthetic:
+          if (entry.number == 0) {
+            if (entry.string.empty())
+              entry.number = ValueObject::eValueObjectRepresentationStyleValue;
+            else
+              entry.number =
+                  ValueObject::eValueObjectRepresentationStyleSummary;
+          }
+          break;
+        default:
+          // Make sure someone didn't try to dereference anything but ${var}
+          // or ${svar}
+          if (entry.deref) {
+            error = Status::FromErrorStringWithFormat(
+                "${%s} can't be dereferenced, only ${var} and ${svar} can.",
+                variable.str().c_str());
+            return error;
+          }
+        }
+        parent_entry.AppendEntry(std::move(entry));
       }
       break;
     }
@@ -2333,7 +2361,7 @@ Status FormatEntity::ExtractVariableInfo(llvm::StringRef &format_str,
     // Strip off elements and the formatting and the trailing '}'
     format_str = format_str.substr(paren_pos + 1);
   } else {
-    error.SetErrorStringWithFormat(
+    error = Status::FromErrorStringWithFormat(
         "missing terminating '}' character for '${%s'",
         format_str.str().c_str());
   }
@@ -2343,13 +2371,13 @@ Status FormatEntity::ExtractVariableInfo(llvm::StringRef &format_str,
 bool FormatEntity::FormatFileSpec(const FileSpec &file_spec, Stream &s,
                                   llvm::StringRef variable_name,
                                   llvm::StringRef variable_format) {
-  if (variable_name.empty() || variable_name.equals(".fullpath")) {
+  if (variable_name.empty() || variable_name == ".fullpath") {
     file_spec.Dump(s.AsRawOstream());
     return true;
-  } else if (variable_name.equals(".basename")) {
+  } else if (variable_name == ".basename") {
     s.PutCString(file_spec.GetFilename().GetStringRef());
     return true;
-  } else if (variable_name.equals(".dirname")) {
+  } else if (variable_name == ".dirname") {
     s.PutCString(file_spec.GetFilename().GetStringRef());
     return true;
   }
@@ -2363,8 +2391,7 @@ static std::string MakeMatch(const llvm::StringRef &prefix,
   return match;
 }
 
-static void AddMatches(const FormatEntity::Entry::Definition *def,
-                       const llvm::StringRef &prefix,
+static void AddMatches(const Definition *def, const llvm::StringRef &prefix,
                        const llvm::StringRef &match_prefix,
                        StringList &matches) {
   const size_t n = def->num_children;
@@ -2418,8 +2445,7 @@ void FormatEntity::AutoComplete(CompletionRequest &request) {
 
   // We have a partially specified variable, find it
   llvm::StringRef remainder;
-  const FormatEntity::Entry::Definition *entry_def =
-      FindEntry(partial_variable, &g_root, remainder);
+  const Definition *entry_def = FindEntry(partial_variable, &g_root, remainder);
   if (!entry_def)
     return;
 
@@ -2434,7 +2460,7 @@ void FormatEntity::AutoComplete(CompletionRequest &request) {
       // "${thread.id" <TAB>
       request.AddCompletion(MakeMatch(str, "}"));
     }
-  } else if (remainder.equals(".")) {
+  } else if (remainder == ".") {
     // "${thread." <TAB>
     StringList new_matches;
     AddMatches(entry_def, str, llvm::StringRef(), new_matches);
@@ -2446,4 +2472,63 @@ void FormatEntity::AutoComplete(CompletionRequest &request) {
     AddMatches(entry_def, str, remainder, new_matches);
     request.AddCompletions(new_matches);
   }
+}
+
+void FormatEntity::PrettyPrintFunctionArguments(
+    Stream &out_stream, VariableList const &args,
+    ExecutionContextScope *exe_scope) {
+  const size_t num_args = args.GetSize();
+  for (size_t arg_idx = 0; arg_idx < num_args; ++arg_idx) {
+    std::string buffer;
+
+    VariableSP var_sp(args.GetVariableAtIndex(arg_idx));
+    ValueObjectSP var_value_sp(ValueObjectVariable::Create(exe_scope, var_sp));
+    StreamString ss;
+    llvm::StringRef var_representation;
+    const char *var_name = var_value_sp->GetName().GetCString();
+    if (var_value_sp->GetCompilerType().IsValid()) {
+      if (exe_scope && exe_scope->CalculateTarget())
+        var_value_sp = var_value_sp->GetQualifiedRepresentationIfAvailable(
+            exe_scope->CalculateTarget()
+                ->TargetProperties::GetPreferDynamicValue(),
+            exe_scope->CalculateTarget()
+                ->TargetProperties::GetEnableSyntheticValue());
+      if (var_value_sp->GetCompilerType().IsAggregateType() &&
+          DataVisualization::ShouldPrintAsOneLiner(*var_value_sp)) {
+        static StringSummaryFormat format(TypeSummaryImpl::Flags()
+                                              .SetHideItemNames(false)
+                                              .SetShowMembersOneLiner(true),
+                                          "");
+        format.FormatObject(var_value_sp.get(), buffer, TypeSummaryOptions());
+        var_representation = buffer;
+      } else
+        var_value_sp->DumpPrintableRepresentation(
+            ss,
+            ValueObject::ValueObjectRepresentationStyle::
+                eValueObjectRepresentationStyleSummary,
+            eFormatDefault,
+            ValueObject::PrintableRepresentationSpecialCases::eAllow, false);
+    }
+
+    if (!ss.GetString().empty())
+      var_representation = ss.GetString();
+    if (arg_idx > 0)
+      out_stream.PutCString(", ");
+    if (var_value_sp->GetError().Success()) {
+      if (!var_representation.empty())
+        out_stream.Printf("%s=%s", var_name, var_representation.str().c_str());
+      else
+        out_stream.Printf("%s=%s at %s", var_name,
+                          var_value_sp->GetTypeName().GetCString(),
+                          var_value_sp->GetLocationAsCString());
+    } else
+      out_stream.Printf("%s=<unavailable>", var_name);
+  }
+}
+
+Status FormatEntity::Parse(const llvm::StringRef &format_str, Entry &entry) {
+  entry.Clear();
+  entry.type = Entry::Type::Root;
+  llvm::StringRef modifiable_format(format_str);
+  return ParseInternal(modifiable_format, entry, 0);
 }

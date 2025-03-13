@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -x c++ -ftrapping-math -fexceptions -fcxx-exceptions -frounding-math -ffp-exception-behavior=strict -fexperimental-strict-floating-point -emit-llvm -o - %s | FileCheck %s -check-prefix=FPMODELSTRICT
+// RUN: %clang_cc1 -x c++ -fexceptions -fcxx-exceptions -frounding-math -ffp-exception-behavior=strict -fexperimental-strict-floating-point -emit-llvm -o - %s | FileCheck %s -check-prefix=FPMODELSTRICT
 // RUN: %clang_cc1 -x c++ -ffp-contract=fast -fexceptions -fcxx-exceptions -emit-llvm -o - %s | FileCheck %s -check-prefix=PRECISE
 // RUN: %clang_cc1 -x c++ -ffast-math -fexceptions -fcxx-exceptions -ffp-contract=fast -emit-llvm -o - %s | FileCheck %s -check-prefix=FAST
 // RUN: %clang_cc1 -x c++ -ffast-math -fexceptions -fcxx-exceptions -emit-llvm -o - %s | FileCheck %s -check-prefix=FASTNOCONTRACT
@@ -14,7 +14,7 @@ float f0, f1, f2;
     ~aaaa();
     void b();
   };
-  
+
   template <class c>
   aaaa<c>::~aaaa() { try {
     b();
@@ -34,13 +34,13 @@ float f0, f1, f2;
     // CHECK: ret void
   }
   }
-  
+
   class d {
    public:
     d(const char *, int);
     aaaa<int> e;
   };
-  
+
 float foo() {
   d x("", 1);
   aaaa<int> a;

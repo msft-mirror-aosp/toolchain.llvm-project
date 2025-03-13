@@ -7,13 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPUTargetObjectFile.h"
-#include "AMDGPU.h"
-#include "AMDGPUTargetMachine.h"
 #include "Utils/AMDGPUBaseInfo.h"
-#include "llvm/BinaryFormat/ELF.h"
-#include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCSectionELF.h"
-
+#include "llvm/IR/GlobalObject.h"
+#include "llvm/MC/SectionKind.h"
+#include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -33,7 +30,7 @@ MCSection *AMDGPUTargetObjectFile::getExplicitSectionGlobal(
     const GlobalObject *GO, SectionKind SK, const TargetMachine &TM) const {
   // Set metadata access for the explicit section
   StringRef SectionName = GO->getSection();
-  if (SectionName.startswith(".AMDGPU.comment."))
+  if (SectionName.starts_with(".AMDGPU.comment."))
     SK = SectionKind::getMetadata();
 
   return TargetLoweringObjectFileELF::getExplicitSectionGlobal(GO, SK, TM);

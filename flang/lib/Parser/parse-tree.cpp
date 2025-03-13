@@ -32,7 +32,7 @@ CommonStmt::CommonStmt(std::optional<Name> &&name,
 
 // R901 designator
 bool Designator::EndsInBareName() const {
-  return std::visit(
+  return common::visit(
       common::visitors{
           [](const DataRef &dr) {
             return std::holds_alternative<Name>(dr.u) ||
@@ -120,11 +120,11 @@ template <typename T> T WithSource(CharBlock source, T &&x) {
 }
 
 static Expr ActualArgToExpr(ActualArgSpec &arg) {
-  return std::visit(
+  return common::visit(
       common::visitors{
           [&](common::Indirection<Expr> &y) { return std::move(y.value()); },
           [&](common::Indirection<Variable> &y) {
-            return std::visit(
+            return common::visit(
                 common::visitors{
                     [&](common::Indirection<Designator> &z) {
                       return WithSource(
@@ -132,7 +132,7 @@ static Expr ActualArgToExpr(ActualArgSpec &arg) {
                     },
                     [&](common::Indirection<FunctionReference> &z) {
                       return WithSource(
-                          z.value().v.source, Expr{std::move(z.value())});
+                          z.value().source, Expr{std::move(z.value())});
                     },
                 },
                 y.value().u);
@@ -147,14 +147,14 @@ Designator FunctionReference::ConvertToArrayElementRef() {
   for (auto &arg : std::get<std::list<ActualArgSpec>>(v.t)) {
     args.emplace_back(ActualArgToExpr(arg));
   }
-  return std::visit(
+  return common::visit(
       common::visitors{
           [&](const Name &name) {
             return WithSource(
-                v.source, MakeArrayElementRef(name, std::move(args)));
+                source, MakeArrayElementRef(name, std::move(args)));
           },
           [&](ProcComponentRef &pcr) {
-            return WithSource(v.source,
+            return WithSource(source,
                 MakeArrayElementRef(std::move(pcr.v.thing), std::move(args)));
           },
       },
@@ -203,41 +203,47 @@ Substring ArrayElement::ConvertToSubstring() {
 }
 
 // R1544 stmt-function-stmt
-// Convert this stmt-function-stmt to an array element assignment statement.
+// Convert this stmt-function-stmt to an assignment to the result of a
+// pointer-valued function call -- which itself will be converted to a
+// much more likely array element assignment statement if it needs
+// to be.
 Statement<ActionStmt> StmtFunctionStmt::ConvertToAssignment() {
   auto &funcName{std::get<Name>(t)};
   auto &funcArgs{std::get<std::list<Name>>(t)};
   auto &funcExpr{std::get<Scalar<Expr>>(t).thing};
   CharBlock source{funcName.source};
-  std::list<Expr> subscripts;
-  for (Name &arg : funcArgs) {
-    subscripts.push_back(WithSource(arg.source,
-        Expr{common::Indirection{
-            WithSource(arg.source, Designator{DataRef{Name{arg}}})}}));
-    source.ExtendToCover(arg.source);
-  }
-  // extend source to include closing paren
+  // Extend source to include closing parenthesis
   if (funcArgs.empty()) {
     CHECK(*source.end() == '(');
     source = CharBlock{source.begin(), source.end() + 1};
   }
+  std::list<ActualArgSpec> actuals;
+  for (const Name &arg : funcArgs) {
+    actuals.emplace_back(std::optional<Keyword>{},
+        ActualArg{Expr{WithSource(
+            arg.source, Designator{DataRef{Name{arg.source, arg.symbol}}})}});
+    source.ExtendToCover(arg.source);
+  }
   CHECK(*source.end() == ')');
   source = CharBlock{source.begin(), source.end() + 1};
-  auto variable{Variable{common::Indirection{WithSource(
-      source, MakeArrayElementRef(funcName, std::move(subscripts)))}}};
+  FunctionReference funcRef{
+      Call{ProcedureDesignator{Name{funcName.source, funcName.symbol}},
+          std::move(actuals)}};
+  funcRef.source = source;
+  auto variable{Variable{common::Indirection{std::move(funcRef)}}};
   return Statement{std::nullopt,
       ActionStmt{common::Indirection{
           AssignmentStmt{std::move(variable), std::move(funcExpr)}}}};
 }
 
 CharBlock Variable::GetSource() const {
-  return std::visit(
+  return common::visit(
       common::visitors{
           [&](const common::Indirection<Designator> &des) {
             return des.value().source;
           },
           [&](const common::Indirection<parser::FunctionReference> &call) {
-            return call.value().v.source;
+            return call.value().source;
           },
       },
       u);
@@ -245,5 +251,52 @@ CharBlock Variable::GetSource() const {
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Name &x) {
   return os << x.ToString();
+}
+
+OmpDependenceType::Value OmpDoacross::GetDepType() const {
+  return common::visit( //
+      common::visitors{
+          [](const OmpDoacross::Sink &) {
+            return OmpDependenceType::Value::Sink;
+          },
+          [](const OmpDoacross::Source &) {
+            return OmpDependenceType::Value::Source;
+          },
+      },
+      u);
+}
+
+OmpTaskDependenceType::Value OmpDependClause::TaskDep::GetTaskDepType() const {
+  using Modifier = OmpDependClause::TaskDep::Modifier;
+  auto &modifiers{std::get<std::optional<std::list<Modifier>>>(t)};
+  if (modifiers) {
+    for (auto &m : *modifiers) {
+      if (auto *dep{std::get_if<OmpTaskDependenceType>(&m.u)}) {
+        return dep->v;
+      }
+    }
+    llvm_unreachable("expecting OmpTaskDependenceType in TaskDep");
+  } else {
+    llvm_unreachable("expecting modifiers on OmpDependClause::TaskDep");
+  }
+}
+
+} // namespace Fortran::parser
+
+template <typename C> static llvm::omp::Clause getClauseIdForClass(C &&) {
+  using namespace Fortran;
+  using A = llvm::remove_cvref_t<C>; // A is referenced in OMP.inc
+  // The code included below contains a sequence of checks like the following
+  // for each OpenMP clause
+  //   if constexpr (std::is_same_v<A, parser::OmpClause::AcqRel>)
+  //     return llvm::omp::Clause::OMPC_acq_rel;
+  //   [...]
+#define GEN_FLANG_CLAUSE_PARSER_KIND_MAP
+#include "llvm/Frontend/OpenMP/OMP.inc"
+}
+
+namespace Fortran::parser {
+llvm::omp::Clause OmpClause::Id() const {
+  return std::visit([](auto &&s) { return getClauseIdForClass(s); }, u);
 }
 } // namespace Fortran::parser

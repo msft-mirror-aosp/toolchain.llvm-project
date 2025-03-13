@@ -30,97 +30,97 @@ using E = _Complex int;
 
 template<typename T> T &make();
 
-// CHECK: @_ZDC2a12a2E = global {{.*}} zeroinitializer, align 4
+// CHECK: @_ZDC2a12a2E ={{.*}} global {{.*}} zeroinitializer, align 4
 auto [a1, a2] = make<A>();
-// CHECK: @_ZDC2b12b2E = global {{.*}} zeroinitializer, align 1
-// CHECK: @b1 = global {{.*}}* null, align 8
+// CHECK: @_ZDC2b12b2E ={{.*}} global {{.*}} zeroinitializer, align 1
+// CHECK: @b1 ={{.*}} global ptr null, align 8
 // CHECK: @_ZGR2b1_ = internal global {{.*}} zeroinitializer, align 1
-// CHECK: @b2 = global i32* null, align 8
+// CHECK: @b2 ={{.*}} global ptr null, align 8
 // CHECK: @_ZGR2b2_ = internal global i32 0, align 4
 auto [b1, b2] = make<B>();
-// CHECK: @_ZDC2c12c2E = global [2 x i32]* null, align 8
+// CHECK: @_ZDC2c12c2E ={{.*}} global ptr null, align 8
 auto &[c1, c2] = make<C>();
-// CHECK: @_ZDC2d12d2E = global <2 x i32> zeroinitializer, align 8
+// CHECK: @_ZDC2d12d2E ={{.*}} global <2 x i32> zeroinitializer, align 8
 auto [d1, d2] = make<D>();
-// CHECK: @_ZDC2e12e2E = global { i32, i32 } zeroinitializer, align 4
+// CHECK: @_ZDC2e12e2E ={{.*}} global { i32, i32 } zeroinitializer, align 4
 auto [e1, e2] = make<E>();
 
-// CHECK: call {{.*}}* @_Z4makeI1AERT_v()
+// CHECK: call {{.*}}ptr @_Z4makeI1AERT_v()
 // CHECK: call {{.*}}memcpy{{.*}}@_ZDC2a12a2E
 
 // CHECK: @_Z4makeI1BERT_v()
 //   CHECK: call i32 @_Z3getILi0EEDa1B()
-//   CHECK: call void @_ZN1XC1E1Y({{.*}}* {{[^,]*}} @_ZGR2b1_, i32
+//   CHECK: call void @_ZN1XC1E1Y(ptr {{[^,]*}} @_ZGR2b1_, i32
 //   CHECK: call i32 @__cxa_atexit({{.*}}@_ZN1XD1Ev{{.*}}@_ZGR2b1_
-//   CHECK: store {{.*}}* @_ZGR2b1_,
+//   CHECK: store ptr @_ZGR2b1_,
 //
-//   CHECK: call double @_Z3getILi1EEDa1B()
+//   CHECK: call noundef double @_Z3getILi1EEDa1B()
 //   CHECK: fptosi double %{{.*}} to i32
-//   CHECK: store i32 %{{.*}}, i32* @_ZGR2b2_
-//   CHECK: store i32* @_ZGR2b2_, i32** @b2
+//   CHECK: store i32 %{{.*}}, ptr @_ZGR2b2_
+//   CHECK: store ptr @_ZGR2b2_, ptr @b2
 
-// CHECK: call {{.*}}* @_Z4makeIA2_iERT_v()
-// CHECK: store {{.*}}, [2 x i32]** @_ZDC2c12c2E
+// CHECK: call {{.*}}ptr @_Z4makeIA2_iERT_v()
+// CHECK: store {{.*}}, ptr @_ZDC2c12c2E
 
-// CHECK: call {{.*}}* @_Z4makeIDv2_iERT_v()
-// CHECK: store {{.*}}, <2 x i32>* @_ZDC2d12d2E, align 8
+// CHECK: call {{.*}}ptr @_Z4makeIDv2_iERT_v()
+// CHECK: store {{.*}}, ptr @_ZDC2d12d2E, align 8
 
-// CHECK: call {{.*}}* @_Z4makeICiERT_v()
-// CHECK: store i32 %{{.*}}, i32* getelementptr inbounds ({ i32, i32 }, { i32, i32 }* @_ZDC2e12e2E, i32 0, i32 0)
-// CHECK: store i32 %{{.*}}, i32* getelementptr inbounds ({ i32, i32 }, { i32, i32 }* @_ZDC2e12e2E, i32 0, i32 1)
+// CHECK: call {{.*}}ptr @_Z4makeICiERT_v()
+// CHECK: store i32 %{{.*}}, ptr @_ZDC2e12e2E
+// CHECK: store i32 %{{.*}}, ptr getelementptr inbounds nuw ({ i32, i32 }, ptr @_ZDC2e12e2E, i32 0, i32 1)
 
-// CHECK: define i32 @_Z12test_globalsv()
+// CHECK: define{{.*}} i32 @_Z12test_globalsv()
 int test_globals() {
   return a2 + b2 + c2 + d2 + e2;
-  // CHECK: load i8, i8* getelementptr inbounds (%struct.A, %struct.A* @_ZDC2a12a2E, i32 0, i32 1)
+  // CHECK: load i8, ptr getelementptr inbounds nuw (%struct.A, ptr @_ZDC2a12a2E, i32 0, i32 1)
   //
-  // CHECK: %[[b2:.*]] = load i32*, i32** @b2
-  // CHECK: load i32, i32* %[[b2]]
+  // CHECK: %[[b2:.*]] = load ptr, ptr @b2
+  // CHECK: load i32, ptr %[[b2]]
   //
-  // CHECK: %[[c1c2:.*]] = load [2 x i32]*, [2 x i32]** @_ZDC2c12c2E
-  // CHECK: %[[c2:.*]] = getelementptr inbounds [2 x i32], [2 x i32]* %[[c1c2]], i64 0, i64 1
-  // CHECK: load i32, i32* %[[c2]]
+  // CHECK: %[[c1c2:.*]] = load ptr, ptr @_ZDC2c12c2E
+  // CHECK: %[[c2:.*]] = getelementptr inbounds [2 x i32], ptr %[[c1c2]], i64 0, i64 1
+  // CHECK: load i32, ptr %[[c2]]
   //
-  // CHECK: %[[d1d2:.*]] = load <2 x i32>, <2 x i32>* @_ZDC2d12d2E
+  // CHECK: %[[d1d2:.*]] = load <2 x i32>, ptr @_ZDC2d12d2E
   // CHECK: extractelement <2 x i32> %[[d1d2]], i32 1
   //
-  // CHECK: load i32, i32* getelementptr inbounds ({ i32, i32 }, { i32, i32 }* @_ZDC2e12e2E, i32 0, i32 1)
+  // CHECK: load i32, ptr getelementptr inbounds nuw ({ i32, i32 }, ptr @_ZDC2e12e2E, i32 0, i32 1)
 }
 
-// CHECK: define i32 @_Z11test_localsv()
+// CHECK: define{{.*}} i32 @_Z11test_localsv()
 int test_locals() {
   auto [b1, b2] = make<B>();
 
   // CHECK: @_Z4makeI1BERT_v()
   //   CHECK: call i32 @_Z3getILi0EEDa1B()
-  //   CHECK: call void @_ZN1XC1E1Y({{.*}}* {{[^,]*}} %[[b1:.*]], i32
+  //   CHECK: call void @_ZN1XC1E1Y(ptr {{[^,]*}} %[[b1:.*]], i32
   //
-  //   CHECK: call double @_Z3getILi1EEDa1B()
+  //   CHECK: call noundef double @_Z3getILi1EEDa1B()
   //   CHECK: %[[cvt:.*]] = fptosi double %{{.*}} to i32
-  //   CHECK: store i32 %[[cvt]], i32* %[[b2:.*]],
-  //   CHECK: store i32* %[[b2]], i32** %[[b2ref:.*]],
+  //   CHECK: store i32 %[[cvt]], ptr %[[b2:.*]],
+  //   CHECK: store ptr %[[b2]], ptr %[[b2ref:.*]],
 
   return b2;
-  // CHECK: %[[b2:.*]] = load i32*, i32** %[[b2ref]]
-  // CHECK: load i32, i32* %[[b2]]
+  // CHECK: %[[b2:.*]] = load ptr, ptr %[[b2ref]]
+  // CHECK: load i32, ptr %[[b2]]
 
   // CHECK: call {{.*}}@_ZN1XD1Ev({{.*}}%[[b1]])
 }
 
-// CHECK: define void @_Z13test_bitfieldR1A(
+// CHECK: define{{.*}} void @_Z13test_bitfieldR1A(
 void test_bitfield(A &a) {
   auto &[a1, a2] = a;
   a1 = 5;
-  // CHECK: load i16, i16* %[[BITFIELD:.*]],
+  // CHECK: load i16, ptr %[[BITFIELD:.*]],
   // CHECK: and i16 %{{.*}}, -8192
   // CHECK: or i16 %{{.*}}, 5
-  // CHECK: store i16 %{{.*}}, i16* %[[BITFIELD]],
+  // CHECK: store i16 %{{.*}}, ptr %[[BITFIELD]],
 }
 
 // CHECK-LABEL: define {{.*}}@_Z18test_static_simple
 void test_static_simple() {
   static auto [x1, x2] = make<A>();
-  // CHECK: load atomic {{.*}}i64* @_ZGVZ18test_static_simplevEDC2x12x2E
+  // CHECK: load atomic i8, {{.*}}@_ZGVZ18test_static_simplevEDC2x12x2E{{.*}} acquire, align 8
   // CHECK: br i1
   // CHECK: @__cxa_guard_acquire(
   // CHECK: call {{.*}} @_Z4makeI1AERT_v(
@@ -138,24 +138,24 @@ int test_static_tuple() {
   static auto [x1, x2] = make<B>();
 
   // Initialization of the implied variable.
-  // CHECK: load atomic {{.*}} @_ZGVZ17test_static_tuplevEDC2x12x2E
+  // CHECK: load atomic i8, {{.*}}@_ZGVZ17test_static_tuplevEDC2x12x2E{{.*}} acquire, align 8
   // CHECK: br i1
   // CHECK: @__cxa_guard_acquire({{.*}} @_ZGVZ17test_static_tuplevEDC2x12x2E)
   // CHECK: call {{.*}} @_Z4makeI1BERT_v(
   // CHECK: @__cxa_guard_release({{.*}} @_ZGVZ17test_static_tuplevEDC2x12x2E)
 
   // Initialization of the secret 'x1' variable.
-  // CHECK: load atomic {{.*}} @_ZGVZ17test_static_tuplevE2x1
+  // CHECK: load atomic i8, {{.*}}@_ZGVZ17test_static_tuplevE2x1{{.*}} acquire, align 8
   // CHECK: br i1
   // CHECK: @__cxa_guard_acquire({{.*}} @_ZGVZ17test_static_tuplevE2x1)
   // CHECK: call {{.*}} @_Z3getILi0EEDa1B(
   // CHECK: call {{.*}} @_ZN1XC1E1Y({{.*}} @_ZGRZ17test_static_tuplevE2x1_,
-  // CHECK: call {{.*}} @__cxa_atexit({{.*}} @_ZN1XD1Ev {{.*}} @_ZGRZ17test_static_tuplevE2x1_
+  // CHECK: call {{.*}} @__cxa_atexit({{.*}} @_ZN1XD1Ev, {{.*}} @_ZGRZ17test_static_tuplevE2x1_
   // CHECK: store {{.*}} @_ZGRZ17test_static_tuplevE2x1_, {{.*}} @_ZZ17test_static_tuplevE2x1
   // CHECK: call void @__cxa_guard_release({{.*}} @_ZGVZ17test_static_tuplevE2x1)
 
   // Initialization of the secret 'x2' variable.
-  // CHECK: load atomic {{.*}} @_ZGVZ17test_static_tuplevE2x2
+  // CHECK: load atomic i8, {{.*}}@_ZGVZ17test_static_tuplevE2x2{{.*}} acquire, align 8
   // CHECK: br i1
   // CHECK: @__cxa_guard_acquire({{.*}} @_ZGVZ17test_static_tuplevE2x2)
   // CHECK: call {{.*}} @_Z3getILi1EEDa1B(

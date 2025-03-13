@@ -244,7 +244,7 @@ void reinitializationTest(int i) {
     A a;
     if (i == 1) { // peaceful-note 2 {{'i' is not equal to 1}}
                   // peaceful-note@-1 2 {{Taking false branch}}
-      std::move(a);
+      (void)std::move(a);
     }
     if (i == 2) { // peaceful-note 2 {{'i' is not equal to 2}}
                   // peaceful-note@-1 2 {{Taking false branch}}
@@ -494,7 +494,7 @@ void templateArgIsNotUseTest() {
 // Moves of global variables are not reported.
 A global_a;
 void globalVariablesTest() {
-  std::move(global_a);
+  (void)std::move(global_a);
   global_a.foo(); // no-warning
 }
 
@@ -570,13 +570,8 @@ void differentBranchesTest(int i) {
   {
     A a;
     a.foo() > 0 ? a.foo() : A(std::move(a)).foo();
-#ifdef DFS
-    // peaceful-note@-2 {{Assuming the condition is false}}
-    // peaceful-note@-3 {{'?' condition is false}}
-#else
-    // peaceful-note@-5 {{Assuming the condition is true}}
-    // peaceful-note@-6 {{'?' condition is true}}
-#endif
+    // peaceful-note@-1 {{Assuming the condition is true}}
+    // peaceful-note@-2 {{'?' condition is true}}
   }
   // Same thing, but with a switch statement.
   {
@@ -611,6 +606,14 @@ void tempTest() {
   for (int i = 0; i < bignum(); i++) {
     A::get().foo(); // no-warning
   }
+}
+
+void lifeTimeExtendTest() {
+  A&& a = A{};
+  A b = std::move(a); // peaceful-note {{Object is moved}}
+
+  a.foo(); // peaceful-warning {{Method called on moved-from object}}
+           // peaceful-note@-1 {{Method called on moved-from object}}
 }
 
 void interFunTest1(A &a) {
@@ -897,6 +900,28 @@ void checkMoreLoopZombies4(bool flag) {
     for (; coin();)
       e; // expected-warning {{expression result unused}}
     Empty f = std::move(e); // no-warning
+  }
+}
+
+void checkExplicitDestructorCalls() {
+  // The below code segments invoke the destructor twice (explicit and 
+  // implicit). While this is not a desired code behavior, it is 
+  // not the use-after-move checker's responsibility to issue such a warning.
+  {
+     B* b = new B;
+     B a = std::move(*b);
+     b->~B(); // no-warning 
+     delete b;
+  }
+  {
+    B a, b;
+    new (&a) B(reinterpret_cast<B &&>(b));
+    (&b)->~B(); // no-warning
+  }
+  {
+    B b;
+    B a  = std::move(b);
+    b.~B(); // no-warning 
   }
 }
 

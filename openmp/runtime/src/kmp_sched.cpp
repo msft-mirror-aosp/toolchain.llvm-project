@@ -52,6 +52,7 @@ char const *traits_t<long>::spec = "ld";
     } else if (i > 0) {                                                        \
       t = (u - l) / i + 1;                                                     \
     } else {                                                                   \
+      KMP_DEBUG_ASSERT(i != 0);                                                \
       t = (l - u) / (-i) + 1;                                                  \
     }                                                                          \
     KMP_COUNT_VALUE(stat, t);                                                  \
@@ -61,11 +62,13 @@ char const *traits_t<long>::spec = "ld";
 #define KMP_STATS_LOOP_END(stat) /* Nothing */
 #endif
 
+#if USE_ITT_BUILD || defined KMP_DEBUG
 static ident_t loc_stub = {0, KMP_IDENT_KMPC, 0, 0, ";unknown;unknown;0;0;;"};
 static inline void check_loc(ident_t *&loc) {
   if (loc == NULL)
     loc = &loc_stub; // may need to report location info to ittnotify
 }
+#endif
 
 template <typename T>
 static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
@@ -78,10 +81,13 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
                                   ,
                                   void *codeptr
 #endif
-                                  ) {
+) {
   KMP_COUNT_BLOCK(OMP_LOOP_STATIC);
   KMP_PUSH_PARTITIONED_TIMER(OMP_loop_static);
   KMP_PUSH_PARTITIONED_TIMER(OMP_loop_static_scheduling);
+
+  // Clear monotonic/nonmonotonic bits (ignore it)
+  schedtype = SCHEDULE_WITHOUT_MODIFIERS(schedtype);
 
   typedef typename traits_t<T>::unsigned_t UT;
   typedef typename traits_t<T>::signed_t ST;
@@ -97,18 +103,18 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   ompt_team_info_t *team_info = NULL;
   ompt_task_info_t *task_info = NULL;
-  ompt_work_t ompt_work_type = ompt_work_loop;
+  ompt_work_t ompt_work_type = ompt_work_loop_static;
 
   static kmp_int8 warn = 0;
 
-  if (ompt_enabled.ompt_callback_work) {
+  if (ompt_enabled.ompt_callback_work || ompt_enabled.ompt_callback_dispatch) {
     // Only fully initialize variables needed by OMPT if OMPT is enabled.
     team_info = __ompt_get_teaminfo(0, NULL);
     task_info = __ompt_get_task_info_object(0);
     // Determine workshare type
     if (loc != NULL) {
       if ((loc->flags & KMP_IDENT_WORK_LOOP) != 0) {
-        ompt_work_type = ompt_work_loop;
+        ompt_work_type = ompt_work_loop_static;
       } else if ((loc->flags & KMP_IDENT_WORK_SECTIONS) != 0) {
         ompt_work_type = ompt_work_sections;
       } else if ((loc->flags & KMP_IDENT_WORK_DISTRIBUTE) != 0) {
@@ -167,6 +173,7 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
                               "signed?<%s>, loc = %%s\n",
                               traits_t<T>::spec, traits_t<T>::spec,
                               traits_t<ST>::spec, traits_t<T>::spec);
+      check_loc(loc);
       KD_TRACE(100,
                (buff, *plastiter, *plower, *pupper, *pstride, loc->psource));
       __kmp_str_free(&buff);
@@ -193,8 +200,13 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
     // we are in DISTRIBUTE construct
     schedtype += kmp_sch_static -
                  kmp_distribute_static; // AC: convert to usual schedule type
-    tid = th->th.th_team->t.t_master_tid;
-    team = th->th.th_team->t.t_parent;
+    if (th->th.th_team->t.t_serialized > 1) {
+      tid = 0;
+      team = th->th.th_team;
+    } else {
+      tid = th->th.th_team->t.t_master_tid;
+      team = th->th.th_team->t.t_parent;
+    }
   } else {
     tid = __kmp_tid_from_gtid(global_tid);
     team = th->th.th_team;
@@ -273,6 +285,7 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
     // upper-lower can exceed the limit of signed type
     trip_count = (UT)(*pupper - *plower) / incr + 1;
   } else {
+    KMP_DEBUG_ASSERT(incr != 0);
     trip_count = (UT)(*plower - *pupper) / (-incr) + 1;
   }
 
@@ -301,11 +314,13 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
       if (tid < trip_count) {
         *pupper = *plower = *plower + tid * incr;
       } else {
-        *plower = *pupper + incr;
+        // set bounds so non-active threads execute no iterations
+        *plower = *pupper + (incr > 0 ? 1 : -1);
       }
       if (plastiter != NULL)
         *plastiter = (tid == trip_count - 1);
     } else {
+      KMP_DEBUG_ASSERT(nth != 0);
       if (__kmp_static == kmp_sch_static_balanced) {
         UT small_chunk = trip_count / nth;
         UT extras = trip_count % nth;
@@ -345,19 +360,34 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
   }
   case kmp_sch_static_chunked: {
     ST span;
-    if (chunk < 1) {
+    UT nchunks;
+    KMP_DEBUG_ASSERT(chunk != 0);
+    if (chunk < 1)
       chunk = 1;
-    }
+    else if ((UT)chunk > trip_count)
+      chunk = trip_count;
+    nchunks = (trip_count) / (UT)chunk + (trip_count % (UT)chunk ? 1 : 0);
     span = chunk * incr;
-    *pstride = span * nth;
-    *plower = *plower + (span * tid);
-    *pupper = *plower + span - incr;
+    if (nchunks < nth) {
+      *pstride = span * nchunks;
+      if (tid < nchunks) {
+        *plower = *plower + (span * tid);
+        *pupper = *plower + span - incr;
+      } else {
+        *plower = *pupper + (incr > 0 ? 1 : -1);
+      }
+    } else {
+      *pstride = span * nth;
+      *plower = *plower + (span * tid);
+      *pupper = *plower + span - incr;
+    }
     if (plastiter != NULL)
-      *plastiter = (tid == ((trip_count - 1) / (UT)chunk) % nth);
+      *plastiter = (tid == (nchunks - 1) % nth);
     break;
   }
   case kmp_sch_static_balanced_chunked: {
     T old_upper = *pupper;
+    KMP_DEBUG_ASSERT(nth != 0);
     // round up to make sure the chunk is enough to cover all iterations
     UT span = (trip_count + nth - 1) / nth;
 
@@ -373,8 +403,10 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
     } else if (*pupper < old_upper)
       *pupper = old_upper;
 
-    if (plastiter != NULL)
+    if (plastiter != NULL) {
+      KMP_DEBUG_ASSERT(chunk != 0);
       *plastiter = (tid == ((trip_count - 1) / (UT)chunk));
+    }
     break;
   }
   default:
@@ -392,6 +424,7 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
     // Calculate chunk in case it was not specified; it is specified for
     // kmp_sch_static_chunked
     if (schedtype == kmp_sch_static) {
+      KMP_DEBUG_ASSERT(nth != 0);
       cur_chunk = trip_count / nth + ((trip_count % nth) ? 1 : 0);
     }
     // 0 - "static" schedule
@@ -418,6 +451,24 @@ static void __kmp_for_static_init(ident_t *loc, kmp_int32 global_tid,
         ompt_work_type, ompt_scope_begin, &(team_info->parallel_data),
         &(task_info->task_data), trip_count, codeptr);
   }
+  if (ompt_enabled.ompt_callback_dispatch) {
+    ompt_dispatch_t dispatch_type;
+    ompt_data_t instance = ompt_data_none;
+    ompt_dispatch_chunk_t dispatch_chunk;
+    if (ompt_work_type == ompt_work_sections) {
+      dispatch_type = ompt_dispatch_section;
+      instance.ptr = codeptr;
+    } else {
+      OMPT_GET_DISPATCH_CHUNK(dispatch_chunk, *plower, *pupper, incr);
+      dispatch_type = (ompt_work_type == ompt_work_distribute)
+                          ? ompt_dispatch_distribute_chunk
+                          : ompt_dispatch_ws_loop_chunk;
+      instance.ptr = &dispatch_chunk;
+    }
+    ompt_callbacks.ompt_callback(ompt_callback_dispatch)(
+        &(team_info->parallel_data), &(task_info->task_data), dispatch_type,
+        instance);
+  }
 #endif
 
   KMP_STATS_LOOP_END(OMP_loop_static_iterations);
@@ -430,7 +481,12 @@ static void __kmp_dist_for_static_init(ident_t *loc, kmp_int32 gtid,
                                        T *plower, T *pupper, T *pupperDist,
                                        typename traits_t<T>::signed_t *pstride,
                                        typename traits_t<T>::signed_t incr,
-                                       typename traits_t<T>::signed_t chunk) {
+                                       typename traits_t<T>::signed_t chunk
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+                                       ,
+                                       void *codeptr
+#endif
+) {
   KMP_COUNT_BLOCK(OMP_DISTRIBUTE);
   KMP_PUSH_PARTITIONED_TIMER(OMP_distribute);
   KMP_PUSH_PARTITIONED_TIMER(OMP_distribute_scheduling);
@@ -499,6 +555,7 @@ static void __kmp_dist_for_static_init(ident_t *loc, kmp_int32 gtid,
     // upper-lower can exceed the limit of signed type
     trip_count = (UT)(*pupper - *plower) / incr + 1;
   } else {
+    KMP_DEBUG_ASSERT(incr != 0);
     trip_count = (UT)(*plower - *pupper) / (-incr) + 1;
   }
 
@@ -508,8 +565,8 @@ static void __kmp_dist_for_static_init(ident_t *loc, kmp_int32 gtid,
         __kmp_static == kmp_sch_static_greedy ||
         __kmp_static ==
             kmp_sch_static_balanced); // Unknown static scheduling type.
-    // only masters of some teams get single iteration, other threads get
-    // nothing
+    // only primary threads of some teams get single iteration, other threads
+    // get nothing
     if (team_id < trip_count && tid == 0) {
       *pupper = *pupperDist = *plower = *plower + team_id * incr;
     } else {
@@ -520,6 +577,7 @@ static void __kmp_dist_for_static_init(ident_t *loc, kmp_int32 gtid,
       *plastiter = (tid == 0 && team_id == trip_count - 1);
   } else {
     // Get the team's chunk first (each team gets at most one chunk)
+    KMP_DEBUG_ASSERT(nteams != 0);
     if (__kmp_static == kmp_sch_static_balanced) {
       UT chunkD = trip_count / nteams;
       UT extras = trip_count % nteams;
@@ -571,6 +629,7 @@ static void __kmp_dist_for_static_init(ident_t *loc, kmp_int32 gtid,
       // upper-lower can exceed the limit of signed type
       trip_count = (UT)(*pupperDist - *plower) / incr + 1;
     } else {
+      KMP_DEBUG_ASSERT(incr != 0);
       trip_count = (UT)(*plower - *pupperDist) / (-incr) + 1;
     }
     KMP_DEBUG_ASSERT(trip_count);
@@ -589,6 +648,7 @@ static void __kmp_dist_for_static_init(ident_t *loc, kmp_int32 gtid,
           if (*plastiter != 0 && !(tid == trip_count - 1))
             *plastiter = 0;
       } else {
+        KMP_DEBUG_ASSERT(nth != 0);
         if (__kmp_static == kmp_sch_static_balanced) {
           UT chunkL = trip_count / nth;
           UT extras = trip_count % nth;
@@ -636,9 +696,11 @@ static void __kmp_dist_for_static_init(ident_t *loc, kmp_int32 gtid,
       *pstride = span * nth;
       *plower = *plower + (span * tid);
       *pupper = *plower + span - incr;
-      if (plastiter != NULL)
+      if (plastiter != NULL) {
+        KMP_DEBUG_ASSERT(chunk != 0);
         if (*plastiter != 0 && !(tid == ((trip_count - 1) / (UT)chunk) % nth))
           *plastiter = 0;
+      }
       break;
     }
     default:
@@ -662,6 +724,26 @@ end:;
   }
 #endif
   KE_TRACE(10, ("__kmpc_dist_for_static_init: T#%d return\n", gtid));
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  if (ompt_enabled.ompt_callback_work || ompt_enabled.ompt_callback_dispatch) {
+    ompt_team_info_t *team_info = __ompt_get_teaminfo(0, NULL);
+    ompt_task_info_t *task_info = __ompt_get_task_info_object(0);
+    if (ompt_enabled.ompt_callback_work) {
+      ompt_callbacks.ompt_callback(ompt_callback_work)(
+          ompt_work_distribute, ompt_scope_begin, &(team_info->parallel_data),
+          &(task_info->task_data), 0, codeptr);
+    }
+    if (ompt_enabled.ompt_callback_dispatch) {
+      ompt_data_t instance = ompt_data_none;
+      ompt_dispatch_chunk_t dispatch_chunk;
+      OMPT_GET_DISPATCH_CHUNK(dispatch_chunk, *plower, *pupperDist, incr);
+      instance.ptr = &dispatch_chunk;
+      ompt_callbacks.ompt_callback(ompt_callback_dispatch)(
+          &(team_info->parallel_data), &(task_info->task_data),
+          ompt_dispatch_distribute_chunk, instance);
+    }
+  }
+#endif // OMPT_SUPPORT && OMPT_OPTIONAL
   KMP_STATS_LOOP_END(OMP_distribute_iterations);
   return;
 }
@@ -741,6 +823,7 @@ static void __kmp_team_static_init(ident_t *loc, kmp_int32 gtid,
     // upper-lower can exceed the limit of signed type
     trip_count = (UT)(upper - lower) / incr + 1;
   } else {
+    KMP_DEBUG_ASSERT(incr != 0);
     trip_count = (UT)(lower - upper) / (-incr) + 1;
   }
   if (chunk < 1)
@@ -749,8 +832,10 @@ static void __kmp_team_static_init(ident_t *loc, kmp_int32 gtid,
   *p_st = span * nteams;
   *p_lb = lower + (span * team_id);
   *p_ub = *p_lb + span - incr;
-  if (p_last != NULL)
+  if (p_last != NULL) {
+    KMP_DEBUG_ASSERT(chunk != 0);
     *p_last = (team_id == ((trip_count - 1) / (UT)chunk) % nteams);
+  }
   // Correct upper bound if needed
   if (incr > 0) {
     if (*p_ub < *p_lb) // overflow?
@@ -811,7 +896,7 @@ void __kmpc_for_static_init_4(ident_t *loc, kmp_int32 gtid, kmp_int32 schedtype,
                                    ,
                                    OMPT_GET_RETURN_ADDRESS(0)
 #endif
-                                       );
+  );
 }
 
 /*!
@@ -828,7 +913,7 @@ void __kmpc_for_static_init_4u(ident_t *loc, kmp_int32 gtid,
                                     ,
                                     OMPT_GET_RETURN_ADDRESS(0)
 #endif
-                                        );
+  );
 }
 
 /*!
@@ -844,7 +929,7 @@ void __kmpc_for_static_init_8(ident_t *loc, kmp_int32 gtid, kmp_int32 schedtype,
                                    ,
                                    OMPT_GET_RETURN_ADDRESS(0)
 #endif
-                                       );
+  );
 }
 
 /*!
@@ -861,11 +946,17 @@ void __kmpc_for_static_init_8u(ident_t *loc, kmp_int32 gtid,
                                     ,
                                     OMPT_GET_RETURN_ADDRESS(0)
 #endif
-                                        );
+  );
 }
 /*!
 @}
 */
+
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+#define OMPT_CODEPTR_ARG , OMPT_GET_RETURN_ADDRESS(0)
+#else
+#define OMPT_CODEPTR_ARG
+#endif
 
 /*!
 @ingroup WORK_SHARING
@@ -895,7 +986,8 @@ void __kmpc_dist_for_static_init_4(ident_t *loc, kmp_int32 gtid,
                                    kmp_int32 *pupperD, kmp_int32 *pstride,
                                    kmp_int32 incr, kmp_int32 chunk) {
   __kmp_dist_for_static_init<kmp_int32>(loc, gtid, schedule, plastiter, plower,
-                                        pupper, pupperD, pstride, incr, chunk);
+                                        pupper, pupperD, pstride, incr,
+                                        chunk OMPT_CODEPTR_ARG);
 }
 
 /*!
@@ -907,7 +999,8 @@ void __kmpc_dist_for_static_init_4u(ident_t *loc, kmp_int32 gtid,
                                     kmp_uint32 *pupperD, kmp_int32 *pstride,
                                     kmp_int32 incr, kmp_int32 chunk) {
   __kmp_dist_for_static_init<kmp_uint32>(loc, gtid, schedule, plastiter, plower,
-                                         pupper, pupperD, pstride, incr, chunk);
+                                         pupper, pupperD, pstride, incr,
+                                         chunk OMPT_CODEPTR_ARG);
 }
 
 /*!
@@ -919,7 +1012,8 @@ void __kmpc_dist_for_static_init_8(ident_t *loc, kmp_int32 gtid,
                                    kmp_int64 *pupperD, kmp_int64 *pstride,
                                    kmp_int64 incr, kmp_int64 chunk) {
   __kmp_dist_for_static_init<kmp_int64>(loc, gtid, schedule, plastiter, plower,
-                                        pupper, pupperD, pstride, incr, chunk);
+                                        pupper, pupperD, pstride, incr,
+                                        chunk OMPT_CODEPTR_ARG);
 }
 
 /*!
@@ -931,7 +1025,8 @@ void __kmpc_dist_for_static_init_8u(ident_t *loc, kmp_int32 gtid,
                                     kmp_uint64 *pupperD, kmp_int64 *pstride,
                                     kmp_int64 incr, kmp_int64 chunk) {
   __kmp_dist_for_static_init<kmp_uint64>(loc, gtid, schedule, plastiter, plower,
-                                         pupper, pupperD, pstride, incr, chunk);
+                                         pupper, pupperD, pstride, incr,
+                                         chunk OMPT_CODEPTR_ARG);
 }
 /*!
 @}

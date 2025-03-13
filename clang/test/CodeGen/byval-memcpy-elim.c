@@ -12,7 +12,7 @@ struct Test2S {
 
 // Make sure we don't generate extra memcpy for lvalues
 void test1a(struct Test1S, struct Test2S);
-// CHECK-LABEL: define void @test1(
+// CHECK-LABEL: define{{.*}} void @test1(
 // CHECK-NOT: memcpy
 // CHECK: call void @test1a
 void test1(struct Test1S *A, struct Test2S *B) {
@@ -21,14 +21,13 @@ void test1(struct Test1S *A, struct Test2S *B) {
 
 // The above gets tricker when the byval argument requires higher alignment
 // than the natural alignment of the type in question.
-// rdar://9483886
 
 // Make sure we do generate a memcpy when we cannot guarantee alignment.
 struct Test3S {
   int a,b,c,d,e,f,g,h,i,j,k,l;
 };
 void test2a(struct Test3S q);
-// CHECK-LABEL: define void @test2(
+// CHECK-LABEL: define{{.*}} void @test2(
 // CHECK: alloca %struct.Test3S, align 8
 // CHECK: memcpy
 // CHECK: call void @test2a
@@ -38,7 +37,7 @@ void test2(struct Test3S *q) {
 
 // But make sure we don't generate a memcpy when we can guarantee alignment.
 void fooey(void);
-// CHECK-LABEL: define void @test3(
+// CHECK-LABEL: define{{.*}} void @test3(
 // CHECK: alloca %struct.Test3S, align 8
 // CHECK: call void @fooey
 // CHECK-NOT: memcpy

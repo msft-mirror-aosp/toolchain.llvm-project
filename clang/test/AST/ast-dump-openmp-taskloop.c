@@ -41,7 +41,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: | `-CompoundStmt {{.*}} <col:22, line:7:1>
 // CHECK-NEXT: |   `-OMPTaskLoopDirective {{.*}} <line:4:1, col:21>
 // CHECK-NEXT: |     |-OMPFirstprivateClause {{.*}} <<invalid sloc>> <implicit>
-// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:5:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
+// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:5:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |     `-CapturedStmt {{.*}} <col:3, line:6:5>
 // CHECK-NEXT: |       `-CapturedDecl {{.*}} <<invalid sloc>> <invalid sloc>
 // CHECK-NEXT: |         |-ForStmt {{.*}} <line:5:3, line:6:5>
@@ -53,7 +53,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         | | |-ImplicitCastExpr {{.*}} <col:19> 'int' <LValueToRValue>
 // CHECK-NEXT: |         | | | `-DeclRefExpr {{.*}} <col:19> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | | `-ImplicitCastExpr {{.*}} <col:23> 'int' <LValueToRValue>
-// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
+// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |         | |-UnaryOperator {{.*}} <col:26, col:27> 'int' postfix '++'
 // CHECK-NEXT: |         | | `-DeclRefExpr {{.*}} <col:26> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | `-NullStmt {{.*}} <line:6:5>
@@ -68,7 +68,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .st. 'const long'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .liter. 'const int'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .reductions. 'void *const restrict'
-// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (anonymous at {{.*}}ast-dump-openmp-taskloop.c:4:1) *const restrict'
+// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (unnamed at {{.*}}ast-dump-openmp-taskloop.c:4:1) *const restrict'
 // CHECK-NEXT: |         `-VarDecl {{.*}} <line:5:8, col:16> col:12 used i 'int' cinit
 // CHECK-NEXT: |           `-IntegerLiteral {{.*}} <col:16> 'int' 0
 // CHECK-NEXT: |-FunctionDecl {{.*}} <line:9:1, line:14:1> line:9:6 test_two 'void (int, int)'
@@ -77,8 +77,8 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: | `-CompoundStmt {{.*}} <col:29, line:14:1>
 // CHECK-NEXT: |   `-OMPTaskLoopDirective {{.*}} <line:10:1, col:21>
 // CHECK-NEXT: |     |-OMPFirstprivateClause {{.*}} <<invalid sloc>> <implicit>
-// CHECK-NEXT: |     | |-DeclRefExpr {{.*}} <line:11:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
-// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:12:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
+// CHECK-NEXT: |     | |-DeclRefExpr {{.*}} <line:11:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
+// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:12:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |     `-CapturedStmt {{.*}} <line:11:3, line:13:7>
 // CHECK-NEXT: |       `-CapturedDecl {{.*}} <<invalid sloc>> <invalid sloc>
 // CHECK-NEXT: |         |-ForStmt {{.*}} <line:11:3, line:13:7>
@@ -90,7 +90,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         | | |-ImplicitCastExpr {{.*}} <col:19> 'int' <LValueToRValue>
 // CHECK-NEXT: |         | | | `-DeclRefExpr {{.*}} <col:19> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | | `-ImplicitCastExpr {{.*}} <col:23> 'int' <LValueToRValue>
-// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
+// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |         | |-UnaryOperator {{.*}} <col:26, col:27> 'int' postfix '++'
 // CHECK-NEXT: |         | | `-DeclRefExpr {{.*}} <col:26> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | `-ForStmt {{.*}} <line:12:5, line:13:7>
@@ -102,7 +102,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         |   | |-ImplicitCastExpr {{.*}} <col:21> 'int' <LValueToRValue>
 // CHECK-NEXT: |         |   | | `-DeclRefExpr {{.*}} <col:21> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         |   | `-ImplicitCastExpr {{.*}} <col:25> 'int' <LValueToRValue>
-// CHECK-NEXT: |         |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
+// CHECK-NEXT: |         |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |         |   |-UnaryOperator {{.*}} <col:28, col:29> 'int' postfix '++'
 // CHECK-NEXT: |         |   | `-DeclRefExpr {{.*}} <col:28> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         |   `-NullStmt {{.*}} <line:13:7>
@@ -117,7 +117,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .st. 'const long'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .liter. 'const int'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .reductions. 'void *const restrict'
-// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (anonymous at {{.*}}ast-dump-openmp-taskloop.c:10:1) *const restrict'
+// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (unnamed at {{.*}}ast-dump-openmp-taskloop.c:10:1) *const restrict'
 // CHECK-NEXT: |         |-VarDecl {{.*}} <line:11:8, col:16> col:12 used i 'int' cinit
 // CHECK-NEXT: |         | `-IntegerLiteral {{.*}} <col:16> 'int' 0
 // CHECK-NEXT: |         `-VarDecl {{.*}} <line:12:10, col:18> col:14 used i 'int' cinit
@@ -129,10 +129,11 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |   `-OMPTaskLoopDirective {{.*}} <line:17:1, col:33>
 // CHECK-NEXT: |     |-OMPCollapseClause {{.*}} <col:22, col:32>
 // CHECK-NEXT: |     | `-ConstantExpr {{.*}} <col:31> 'int'
+// CHECK-NEXT: |     | |-value: Int 1
 // CHECK-NEXT: |     |   `-IntegerLiteral {{.*}} <col:31> 'int' 1
 // CHECK-NEXT: |     |-OMPFirstprivateClause {{.*}} <<invalid sloc>> <implicit>
-// CHECK-NEXT: |     | |-DeclRefExpr {{.*}} <line:18:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
-// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:19:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
+// CHECK-NEXT: |     | |-DeclRefExpr {{.*}} <line:18:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
+// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:19:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |     `-CapturedStmt {{.*}} <line:18:3, line:20:7>
 // CHECK-NEXT: |       `-CapturedDecl {{.*}} <<invalid sloc>> <invalid sloc>
 // CHECK-NEXT: |         |-ForStmt {{.*}} <line:18:3, line:20:7>
@@ -144,7 +145,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         | | |-ImplicitCastExpr {{.*}} <col:19> 'int' <LValueToRValue>
 // CHECK-NEXT: |         | | | `-DeclRefExpr {{.*}} <col:19> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | | `-ImplicitCastExpr {{.*}} <col:23> 'int' <LValueToRValue>
-// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
+// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |         | |-UnaryOperator {{.*}} <col:26, col:27> 'int' postfix '++'
 // CHECK-NEXT: |         | | `-DeclRefExpr {{.*}} <col:26> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | `-ForStmt {{.*}} <line:19:5, line:20:7>
@@ -156,7 +157,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         |   | |-ImplicitCastExpr {{.*}} <col:21> 'int' <LValueToRValue>
 // CHECK-NEXT: |         |   | | `-DeclRefExpr {{.*}} <col:21> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         |   | `-ImplicitCastExpr {{.*}} <col:25> 'int' <LValueToRValue>
-// CHECK-NEXT: |         |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
+// CHECK-NEXT: |         |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |         |   |-UnaryOperator {{.*}} <col:28, col:29> 'int' postfix '++'
 // CHECK-NEXT: |         |   | `-DeclRefExpr {{.*}} <col:28> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         |   `-NullStmt {{.*}} <line:20:7>
@@ -171,7 +172,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .st. 'const long'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .liter. 'const int'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .reductions. 'void *const restrict'
-// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (anonymous at {{.*}}ast-dump-openmp-taskloop.c:17:1) *const restrict'
+// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (unnamed at {{.*}}ast-dump-openmp-taskloop.c:17:1) *const restrict'
 // CHECK-NEXT: |         |-VarDecl {{.*}} <line:18:8, col:16> col:12 used i 'int' cinit
 // CHECK-NEXT: |         | `-IntegerLiteral {{.*}} <col:16> 'int' 0
 // CHECK-NEXT: |         `-VarDecl {{.*}} <line:19:10, col:18> col:14 used i 'int' cinit
@@ -183,10 +184,11 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |   `-OMPTaskLoopDirective {{.*}} <line:24:1, col:33>
 // CHECK-NEXT: |     |-OMPCollapseClause {{.*}} <col:22, col:32>
 // CHECK-NEXT: |     | `-ConstantExpr {{.*}} <col:31> 'int'
+// CHECK-NEXT: |     | |-value: Int 2
 // CHECK-NEXT: |     |   `-IntegerLiteral {{.*}} <col:31> 'int' 2
 // CHECK-NEXT: |     |-OMPFirstprivateClause {{.*}} <<invalid sloc>> <implicit>
-// CHECK-NEXT: |     | |-DeclRefExpr {{.*}} <line:25:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
-// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:26:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
+// CHECK-NEXT: |     | |-DeclRefExpr {{.*}} <line:25:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
+// CHECK-NEXT: |     | `-DeclRefExpr {{.*}} <line:26:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |     `-CapturedStmt {{.*}} <line:25:3, line:27:7>
 // CHECK-NEXT: |       `-CapturedDecl {{.*}} <<invalid sloc>> <invalid sloc>
 // CHECK-NEXT: |         |-ForStmt {{.*}} <line:25:3, line:27:7>
@@ -198,7 +200,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         | | |-ImplicitCastExpr {{.*}} <col:19> 'int' <LValueToRValue>
 // CHECK-NEXT: |         | | | `-DeclRefExpr {{.*}} <col:19> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | | `-ImplicitCastExpr {{.*}} <col:23> 'int' <LValueToRValue>
-// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
+// CHECK-NEXT: |         | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |         | |-UnaryOperator {{.*}} <col:26, col:27> 'int' postfix '++'
 // CHECK-NEXT: |         | | `-DeclRefExpr {{.*}} <col:26> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         | `-ForStmt {{.*}} <line:26:5, line:27:7>
@@ -210,7 +212,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         |   | |-ImplicitCastExpr {{.*}} <col:21> 'int' <LValueToRValue>
 // CHECK-NEXT: |         |   | | `-DeclRefExpr {{.*}} <col:21> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         |   | `-ImplicitCastExpr {{.*}} <col:25> 'int' <LValueToRValue>
-// CHECK-NEXT: |         |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
+// CHECK-NEXT: |         |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT: |         |   |-UnaryOperator {{.*}} <col:28, col:29> 'int' postfix '++'
 // CHECK-NEXT: |         |   | `-DeclRefExpr {{.*}} <col:28> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT: |         |   `-NullStmt {{.*}} <line:27:7>
@@ -225,7 +227,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .st. 'const long'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .liter. 'const int'
 // CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .reductions. 'void *const restrict'
-// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (anonymous at {{.*}}ast-dump-openmp-taskloop.c:24:1) *const restrict'
+// CHECK-NEXT: |         |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (unnamed at {{.*}}ast-dump-openmp-taskloop.c:24:1) *const restrict'
 // CHECK-NEXT: |         |-VarDecl {{.*}} <line:25:8, col:16> col:12 used i 'int' cinit
 // CHECK-NEXT: |         | `-IntegerLiteral {{.*}} <col:16> 'int' 0
 // CHECK-NEXT: |         `-VarDecl {{.*}} <line:26:10, col:18> col:14 used i 'int' cinit
@@ -238,11 +240,12 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT:     `-OMPTaskLoopDirective {{.*}} <line:31:1, col:33>
 // CHECK-NEXT:       |-OMPCollapseClause {{.*}} <col:22, col:32>
 // CHECK-NEXT:       | `-ConstantExpr {{.*}} <col:31> 'int'
+// CHECK-NEXT:       | |-value: Int 2
 // CHECK-NEXT:       |   `-IntegerLiteral {{.*}} <col:31> 'int' 2
 // CHECK-NEXT:       |-OMPFirstprivateClause {{.*}} <<invalid sloc>> <implicit>
-// CHECK-NEXT:       | |-DeclRefExpr {{.*}} <line:32:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
-// CHECK-NEXT:       | |-DeclRefExpr {{.*}} <line:33:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
-// CHECK-NEXT:       | `-DeclRefExpr {{.*}} <line:34:27> 'int' lvalue ParmVar {{.*}} 'z' 'int'
+// CHECK-NEXT:       | |-DeclRefExpr {{.*}} <line:32:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
+// CHECK-NEXT:       | |-DeclRefExpr {{.*}} <line:33:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
+// CHECK-NEXT:       | `-DeclRefExpr {{.*}} <line:34:27> 'int' lvalue ParmVar {{.*}} 'z' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT:       `-CapturedStmt {{.*}} <line:32:3, line:35:9>
 // CHECK-NEXT:         `-CapturedDecl {{.*}} <<invalid sloc>> <invalid sloc>
 // CHECK-NEXT:           |-ForStmt {{.*}} <line:32:3, line:35:9>
@@ -254,7 +257,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT:           | | |-ImplicitCastExpr {{.*}} <col:19> 'int' <LValueToRValue>
 // CHECK-NEXT:           | | | `-DeclRefExpr {{.*}} <col:19> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT:           | | `-ImplicitCastExpr {{.*}} <col:23> 'int' <LValueToRValue>
-// CHECK-NEXT:           | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int'
+// CHECK-NEXT:           | |   `-DeclRefExpr {{.*}} <col:23> 'int' lvalue ParmVar {{.*}} 'x' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT:           | |-UnaryOperator {{.*}} <col:26, col:27> 'int' postfix '++'
 // CHECK-NEXT:           | | `-DeclRefExpr {{.*}} <col:26> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT:           | `-ForStmt {{.*}} <line:33:5, line:35:9>
@@ -266,7 +269,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT:           |   | |-ImplicitCastExpr {{.*}} <col:21> 'int' <LValueToRValue>
 // CHECK-NEXT:           |   | | `-DeclRefExpr {{.*}} <col:21> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT:           |   | `-ImplicitCastExpr {{.*}} <col:25> 'int' <LValueToRValue>
-// CHECK-NEXT:           |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int'
+// CHECK-NEXT:           |   |   `-DeclRefExpr {{.*}} <col:25> 'int' lvalue ParmVar {{.*}} 'y' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT:           |   |-UnaryOperator {{.*}} <col:28, col:29> 'int' postfix '++'
 // CHECK-NEXT:           |   | `-DeclRefExpr {{.*}} <col:28> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT:           |   `-ForStmt {{.*}} <line:34:7, line:35:9>
@@ -278,7 +281,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT:           |     | |-ImplicitCastExpr {{.*}} <col:23> 'int' <LValueToRValue>
 // CHECK-NEXT:           |     | | `-DeclRefExpr {{.*}} <col:23> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT:           |     | `-ImplicitCastExpr {{.*}} <col:27> 'int' <LValueToRValue>
-// CHECK-NEXT:           |     |   `-DeclRefExpr {{.*}} <col:27> 'int' lvalue ParmVar {{.*}} 'z' 'int'
+// CHECK-NEXT:           |     |   `-DeclRefExpr {{.*}} <col:27> 'int' lvalue ParmVar {{.*}} 'z' 'int' refers_to_enclosing_variable_or_capture
 // CHECK-NEXT:           |     |-UnaryOperator {{.*}} <col:30, col:31> 'int' postfix '++'
 // CHECK-NEXT:           |     | `-DeclRefExpr {{.*}} <col:30> 'int' lvalue Var {{.*}} 'i' 'int'
 // CHECK-NEXT:           |     `-NullStmt {{.*}} <line:35:9>
@@ -293,7 +296,7 @@ void test_five(int x, int y, int z) {
 // CHECK-NEXT:           |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .st. 'const long'
 // CHECK-NEXT:           |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .liter. 'const int'
 // CHECK-NEXT:           |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit .reductions. 'void *const restrict'
-// CHECK-NEXT:           |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (anonymous at {{.*}}ast-dump-openmp-taskloop.c:31:1) *const restrict'
+// CHECK-NEXT:           |-ImplicitParamDecl {{.*}} <col:1> col:1 implicit __context 'struct (unnamed at {{.*}}ast-dump-openmp-taskloop.c:31:1) *const restrict'
 // CHECK-NEXT:           |-VarDecl {{.*}} <line:32:8, col:16> col:12 used i 'int' cinit
 // CHECK-NEXT:           | `-IntegerLiteral {{.*}} <col:16> 'int' 0
 // CHECK-NEXT:           |-VarDecl {{.*}} <line:33:10, col:18> col:14 used i 'int' cinit

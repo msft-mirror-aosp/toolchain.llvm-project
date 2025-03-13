@@ -1,10 +1,10 @@
 // clang-format off
-// REQUIRES: lld
+// REQUIRES: lld, x86
 
 // Test that we can show disassembly and source.
 // RUN: %clang_cl --target=x86_64-windows-msvc -Od -Z7 -c /Fo%t.obj -- %s
 // RUN: lld-link -debug:full -nodefaultlib -entry:main %t.obj -out:%t.exe -pdb:%t.pdb
-// RUN: env LLDB_USE_NATIVE_PDB_READER=1 %lldb -f %t.exe -s \
+// RUN: %lldb -f %t.exe -s \
 // RUN:     %p/Inputs/disassembly.lldbinit | FileCheck %s
 
 // Some context lines before the function.
@@ -28,9 +28,9 @@ int main(int argc, char **argv) {
 // CHECK-NEXT: disassembly.cpp.tmp.exe[{{.*}}] <+17>: mov    dword ptr [rsp + 0x24], ecx
 // CHECK:      ** 15     foo();
 // CHECK:      disassembly.cpp.tmp.exe[{{.*}}] <+21>: call   {{.*}}               ; foo at disassembly.cpp:12
-// CHECK-NEXT: disassembly.cpp.tmp.exe[{{.*}}] <+26>: xor    eax, eax
 // CHECK:      ** 16     return 0;
 // CHECK-NEXT:    17   }
 // CHECK-NEXT:    18
-// CHECK:      disassembly.cpp.tmp.exe[{{.*}}] <+28>: add    rsp, 0x38
+// CHECK:      disassembly.cpp.tmp.exe[{{.*}}] <+26>: xor    eax, eax
+// CHECK-NEXT: disassembly.cpp.tmp.exe[{{.*}}] <+28>: add    rsp, 0x38
 // CHECK-NEXT: disassembly.cpp.tmp.exe[{{.*}}] <+32>: ret

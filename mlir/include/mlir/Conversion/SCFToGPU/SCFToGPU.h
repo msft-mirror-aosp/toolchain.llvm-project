@@ -11,16 +11,19 @@
 #include "mlir/Support/LLVM.h"
 
 namespace mlir {
-class AffineForOp;
 class ConversionTarget;
-struct LogicalResult;
 class MLIRContext;
-class OwningRewritePatternList;
 class Value;
+class Operation;
+class RewritePatternSet;
+
+namespace affine {
+class AffineForOp;
+} // namespace affine
 
 namespace scf {
 class ForOp;
-} // end namespace scf
+} // namespace scf
 
 /// Convert a perfect affine loop nest with the outermost loop identified by
 /// `forOp` into a gpu::Launch operation.  Map `numBlockDims` outer loops to
@@ -36,18 +39,20 @@ class ForOp;
 // TODO: Consider removing this in favor of affine.for -> affine.parallel
 // detection followed by an affine.parallel -> scf.parallel -> gpu.launch
 // conversion
-LogicalResult convertAffineLoopNestToGPULaunch(AffineForOp forOp,
+LogicalResult convertAffineLoopNestToGPULaunch(affine::AffineForOp forOp,
                                                unsigned numBlockDims,
                                                unsigned numThreadDims);
 
 /// Adds the conversion pattern from `scf.parallel` to `gpu.launch` to the
 /// provided pattern list.
-void populateParallelLoopToGPUPatterns(OwningRewritePatternList &patterns,
-                                       MLIRContext *ctx);
+void populateParallelLoopToGPUPatterns(RewritePatternSet &patterns);
 
 /// Configures the rewrite target such that only `scf.parallel` operations that
 /// are not rewritten by the provided patterns are legal.
 void configureParallelLoopToGPULegality(ConversionTarget &target);
+
+/// Clean up after applyPartialConversion/applyFullConversion call.
+void finalizeParallelLoopToGPUConversion(Operation *op);
 
 } // namespace mlir
 

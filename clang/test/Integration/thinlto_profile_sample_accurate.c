@@ -5,5 +5,5 @@
 
 // CHECK: define{{.*}} void @foo()
 // CHECK: attributes{{.*}} "profile-sample-accurate"
-void foo() {
+void foo(void) {
 }

@@ -13,6 +13,7 @@
 
 #include "llvm-c/lto.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGen/CommandFlags.h"
@@ -34,24 +35,10 @@ static codegen::RegisterCodeGenFlags CGF;
 
 // extra command-line flags needed for LTOCodeGenerator
 static cl::opt<char>
-OptLevel("O",
-         cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
-                  "(default = '-O2')"),
-         cl::Prefix,
-         cl::ZeroOrMore,
-         cl::init('2'));
-
-static cl::opt<bool>
-DisableInline("disable-inlining", cl::init(false),
-  cl::desc("Do not run the inliner pass"));
-
-static cl::opt<bool>
-DisableGVNLoadPRE("disable-gvn-loadpre", cl::init(false),
-  cl::desc("Do not run the GVN load PRE pass"));
-
-static cl::opt<bool> DisableLTOVectorization(
-    "disable-lto-vectorization", cl::init(false),
-    cl::desc("Do not run loop or slp vectorization during LTO"));
+    OptLevel("O",
+             cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
+                      "(default = '-O2')"),
+             cl::Prefix, cl::init('2'));
 
 static cl::opt<bool> EnableFreestanding(
     "lto-freestanding", cl::init(false),
@@ -75,8 +62,12 @@ static std::string sLastErrorString;
 // *** Not thread safe ***
 static bool initialized = false;
 
-// Holds the command-line option parsing state of the LTO module.
-static bool parsedOptions = false;
+// Represent the state of parsing command line debug options.
+static enum class OptParsingState {
+  NotParsed, // Initial state.
+  Early,     // After lto_set_debug_options is called.
+  Done       // After maybeParseOptions is called.
+} optionParsingState = OptParsingState::NotParsed;
 
 static LLVMContext *LTOContext = nullptr;
 
@@ -98,6 +89,8 @@ struct LTOToolDiagnosticHandler : public DiagnosticHandler {
   }
 };
 
+static SmallVector<const char *> RuntimeLibcallSymbols;
+
 // Initialize the configured targets if they have not been initialized.
 static void lto_initialize() {
   if (!initialized) {
@@ -118,6 +111,7 @@ static void lto_initialize() {
     LTOContext = &Context;
     LTOContext->setDiagnosticHandler(
         std::make_unique<LTOToolDiagnosticHandler>(), true);
+    RuntimeLibcallSymbols = lto::LTO::getRuntimeLibcallSymbols(Triple());
     initialized = true;
   }
 }
@@ -158,16 +152,13 @@ DEFINE_SIMPLE_CONVERSION_FUNCTIONS(LTOModule, lto_module_t)
 // Convert the subtarget features into a string to pass to LTOCodeGenerator.
 static void lto_add_attrs(lto_code_gen_t cg) {
   LTOCodeGenerator *CG = unwrap(cg);
-  auto MAttrs = codegen::getMAttrs();
-  if (!MAttrs.empty()) {
-    std::string attrs = join(MAttrs, ",");
-    CG->setAttr(attrs);
-  }
+  CG->setAttrs(codegen::getMAttrs());
 
   if (OptLevel < '0' || OptLevel > '3')
     report_fatal_error("Optimization level must be between 0 and 3");
   CG->setOptLevel(OptLevel - '0');
   CG->setFreestanding(EnableFreestanding);
+  CG->setDisableVerify(DisableVerify);
 }
 
 extern const char* lto_get_version() {
@@ -303,6 +294,8 @@ lto_module_t lto_module_create_in_codegen_context(const void *mem,
       codegen::InitTargetOptionsFromCodeGenFlags(Triple());
   ErrorOr<std::unique_ptr<LTOModule>> M = LTOModule::createFromBuffer(
       unwrap(cg)->getContext(), mem, length, Options, StringRef(path));
+  if (!M)
+    return nullptr;
   return wrap(M->release());
 }
 
@@ -407,7 +400,7 @@ bool lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model model) {
     unwrap(cg)->setCodePICModel(Reloc::DynamicNoPIC);
     return false;
   case LTO_CODEGEN_PIC_MODEL_DEFAULT:
-    unwrap(cg)->setCodePICModel(None);
+    unwrap(cg)->setCodePICModel(std::nullopt);
     return false;
   }
   sLastErrorString = "Unknown PIC model";
@@ -433,10 +426,11 @@ void lto_codegen_add_must_preserve_symbol(lto_code_gen_t cg,
 }
 
 static void maybeParseOptions(lto_code_gen_t cg) {
-  if (!parsedOptions) {
+  if (optionParsingState != OptParsingState::Done) {
+    // Parse options if any were set by the lto_codegen_debug_options* function.
     unwrap(cg)->parseCodeGenDebugOptions();
     lto_add_attrs(cg);
-    parsedOptions = true;
+    optionParsingState = OptParsingState::Done;
   }
 }
 
@@ -448,9 +442,7 @@ bool lto_codegen_write_merged_modules(lto_code_gen_t cg, const char *path) {
 const void *lto_codegen_compile(lto_code_gen_t cg, size_t *length) {
   maybeParseOptions(cg);
   LibLTOCodeGenerator *CG = unwrap(cg);
-  CG->NativeObjectFile =
-      CG->compile(DisableVerify, DisableInline, DisableGVNLoadPRE,
-                  DisableLTOVectorization);
+  CG->NativeObjectFile = CG->compile();
   if (!CG->NativeObjectFile)
     return nullptr;
   *length = CG->NativeObjectFile->getBufferSize();
@@ -459,8 +451,7 @@ const void *lto_codegen_compile(lto_code_gen_t cg, size_t *length) {
 
 bool lto_codegen_optimize(lto_code_gen_t cg) {
   maybeParseOptions(cg);
-  return !unwrap(cg)->optimize(DisableVerify, DisableInline, DisableGVNLoadPRE,
-                               DisableLTOVectorization);
+  return !unwrap(cg)->optimize();
 }
 
 const void *lto_codegen_compile_optimized(lto_code_gen_t cg, size_t *length) {
@@ -475,12 +466,25 @@ const void *lto_codegen_compile_optimized(lto_code_gen_t cg, size_t *length) {
 
 bool lto_codegen_compile_to_file(lto_code_gen_t cg, const char **name) {
   maybeParseOptions(cg);
-  return !unwrap(cg)->compile_to_file(
-      name, DisableVerify, DisableInline, DisableGVNLoadPRE,
-      DisableLTOVectorization);
+  return !unwrap(cg)->compile_to_file(name);
+}
+
+void lto_set_debug_options(const char *const *options, int number) {
+  assert(optionParsingState == OptParsingState::NotParsed &&
+         "option processing already happened");
+  // Need to put each suboption in a null-terminated string before passing to
+  // parseCommandLineOptions().
+  std::vector<std::string> Options;
+  for (int i = 0; i < number; ++i)
+    Options.push_back(options[i]);
+
+  llvm::parseCommandLineOptions(Options);
+  optionParsingState = OptParsingState::Early;
 }
 
 void lto_codegen_debug_options(lto_code_gen_t cg, const char *opt) {
+  assert(optionParsingState != OptParsingState::Early &&
+         "early option processing already happened");
   SmallVector<StringRef, 4> Options;
   for (std::pair<StringRef, StringRef> o = getToken(opt); !o.first.empty();
        o = getToken(o.second))
@@ -491,10 +495,12 @@ void lto_codegen_debug_options(lto_code_gen_t cg, const char *opt) {
 
 void lto_codegen_debug_options_array(lto_code_gen_t cg,
                                      const char *const *options, int number) {
+  assert(optionParsingState != OptParsingState::Early &&
+         "early option processing already happened");
   SmallVector<StringRef, 4> Options;
   for (int i = 0; i < number; ++i)
     Options.push_back(options[i]);
-  unwrap(cg)->setCodeGenDebugOptions(makeArrayRef(Options));
+  unwrap(cg)->setCodeGenDebugOptions(ArrayRef(Options));
 }
 
 unsigned int lto_api_version() { return LTO_API_VERSION; }
@@ -507,6 +513,10 @@ void lto_codegen_set_should_internalize(lto_code_gen_t cg,
 void lto_codegen_set_should_embed_uselists(lto_code_gen_t cg,
                                            lto_bool_t ShouldEmbedUselists) {
   unwrap(cg)->setShouldEmbedUselists(ShouldEmbedUselists);
+}
+
+lto_bool_t lto_module_has_ctor_dtor(lto_module_t mod) {
+  return unwrap(mod)->hasCtorDtor();
 }
 
 // ThinLTO API below
@@ -522,20 +532,10 @@ thinlto_code_gen_t thinlto_create_codegen(void) {
     if (OptLevel < '0' || OptLevel > '3')
       report_fatal_error("Optimization level must be between 0 and 3");
     CodeGen->setOptLevel(OptLevel - '0');
-    switch (OptLevel) {
-    case '0':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::None);
-      break;
-    case '1':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::Less);
-      break;
-    case '2':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::Default);
-      break;
-    case '3':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::Aggressive);
-      break;
-    }
+    std::optional<CodeGenOptLevel> CGOptLevelOrNone =
+        CodeGenOpt::getLevel(OptLevel - '0');
+    assert(CGOptLevelOrNone);
+    CodeGen->setCodeGenOptLevel(*CGOptLevelOrNone);
   }
   return wrap(CodeGen);
 }
@@ -584,8 +584,7 @@ void thinlto_debug_options(const char *const *options, int number) {
   // if options were requested, set them
   if (number && options) {
     std::vector<const char *> CodegenArgv(1, "libLTO");
-    for (auto Arg : ArrayRef<const char *>(options, number))
-      CodegenArgv.push_back(Arg);
+    append_range(CodegenArgv, ArrayRef<const char *>(options, number));
     cl::ParseCommandLineOptions(CodegenArgv.size(), CodegenArgv.data());
   }
 }
@@ -668,7 +667,7 @@ lto_bool_t thinlto_codegen_set_pic_model(thinlto_code_gen_t cg,
     unwrap(cg)->setCodePICModel(Reloc::DynamicNoPIC);
     return false;
   case LTO_CODEGEN_PIC_MODEL_DEFAULT:
-    unwrap(cg)->setCodePICModel(None);
+    unwrap(cg)->setCodePICModel(std::nullopt);
     return false;
   }
   sLastErrorString = "Unknown PIC model";
@@ -696,7 +695,6 @@ extern const char *lto_input_get_dependent_library(lto_input_t input,
 }
 
 extern const char *const *lto_runtime_lib_symbols_list(size_t *size) {
-  auto symbols = lto::LTO::getRuntimeLibcallSymbols();
-  *size = symbols.size();
-  return symbols.data();
+  *size = RuntimeLibcallSymbols.size();
+  return RuntimeLibcallSymbols.data();
 }

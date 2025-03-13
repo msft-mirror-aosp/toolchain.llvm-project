@@ -47,7 +47,7 @@ You can use XRay in a couple of ways:
 - Instrumenting your C/C++/Objective-C/Objective-C++ application.
 - Generating LLVM IR with the correct function attributes.
 
-The rest of this section covers these main ways and later on how to customise
+The rest of this section covers these main ways and later on how to customize
 what XRay does in an XRay-instrumented binary.
 
 Instrumenting your C/C++/Objective-C Application
@@ -157,7 +157,8 @@ Also by default the filename of the XRay trace is ``xray-log.XXXXXX`` where the
 ``XXXXXX`` part is randomly generated.
 
 These options can be controlled through the ``XRAY_OPTIONS`` environment
-variable, where we list down the options and their defaults below.
+variable during program run-time, where we list down the options and their
+defaults below.
 
 +-------------------+-----------------+---------------+------------------------+
 | Option            | Type            | Default       | Description            |
@@ -177,6 +178,31 @@ variable, where we list down the options and their defaults below.
 |                   |                 |               | level.                 |
 +-------------------+-----------------+---------------+------------------------+
 
+
+In addition to environment variable, you can also provide your own definition of
+``const char *__xray_default_options(void)`` function, which returns the option
+strings. This method effectively provides default options during program build
+time. For example, you can create an additional source file (e.g. ``xray-opt.c``
+) with the following ``__xray_default_options`` definition:
+
+.. code-block:: c
+
+  __attribute__((xray_never_instrument))
+  const char *__xray_default_options() {
+    return "patch_premain=true,xray_mode=xray-basic";
+  }
+
+And link it with the program you want to instrument:
+
+::
+
+  clang -fxray-instrument prog.c xray-opt.c ...
+
+The instrumented binary will use 'patch_premain=true,xray_mode=xray-basic' by
+default even without setting ``XRAY_OPTIONS``.
+
+Note that you still can override options designated by ``__xray_default_options``
+using ``XRAY_OPTIONS`` during run-time.
 
 If you choose to not use the default logging implementation that comes with the
 XRay runtime and/or control when/how the XRay instrumentation runs, you may use
@@ -316,7 +342,7 @@ Minimizing Binary Size
 
 XRay supports several different instrumentation points including ``function-entry``,
 ``function-exit``, ``custom``, and ``typed`` points. These can be enabled individually
-using the ``-fxray-instrumentaton-bundle=`` flag. For example if you only wanted to
+using the ``-fxray-instrumentation-bundle=`` flag. For example if you only wanted to
 instrument function entry and custom points you could specify:
 
 ::

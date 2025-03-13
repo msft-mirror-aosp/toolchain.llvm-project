@@ -5,10 +5,8 @@
 
 #include <sanitizer/hwasan_interface.h>
 
-#include "utils.h"
-
 __attribute__((no_sanitize("hwaddress"))) extern "C" void callback(const char *msg) {
-  untag_fprintf(stderr, "== error start\n%s\n== error end\n", msg);
+  fprintf(stderr, "== error start\n%s\n== error end\n", msg);
 }
 
 int main() {
@@ -19,13 +17,13 @@ int main() {
   free(p);
   // CHECK: ERROR: HWAddressSanitizer:
   // CHECK: WRITE of size 1 at
-  // CHECK: allocated here:
+  // CHECK: allocated by thread {{.*}} here:
   // CHECK: Memory tags around the buggy address
 
   // CHECK: == error start
   // CHECK: ERROR: HWAddressSanitizer:
   // CHECK: WRITE of size 1 at
-  // CHECK: allocated here:
+  // CHECK: allocated by thread {{.*}} here:
   // CHECK: Memory tags around the buggy address
   // CHECK: == error end
 }

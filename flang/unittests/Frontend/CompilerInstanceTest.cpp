@@ -9,7 +9,7 @@
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Basic/DiagnosticOptions.h"
-#include "llvm/Support//FileSystem.h"
+#include "llvm/Support/FileSystem.h"
 
 #include "gtest/gtest.h"
 
@@ -44,10 +44,10 @@ TEST(CompilerInstance, SanityCheckForFileManager) {
 
   // 2. Set up CompilerInstance (i.e. specify the input file)
   std::string buf;
-  llvm::raw_string_ostream error_stream{buf};
+  llvm::raw_string_ostream errorStream{buf};
   CompilerInstance compInst;
   const Fortran::parser::SourceFile *sf =
-      compInst.allSources().Open(testFilePath, error_stream);
+      compInst.getAllSources().Open(testFilePath, errorStream);
 
   // 3. Verify the content of the input file
   // This is just a sanity check to make sure that CompilerInstance is capable
@@ -55,7 +55,7 @@ TEST(CompilerInstance, SanityCheckForFileManager) {
   llvm::ArrayRef<char> fileContent = sf->content();
   EXPECT_FALSE(fileContent.size() == 0);
   EXPECT_TRUE(
-      llvm::StringRef(fileContent.data()).startswith("InputSourceFile"));
+      llvm::StringRef(fileContent.data()).starts_with("InputSourceFile"));
 
   // 4. Delete the test file
   ec = llvm::sys::fs::remove(inputFile);
@@ -82,7 +82,7 @@ TEST(CompilerInstance, AllowDiagnosticLogWithUnownedDiagnosticConsumer) {
 
   // 4. Create a DiagnosticEngine with an unowned consumer
   IntrusiveRefCntPtr<clang::DiagnosticsEngine> diags =
-      compInst.CreateDiagnostics(diagOpts, diagPrinter.get(),
+      compInst.createDiagnostics(diagOpts, diagPrinter.get(),
           /*ShouldOwnClient=*/false);
 
   // 5. Report a diagnostic
@@ -90,6 +90,6 @@ TEST(CompilerInstance, AllowDiagnosticLogWithUnownedDiagnosticConsumer) {
 
   // 6. Verify that the reported diagnostic wasn't lost and did end up in the
   // output stream
-  ASSERT_EQ(diagnosticsOS.str(), "error: expected no crash\n");
+  ASSERT_EQ(diagnosticOutput, "error: expected no crash\n");
 }
 } // namespace

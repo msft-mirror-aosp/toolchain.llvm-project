@@ -1,6 +1,6 @@
 // This test requires operator new to be intercepted by the hwasan runtime,
 // so we need to avoid linking against libc++.
-// RUN: %clangxx_hwasan %s -nostdlib++ -lstdc++ -o %t
+// RUN: %clangxx_hwasan %s -nostdlib++ -lstdc++ -o %t || %clangxx_hwasan %s -o %t
 // RUN: %env_hwasan_opts=allocator_may_return_null=0 not %run %t malloc 2>&1          | FileCheck %s --check-prefix=CHECK-max
 // RUN: %env_hwasan_opts=allocator_may_return_null=1     %run %t malloc 2>&1
 // RUN: %env_hwasan_opts=allocator_may_return_null=0 not %run %t malloc max 2>&1      | FileCheck %s --check-prefix=CHECK-max
@@ -34,11 +34,9 @@
 #include <sanitizer/allocator_interface.h>
 #include <sanitizer/hwasan_interface.h>
 
-#include "utils.h"
-
 int main(int argc, char **argv) {
   assert(argc <= 3);
-  bool test_size_max = argc == 3 && !untag_strcmp(argv[2], "max");
+  bool test_size_max = argc == 3 && !strcmp(argv[2], "max");
 
   static const size_t kMaxAllowedMallocSize = 1ULL << 40;
   static const size_t kChunkHeaderSize = 16;
@@ -46,26 +44,26 @@ int main(int argc, char **argv) {
   size_t MallocSize = test_size_max ? std::numeric_limits<size_t>::max()
                                     : (kMaxAllowedMallocSize + 1);
 
-  if (!untag_strcmp(argv[1], "malloc")) {
+  if (!strcmp(argv[1], "malloc")) {
     void *p = malloc(MallocSize);
     assert(!p);
-  } else if (!untag_strcmp(argv[1], "calloc")) {
+  } else if (!strcmp(argv[1], "calloc")) {
     // Trigger an overflow in calloc.
     size_t size = std::numeric_limits<size_t>::max();
     void *p = calloc((size / 0x1000) + 1, 0x1000);
     assert(!p);
-  } else if (!untag_strcmp(argv[1], "reallocarray")) {
+  } else if (!strcmp(argv[1], "reallocarray")) {
     // Trigger an overflow in reallocarray.
     size_t size = std::numeric_limits<size_t>::max();
     void *p = __sanitizer_reallocarray(nullptr, (size / 0x1000) + 1, 0x1000);
     assert(!p);
-  } else if (!untag_strcmp(argv[1], "new")) {
+  } else if (!strcmp(argv[1], "new")) {
     void *p = operator new(MallocSize);
     assert(!p);
-  } else if (!untag_strcmp(argv[1], "new-nothrow")) {
+  } else if (!strcmp(argv[1], "new-nothrow")) {
     void *p = operator new(MallocSize, std::nothrow);
     assert(!p);
-  } else if (!untag_strcmp(argv[1], "usable")) {
+  } else if (!strcmp(argv[1], "usable")) {
     // Playing with the actual usable size of a chunk.
     void *p = malloc(1007);
     assert(p);
@@ -86,6 +84,6 @@ int main(int argc, char **argv) {
 }
 
 // CHECK-max: {{ERROR: HWAddressSanitizer: requested allocation size .* exceeds maximum supported size}}
-// CHECK-oom: ERROR: HWAddressSanitizer: allocator is out of memory
+// CHECK-oom: ERROR: HWAddressSanitizer: out of memory: allocator is trying to allocate
 // CHECK-calloc: ERROR: HWAddressSanitizer: calloc parameters overflow
 // CHECK-reallocarray: ERROR: HWAddressSanitizer: reallocarray parameters overflow

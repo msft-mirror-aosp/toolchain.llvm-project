@@ -44,8 +44,8 @@ typedef struct _GUID
     unsigned char  Data4[8];
 } GUID;
 
-struct __declspec(uuid(L"00000000-0000-0000-1234-000000000047")) uuid_attr_bad1 { };// expected-error {{'uuid' attribute requires a string}}
-struct __declspec(uuid(3)) uuid_attr_bad2 { };// expected-error {{'uuid' attribute requires a string}}
+struct __declspec(uuid(L"00000000-0000-0000-1234-000000000047")) uuid_attr_bad1 { };// expected-warning {{encoding prefix 'L' on an unevaluated string literal has no effect and is incompatible with c++2c}}
+struct __declspec(uuid(3)) uuid_attr_bad2 { };// expected-error {{expected string literal as argument of 'uuid' attribute}}
 struct __declspec(uuid("0000000-0000-0000-1234-0000500000047")) uuid_attr_bad3 { };// expected-error {{uuid attribute contains a malformed GUID}}
 struct __declspec(uuid("0000000-0000-0000-Z234-000000000047")) uuid_attr_bad4 { };// expected-error {{uuid attribute contains a malformed GUID}}
 struct __declspec(uuid("000000000000-0000-1234-000000000047")) uuid_attr_bad5 { };// expected-error {{uuid attribute contains a malformed GUID}}
@@ -56,6 +56,14 @@ __declspec(uuid("000000A0-0000-0000-C000-000000000046")) int i; // expected-warn
 struct __declspec(uuid("000000A0-0000-0000-C000-000000000046"))
 struct_with_uuid { };
 struct struct_without_uuid { };
+
+struct base {
+  int a;
+};
+struct derived : base {
+  // Can't apply a UUID to a using declaration.
+  [uuid("000000A0-0000-0000-C000-00000000004A")] using base::a; // expected-error {{expected member name}}
+};
 
 struct __declspec(uuid("000000A0-0000-0000-C000-000000000049"))
 struct_with_uuid2;
@@ -263,6 +271,12 @@ int k = identifier_weird(if)); // expected-error {{use of undeclared identifier 
 
 extern int __identifier(and);
 
+int __identifier("baz") = 0;
+int bar = baz;
+
+void mangled_function();
+extern "C" void __identifier("?mangled_function@@YAXXZ")() {}
+
 void f() {
   __identifier(() // expected-error {{cannot convert '(' token to an identifier}}
   __identifier(void) // expected-error {{use of undeclared identifier 'void'}}
@@ -270,8 +284,10 @@ void f() {
   // FIXME: We should pick a friendlier display name for this token kind.
   __identifier(1) // expected-error {{cannot convert <numeric_constant> token to an identifier}}
   __identifier(+) // expected-error {{cannot convert '+' token to an identifier}}
-  __identifier("foo") // expected-error {{cannot convert <string_literal> token to an identifier}}
   __identifier(;) // expected-error {{cannot convert ';' token to an identifier}}
+  __identifier("1"); // expected-error {{use of undeclared identifier '1'}}
+  __identifier("+"); // expected-error {{use of undeclared identifier '+'}}
+  __identifier(";"); // expected-error {{use of undeclared identifier ';'}}
 }
 
 class inline_definition_pure_spec {
@@ -410,7 +426,7 @@ bool f(int);
 template <typename T>
 struct A {
   constexpr A(T t) {
-    __assume(f(t)); // expected-warning{{the argument to '__assume' has side effects that will be discarded}}
+    __assume(f(t)); // expected-warning{{assumption is ignored because it contains (potential) side-effects}}
   }
   constexpr bool g() { return false; }
 };

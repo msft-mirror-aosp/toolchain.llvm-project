@@ -6,11 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "src/fenv/fegetround.h"
+#include "src/__support/FPUtil/FEnvImpl.h"
 #include "src/__support/common.h"
-#include "utils/FPUtil/FEnv.h"
+#include "src/__support/macros/config.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
-int LLVM_LIBC_ENTRYPOINT(fegetround)() { return fputil::getRound(); }
+LLVM_LIBC_FUNCTION(int, fegetround, ()) { return fputil::get_round(); }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

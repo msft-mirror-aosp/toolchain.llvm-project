@@ -1,6 +1,3 @@
-// REQUIRES: clang-driver
-// REQUIRES: x86-registered-target
-// REQUIRES: nvptx-registered-target
 // This tests uses the PATH environment variable.
 // REQUIRES: !system-windows
 

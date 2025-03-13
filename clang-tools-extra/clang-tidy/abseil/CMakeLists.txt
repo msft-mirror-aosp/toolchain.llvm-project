@@ -3,8 +3,9 @@ set(LLVM_LINK_COMPONENTS
   FrontendOpenMP
   )
 
-add_clang_library(clangTidyAbseilModule
+add_clang_library(clangTidyAbseilModule STATIC
   AbseilTidyModule.cpp
+  CleanupCtadCheck.cpp
   DurationAdditionCheck.cpp
   DurationComparisonCheck.cpp
   DurationConversionCastCheck.cpp
@@ -31,6 +32,7 @@ add_clang_library(clangTidyAbseilModule
 
   DEPENDS
   omp_gen
+  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyAbseilModule

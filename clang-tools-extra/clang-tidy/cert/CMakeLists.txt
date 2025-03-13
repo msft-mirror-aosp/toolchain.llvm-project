@@ -3,7 +3,7 @@ set(LLVM_LINK_COMPONENTS
   FrontendOpenMP
   )
 
-add_clang_library(clangTidyCERTModule
+add_clang_library(clangTidyCERTModule STATIC
   CERTTidyModule.cpp
   CommandProcessorCheck.cpp
   DefaultOperatorNewAlignmentCheck.cpp
@@ -12,7 +12,6 @@ add_clang_library(clangTidyCERTModule
   LimitedRandomnessCheck.cpp
   MutatingCopyCheck.cpp
   NonTrivialTypesLibcMemoryCallsCheck.cpp
-  PostfixOperatorCheck.cpp
   ProperlySeededRandomGeneratorCheck.cpp
   SetLongJmpCheck.cpp
   StaticObjectExceptionCheck.cpp
@@ -23,6 +22,7 @@ add_clang_library(clangTidyCERTModule
   LINK_LIBS
   clangTidy
   clangTidyBugproneModule
+  clangTidyConcurrencyModule
   clangTidyGoogleModule
   clangTidyMiscModule
   clangTidyPerformanceModule
@@ -31,6 +31,7 @@ add_clang_library(clangTidyCERTModule
 
   DEPENDS
   omp_gen
+  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyCERTModule

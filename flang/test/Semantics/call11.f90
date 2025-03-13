@@ -1,4 +1,4 @@
-! RUN: %S/test_errors.sh %s %t %f18
+! RUN: %python %S/test_errors.py %s %flang_fc1
 ! Test 15.7 C1591 & others: contexts requiring pure subprograms
 
 module m
@@ -39,9 +39,55 @@ module m
     end forall
     !ERROR: DO CONCURRENT mask expression may not reference impure procedure 'impure'
     do concurrent (j=1:1, impure(j) /= 0) ! C1121
-      !ERROR: Call to an impure procedure is not allowed in DO CONCURRENT
+      !ERROR: Impure procedure 'impure' may not be referenced in DO CONCURRENT
       a(j) = impure(j) ! C1139
     end do
+    !WARNING: Impure procedure 'impure' should not be referenced in a DO CONCURRENT header
+    do concurrent (k=impure(1):1); end do
+    !WARNING: Impure procedure 'impure' should not be referenced in a DO CONCURRENT header
+    do concurrent (k=1:impure(1)); end do
+    !WARNING: Impure procedure 'impure' should not be referenced in a DO CONCURRENT header
+    do concurrent (k=1:1:impure(1)); end do
+    !WARNING: Impure procedure 'impure' should not be referenced in a FORALL header
+    forall (k=impure(1):1); end forall
+    !WARNING: Impure procedure 'impure' should not be referenced in a FORALL header
+    forall (k=1:impure(1)); end forall
+    !WARNING: Impure procedure 'impure' should not be referenced in a FORALL header
+    forall (k=1:1:impure(1)); end forall
+    do concurrent (j=1:1)
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      do concurrent (k=impure(1):1); end do
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      do concurrent (k=1:impure(1)); end do
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      do concurrent (k=1:1:impure(1)); end do
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      forall (k=impure(1):1); end forall
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      forall (k=1:impure(1)); end forall
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      forall (k=1:1:impure(1)); end forall
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      forall (k=impure(1):1) a(k) = 0.
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      forall (k=1:impure(1)) a(k) = 0.
+      !ERROR: Impure procedure 'impure' may not be referenced in a DO CONCURRENT
+      forall (k=1:1:impure(1)) a(k) = 0.
+    end do
+    forall (j=1:1)
+      !ERROR: Impure procedure 'impure' may not be referenced in a FORALL
+      forall (k=impure(1):1); end forall
+      !ERROR: Impure procedure 'impure' may not be referenced in a FORALL
+      forall (k=1:impure(1)); end forall
+      !ERROR: Impure procedure 'impure' may not be referenced in a FORALL
+      forall (k=1:1:impure(1)); end forall
+      !ERROR: Impure procedure 'impure' may not be referenced in a FORALL
+      forall (k=impure(1):1) a(j*k) = 0.
+      !ERROR: Impure procedure 'impure' may not be referenced in a FORALL
+      forall (k=1:impure(1)) a(j*k) = 0.
+      !ERROR: Impure procedure 'impure' may not be referenced in a FORALL
+      forall (k=1:1:impure(1)) a(j*k) = 0.
+    end forall
   end subroutine
 
   subroutine test2
@@ -61,7 +107,7 @@ module m
     end do
     !ERROR: DO CONCURRENT mask expression may not reference impure procedure 'impure'
     do concurrent (j=1:1, x%tbp_impure(j) /= 0) ! C1121
-      !ERROR: Call to an impure procedure component is not allowed in DO CONCURRENT
+      !ERROR: Impure procedure 'impure' may not be referenced in DO CONCURRENT
       a(j) = x%tbp_impure(j) ! C1139
     end do
   end subroutine
@@ -78,6 +124,20 @@ module m
       !ERROR: Impure procedure 'impure' may not be referenced in a FORALL
       a(i) = t(impure(i))  ! C1037
     end forall
+  end subroutine
+
+  subroutine test4(ch)
+    type :: t
+      real, allocatable :: x
+    end type
+    type(t) :: a(1), b(1)
+    character(*), intent(in) :: ch
+    allocate (b(1)%x)
+    ! Intrinsic functions and a couple subroutines are pure; do not emit errors
+    do concurrent (j=1:1)
+      b(j)%x = cos(1.) + len(ch)
+      call move_alloc(from=b(j)%x, to=a(j)%x)
+    end do
   end subroutine
 
 end module

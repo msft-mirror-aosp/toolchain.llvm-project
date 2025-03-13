@@ -3,7 +3,7 @@
 target datalayout = "e-m:w-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
 
-define void @"\01?f@@YAXXZ"(i1 %B) personality i32 (...)* @__CxxFrameHandler3 {
+define void @"\01?f@@YAXXZ"(i1 %B) personality ptr @__CxxFrameHandler3 {
 entry:
   invoke void @g()
           to label %unreachable unwind label %cleanupblock
@@ -17,7 +17,7 @@ catch.dispatch:
   %cs1 = catchswitch within none [label %catch] unwind to caller
 
 catch:
-  %cp = catchpad within %cs1 [i8* null, i32 64, i8* null]
+  %cp = catchpad within %cs1 [ptr null, i32 64, ptr null]
   call void @g() [ "funclet"(token %cp) ]
   catchret from %cp to label %try.cont
 
@@ -57,6 +57,7 @@ declare i32 @__CxxFrameHandler3(...)
 ; Make sure there is a nop after a call if the call precedes the epilogue.
 ; CHECK: callq g
 ; CHECK-NEXT: nop
+; CHECK-NEXT: .seh_startepilogue
 
 ; Don't emit a reference to the LSDA.
 ; CHECK: .seh_handlerdata
@@ -87,6 +88,7 @@ declare i32 @__CxxFrameHandler3(...)
 ; Make sure there is at least one instruction after a call before the epilogue.
 ; CHECK: callq g
 ; CHECK-NEXT: leaq    .LBB0_{{[0-9]+}}(%rip), %rax
+; CHECK-NEXT: .seh_startepilogue
 
 ; Emit a reference to the LSDA.
 ; CHECK: .seh_handlerdata

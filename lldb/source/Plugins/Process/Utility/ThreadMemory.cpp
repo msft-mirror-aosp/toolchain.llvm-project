@@ -20,10 +20,11 @@
 using namespace lldb;
 using namespace lldb_private;
 
-ThreadMemory::ThreadMemory(Process &process, tid_t tid,
+ThreadMemory::ThreadMemory(Process &process, lldb::tid_t tid,
                            const ValueObjectSP &thread_info_valobj_sp)
     : Thread(process, tid), m_backing_thread_sp(),
-      m_thread_info_valobj_sp(thread_info_valobj_sp), m_name(), m_queue() {}
+      m_thread_info_valobj_sp(thread_info_valobj_sp), m_name(), m_queue(),
+      m_register_data_addr(LLDB_INVALID_ADDRESS) {}
 
 ThreadMemory::ThreadMemory(Process &process, lldb::tid_t tid,
                            llvm::StringRef name, llvm::StringRef queue,

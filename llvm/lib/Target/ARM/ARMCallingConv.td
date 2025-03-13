@@ -278,17 +278,40 @@ def CSR_Win_AAPCS_CFGuard_Check : CalleeSavedRegs<(add LR, R11, R10, R9, R8, R7,
 // R8 is used to pass swifterror, remove it from CSR.
 def CSR_AAPCS_SwiftError : CalleeSavedRegs<(sub CSR_AAPCS, R8)>;
 
+// R10 is used to pass swiftself, remove it from CSR.
+def CSR_AAPCS_SwiftTail : CalleeSavedRegs<(sub CSR_AAPCS, R10)>;
+
 // The order of callee-saved registers needs to match the order we actually push
 // them in FrameLowering, because this order is what's used by
 // PrologEpilogInserter to allocate frame index slots. So when R7 is the frame
-// pointer, we use this AAPCS alternative.
-def CSR_AAPCS_SplitPush : CalleeSavedRegs<(add LR, R7, R6, R5, R4,
+// pointer, we use this ATPCS alternative.
+def CSR_ATPCS_SplitPush : CalleeSavedRegs<(add LR, R7, R6, R5, R4,
                                                R11, R10, R9, R8,
                                                (sequence "D%u", 15, 8))>;
 
+def CSR_Win_SplitFP : CalleeSavedRegs<(add R10, R9, R8, R7, R6, R5, R4,
+                                               (sequence "D%u", 15, 8),
+                                               LR, R11)>;
+
 // R8 is used to pass swifterror, remove it from CSR.
-def CSR_AAPCS_SplitPush_SwiftError : CalleeSavedRegs<(sub CSR_AAPCS_SplitPush,
+def CSR_ATPCS_SplitPush_SwiftError : CalleeSavedRegs<(sub CSR_ATPCS_SplitPush,
                                                       R8)>;
+
+// R10 is used to pass swifterror, remove it from CSR.
+def CSR_ATPCS_SplitPush_SwiftTail : CalleeSavedRegs<(sub CSR_ATPCS_SplitPush,
+                                                     R10)>;
+
+// Sometimes we need to split the push of the callee-saved GPRs into two
+// regions, to ensure that the frame chain record is set up correctly. These
+// list the callee-saved registers in the order they end up on the stack, which
+// depends on whether the frame pointer is r7 or r11.
+def CSR_AAPCS_SplitPush_R11 : CalleeSavedRegs<(add R10, R9, R8, R7, R6, R5, R4,
+                                                   LR, R11,
+                                                   (sequence "D%u", 15, 8))>;
+def CSR_AAPCS_SplitPush_R7 : CalleeSavedRegs<(add LR, R11,
+                                                  R7, R6, R5, R4,
+                                                  R10, R9, R8,
+                                                  (sequence "D%u", 15, 8))>;
 
 // Constructors and destructors return 'this' in the ARM C++ ABI; since 'this'
 // and the pointer return value are both passed in R0 in these cases, this can
@@ -304,6 +327,9 @@ def CSR_iOS : CalleeSavedRegs<(add LR, R7, R6, R5, R4, (sub CSR_AAPCS, R9))>;
 
 // R8 is used to pass swifterror, remove it from CSR.
 def CSR_iOS_SwiftError : CalleeSavedRegs<(sub CSR_iOS, R8)>;
+
+// R10 is used to pass swiftself, remove it from CSR.
+def CSR_iOS_SwiftTail : CalleeSavedRegs<(sub CSR_iOS, R10)>;
 
 def CSR_iOS_ThisReturn : CalleeSavedRegs<(add LR, R7, R6, R5, R4,
                                          (sub CSR_AAPCS_ThisReturn, R9))>;

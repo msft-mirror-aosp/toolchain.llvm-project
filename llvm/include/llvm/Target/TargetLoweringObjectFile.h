@@ -11,14 +11,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CODEGEN_TARGETLOWERINGOBJECTFILE_H
-#define LLVM_CODEGEN_TARGETLOWERINGOBJECTFILE_H
+#ifndef LLVM_TARGET_TARGETLOWERINGOBJECTFILE_H
+#define LLVM_TARGET_TARGETLOWERINGOBJECTFILE_H
 
 #include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCRegister.h"
 #include <cstdint>
 
 namespace llvm {
 
+struct Align;
+struct MachineJumpTableEntry;
 class Constant;
 class DataLayout;
 class Function;
@@ -63,6 +66,8 @@ protected:
   /// This section contains the static destructor pointer list.
   MCSection *StaticDtorSection = nullptr;
 
+  const TargetMachine *TM = nullptr;
+
 public:
   TargetLoweringObjectFile() = default;
   TargetLoweringObjectFile(const TargetLoweringObjectFile &) = delete;
@@ -78,10 +83,17 @@ public:
   virtual void Initialize(MCContext &ctx, const TargetMachine &TM);
 
   virtual void emitPersonalityValue(MCStreamer &Streamer, const DataLayout &TM,
-                                    const MCSymbol *Sym) const;
+                                    const MCSymbol *Sym,
+                                    const MachineModuleInfo *MMI) const;
 
   /// Emit the module-level metadata that the platform cares about.
   virtual void emitModuleMetadata(MCStreamer &Streamer, Module &M) const {}
+
+  /// Emit Call Graph Profile metadata.
+  void emitCGProfileMetadata(MCStreamer &Streamer, Module &M) const;
+
+  /// Process linker options metadata and emit platform-specific bits.
+  virtual void emitLinkerDirectives(MCStreamer &Streamer, Module &M) const {}
 
   /// Get the module-level metadata that the platform cares about.
   virtual void getModuleMetadata(Module &M) {}
@@ -96,6 +108,10 @@ public:
   getSectionForMachineBasicBlock(const Function &F,
                                  const MachineBasicBlock &MBB,
                                  const TargetMachine &TM) const;
+
+  virtual MCSection *
+  getUniqueSectionForFunction(const Function &F,
+                              const TargetMachine &TM) const;
 
   /// Classify the specified global variable into a set of target independent
   /// categories embodied in SectionKind.
@@ -120,8 +136,12 @@ public:
 
   virtual MCSection *getSectionForJumpTable(const Function &F,
                                             const TargetMachine &TM) const;
-  virtual MCSection *getSectionForLSDA(const Function &F,
-                                       const TargetMachine &TM) const {
+  virtual MCSection *
+  getSectionForJumpTable(const Function &F, const TargetMachine &TM,
+                         const MachineJumpTableEntry *JTE) const;
+
+  virtual MCSection *getSectionForLSDA(const Function &, const MCSymbol &,
+                                       const TargetMachine &) const {
     return LSDASection;
   }
 
@@ -210,6 +230,14 @@ public:
     return SupportDebugThreadLocalLocation;
   }
 
+  /// Returns the register used as static base in RWPI variants.
+  virtual MCRegister getStaticBase() const { return MCRegister::NoRegister; }
+
+  /// Get the target specific RWPI relocation.
+  virtual const MCExpr *getIndirectSymViaRWPI(const MCSymbol *Sym) const {
+    return nullptr;
+  }
+
   /// Get the target specific PC relative GOT entry relocation
   virtual const MCExpr *getIndirectSymViaGOTPCRel(const GlobalValue *GV,
                                                   const MCSymbol *Sym,
@@ -258,7 +286,7 @@ public:
   }
 
   /// If supported, return the function entry point symbol.
-  /// Otherwise, returns nulltpr.
+  /// Otherwise, returns nullptr.
   /// Func must be a function or an alias which has a function as base object.
   virtual MCSymbol *getFunctionEntryPointSymbol(const GlobalValue *Func,
                                                 const TargetMachine &TM) const {
@@ -273,4 +301,4 @@ protected:
 
 } // end namespace llvm
 
-#endif // LLVM_CODEGEN_TARGETLOWERINGOBJECTFILE_H
+#endif // LLVM_TARGET_TARGETLOWERINGOBJECTFILE_H

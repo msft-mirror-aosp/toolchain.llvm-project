@@ -8,73 +8,130 @@
 #ifndef MLIR_CONVERSION_GPUCOMMON_INDEXINTRINSICSOPLOWERING_H_
 #define MLIR_CONVERSION_GPUCOMMON_INDEXINTRINSICSOPLOWERING_H_
 
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
-#include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "llvm/ADT/StringSwitch.h"
+#include "mlir/IR/BuiltinAttributes.h"
 
 namespace mlir {
+namespace gpu {
+namespace index_lowering {
+enum class IndexKind : uint32_t { Other = 0, Block = 1, Grid = 2 };
+enum class IntrType : uint32_t {
+  None = 0,
+  Id = 1,
+  Dim = 2,
+};
 
 // Rewriting that replaces Op with XOp, YOp, or ZOp depending on the dimension
-// that Op operates on.  Op is assumed to return an `std.index` value and
+// that Op operates on.  Op is assumed to return an `index` value and
 // XOp, YOp and ZOp are assumed to return an `llvm.i32` value.  Depending on
 // `indexBitwidth`, sign-extend or truncate the resulting value to match the
 // bitwidth expected by the consumers of the value.
 template <typename Op, typename XOp, typename YOp, typename ZOp>
-struct GPUIndexIntrinsicOpLowering : public ConvertToLLVMPattern {
+struct OpLowering : public ConvertOpToLLVMPattern<Op> {
 private:
-  enum dimension { X = 0, Y = 1, Z = 2, invalid };
   unsigned indexBitwidth;
-
-  static dimension dimensionToIndex(Op op) {
-    return StringSwitch<dimension>(op.dimension())
-        .Case("x", X)
-        .Case("y", Y)
-        .Case("z", Z)
-        .Default(invalid);
-  }
+  IndexKind indexKind;
+  IntrType intrType;
 
 public:
-  explicit GPUIndexIntrinsicOpLowering(LLVMTypeConverter &typeConverter)
-      : ConvertToLLVMPattern(Op::getOperationName(),
-                             typeConverter.getDialect()->getContext(),
-                             typeConverter),
-        indexBitwidth(typeConverter.getIndexTypeBitwidth()) {}
+  explicit OpLowering(const LLVMTypeConverter &typeConverter)
+      : ConvertOpToLLVMPattern<Op>(typeConverter),
+        indexBitwidth(typeConverter.getIndexTypeBitwidth()),
+        indexKind(IndexKind::Other), intrType(IntrType::None) {}
+
+  explicit OpLowering(const LLVMTypeConverter &typeConverter,
+                      IndexKind indexKind, IntrType intrType)
+      : ConvertOpToLLVMPattern<Op>(typeConverter),
+        indexBitwidth(typeConverter.getIndexTypeBitwidth()),
+        indexKind(indexKind), intrType(intrType) {}
 
   // Convert the kernel arguments to an LLVM type, preserve the rest.
   LogicalResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+  matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     MLIRContext *context = rewriter.getContext();
-    Value newOp;
-    switch (dimensionToIndex(cast<Op>(op))) {
-    case X:
-      newOp = rewriter.create<XOp>(loc, LLVM::LLVMType::getInt32Ty(context));
+    Operation *newOp;
+    switch (op.getDimension()) {
+    case gpu::Dimension::x:
+      newOp = rewriter.create<XOp>(loc, IntegerType::get(context, 32));
       break;
-    case Y:
-      newOp = rewriter.create<YOp>(loc, LLVM::LLVMType::getInt32Ty(context));
+    case gpu::Dimension::y:
+      newOp = rewriter.create<YOp>(loc, IntegerType::get(context, 32));
       break;
-    case Z:
-      newOp = rewriter.create<ZOp>(loc, LLVM::LLVMType::getInt32Ty(context));
+    case gpu::Dimension::z:
+      newOp = rewriter.create<ZOp>(loc, IntegerType::get(context, 32));
       break;
-    default:
-      return failure();
     }
 
+    // Order of priority for bounds:
+    // 1. The upper_bound attribute
+    // 2. Inherent attributes on a surrounding gpu.func
+    // 3. Discardable attributes on a surrounding function of any kind
+    // The below code handles these in reverse order so that more important
+    // sources overwrite less important ones.
+    DenseI32ArrayAttr funcBounds = nullptr;
+    if (auto funcOp = op->template getParentOfType<FunctionOpInterface>()) {
+      switch (indexKind) {
+      case IndexKind::Block: {
+        auto blockHelper =
+            gpu::GPUDialect::KnownBlockSizeAttrHelper(op.getContext());
+        if (blockHelper.isAttrPresent(funcOp))
+          funcBounds = blockHelper.getAttr(funcOp);
+        break;
+      }
+      case IndexKind::Grid: {
+        auto gridHelper =
+            gpu::GPUDialect::KnownGridSizeAttrHelper(op.getContext());
+        if (gridHelper.isAttrPresent(funcOp))
+          funcBounds = gridHelper.getAttr(funcOp);
+        break;
+      }
+      case IndexKind::Other:
+        break;
+      }
+    }
+    if (auto gpuFunc = op->template getParentOfType<gpu::GPUFuncOp>()) {
+      switch (indexKind) {
+      case IndexKind::Block:
+        funcBounds = gpuFunc.getKnownBlockSizeAttr();
+        break;
+      case IndexKind::Grid:
+        funcBounds = gpuFunc.getKnownGridSizeAttr();
+        break;
+      case IndexKind::Other:
+        break;
+      }
+    }
+    std::optional<int32_t> upperBound;
+    if (funcBounds)
+      upperBound =
+          funcBounds.asArrayRef()[static_cast<uint32_t>(op.getDimension())];
+    if (auto opBound = op.getUpperBound())
+      upperBound = opBound->getZExtValue();
+
+    if (upperBound && intrType != IntrType::None) {
+      int32_t min = (intrType == IntrType::Dim ? 1 : 0);
+      int32_t max = *upperBound + (intrType == IntrType::Id ? 0 : 1);
+      newOp->setAttr("range", LLVM::ConstantRangeAttr::get(
+                                  rewriter.getContext(), 32, min, max));
+    }
     if (indexBitwidth > 32) {
       newOp = rewriter.create<LLVM::SExtOp>(
-          loc, LLVM::LLVMType::getIntNTy(context, indexBitwidth), newOp);
+          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
     } else if (indexBitwidth < 32) {
       newOp = rewriter.create<LLVM::TruncOp>(
-          loc, LLVM::LLVMType::getIntNTy(context, indexBitwidth), newOp);
+          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
     }
 
-    rewriter.replaceOp(op, {newOp});
+    rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
 };
-
+} // namespace index_lowering
+} // namespace gpu
 } // namespace mlir
 
 #endif // MLIR_CONVERSION_GPUCOMMON_INDEXINTRINSICSOPLOWERING_H_

@@ -2,8 +2,6 @@
 Test basics of linux core file debugging.
 """
 
-from __future__ import division, print_function
-
 import shutil
 import struct
 import os
@@ -17,87 +15,86 @@ from lldbsuite.test import lldbutil
 class LinuxCoreTestCase(TestBase):
     NO_DEBUG_INFO_TESTCASE = True
 
-    mydir = TestBase.compute_mydir(__file__)
-
     _aarch64_pid = 37688
+    _aarch64_pac_pid = 387
     _i386_pid = 32306
     _x86_64_pid = 32259
     _s390x_pid = 1045
-    _mips64_n64_pid = 25619
-    _mips64_n32_pid = 3670
-    _mips_o32_pid = 3532
     _ppc64le_pid = 28147
+    _riscv64_gpr_fpr_pid = 1089
+    _riscv64_gpr_only_pid = 97
+    _loongarch64_pid = 456735
 
     _aarch64_regions = 4
     _i386_regions = 4
     _x86_64_regions = 5
     _s390x_regions = 2
-    _mips_regions = 5
     _ppc64le_regions = 2
+    _riscv64_regions = 4
+    _loongarch64_regions = 4
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("AArch64")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_aarch64(self):
         """Test that lldb can read the process information from an aarch64 linux core file."""
-        self.do_test("linux-aarch64", self._aarch64_pid,
-                     self._aarch64_regions, "a.out")
+        self.do_test("linux-aarch64", self._aarch64_pid, self._aarch64_regions, "a.out")
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("X86")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_i386(self):
         """Test that lldb can read the process information from an i386 linux core file."""
         self.do_test("linux-i386", self._i386_pid, self._i386_regions, "a.out")
 
-    @skipIfLLVMTargetMissing("Mips")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
-    def test_mips_o32(self):
-        """Test that lldb can read the process information from an MIPS O32 linux core file."""
-        self.do_test("linux-mipsel-gnuabio32", self._mips_o32_pid,
-                     self._mips_regions, "linux-mipsel-gn")
-
-    @skipIfLLVMTargetMissing("Mips")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
-    def test_mips_n32(self):
-        """Test that lldb can read the process information from an MIPS N32 linux core file """
-        self.do_test("linux-mips64el-gnuabin32", self._mips64_n32_pid,
-                     self._mips_regions, "linux-mips64el-")
-
-    @skipIfLLVMTargetMissing("Mips")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
-    def test_mips_n64(self):
-        """Test that lldb can read the process information from an MIPS N64 linux core file """
-        self.do_test("linux-mips64el-gnuabi64", self._mips64_n64_pid,
-                     self._mips_regions, "linux-mips64el-")
-
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("PowerPC")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_ppc64le(self):
         """Test that lldb can read the process information from an ppc64le linux core file."""
-        self.do_test("linux-ppc64le", self._ppc64le_pid, self._ppc64le_regions,
-                     "linux-ppc64le.ou")
+        self.do_test(
+            "linux-ppc64le",
+            self._ppc64le_pid,
+            self._ppc64le_regions,
+            "linux-ppc64le.ou",
+        )
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("X86")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_x86_64(self):
         """Test that lldb can read the process information from an x86_64 linux core file."""
-        self.do_test("linux-x86_64", self._x86_64_pid, self._x86_64_regions,
-                     "a.out")
+        self.do_test("linux-x86_64", self._x86_64_pid, self._x86_64_regions, "a.out")
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("SystemZ")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_s390x(self):
         """Test that lldb can read the process information from an s390x linux core file."""
-        self.do_test("linux-s390x", self._s390x_pid, self._s390x_regions,
-                     "a.out")
+        self.do_test("linux-s390x", self._s390x_pid, self._s390x_regions, "a.out")
 
-    @skipIf(triple='^mips')
+    @skipIfLLVMTargetMissing("RISCV")
+    def test_riscv64_gpr_fpr(self):
+        """Test that lldb can read the process information from an riscv64 linux core file."""
+        self.do_test(
+            "linux-riscv64.gpr_fpr",
+            self._riscv64_gpr_fpr_pid,
+            self._riscv64_regions,
+            "a.out",
+        )
+
+    @skipIfLLVMTargetMissing("RISCV")
+    def test_riscv64_gpr_only(self):
+        """Test that lldb can read the process information from an riscv64 linux core file
+        made for a RV64IMAC target, having no FP-registers."""
+        self.do_test(
+            "linux-riscv64.gpr_only",
+            self._riscv64_gpr_only_pid,
+            self._riscv64_regions,
+            "a.out",
+        )
+
+    @skipIfLLVMTargetMissing("LoongArch")
+    def test_loongarch64(self):
+        """Test that lldb can read the process information from an loongarch64 linux core file."""
+        self.do_test(
+            "linux-loongarch64",
+            self._loongarch64_pid,
+            self._loongarch64_regions,
+            "a.out",
+        )
+
     @skipIfLLVMTargetMissing("X86")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_same_pid_running(self):
         """Test that we read the information from the core correctly even if we have a running
         process with the same PID around"""
@@ -109,24 +106,22 @@ class LinuxCoreTestCase(TestBase):
             # These are offsets into the NT_PRSTATUS and NT_PRPSINFO structures in the note
             # segment of the core file. If you update the file, these offsets may need updating
             # as well. (Notes can be viewed with readelf --notes.)
-            for pid_offset in [0x1c4, 0x320]:
+            for pid_offset in [0x1C4, 0x320]:
                 f.seek(pid_offset)
-                self.assertEqual(
-                    struct.unpack(
-                        "<I",
-                        f.read(4))[0],
-                    self._x86_64_pid)
+                self.assertEqual(struct.unpack("<I", f.read(4))[0], self._x86_64_pid)
 
                 # We insert our own pid, and make sure the test still
                 # works.
                 f.seek(pid_offset)
                 f.write(struct.pack("<I", os.getpid()))
-        self.do_test(self.getBuildArtifact("linux-x86_64-pid"), os.getpid(),
-                     self._x86_64_regions, "a.out")
+        self.do_test(
+            self.getBuildArtifact("linux-x86_64-pid"),
+            os.getpid(),
+            self._x86_64_regions,
+            "a.out",
+        )
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("X86")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_two_cores_same_pid(self):
         """Test that we handle the situation if we have two core files with the same PID
         around"""
@@ -139,23 +134,58 @@ class LinuxCoreTestCase(TestBase):
         altframe = altprocess.GetSelectedThread().GetFrameAtIndex(0)
         self.assertEqual(altframe.GetFunctionName(), "_start")
         self.assertEqual(
-            altframe.GetLineEntry().GetLine(),
-            line_number(
-                "altmain.c",
-                "Frame _start"))
+            altframe.GetLineEntry().GetLine(), line_number("altmain.c", "Frame _start")
+        )
 
         error = lldb.SBError()
         F = altprocess.ReadCStringFromMemory(
-            altframe.FindVariable("F").GetValueAsUnsigned(), 256, error)
-        self.assertTrue(error.Success())
+            altframe.FindVariable("F").GetValueAsUnsigned(), 256, error
+        )
+        self.assertSuccess(error)
         self.assertEqual(F, "_start")
 
         # without destroying this process, run the test which opens another core file with the
         # same pid
-        self.do_test("linux-x86_64", self._x86_64_pid, self._x86_64_regions,
-                     "a.out")
+        self.do_test("linux-x86_64", self._x86_64_pid, self._x86_64_regions, "a.out")
 
-    @skipIf(triple='^mips')
+    @skipIfLLVMTargetMissing("X86")
+    @skipIfWindows
+    def test_read_memory(self):
+        """Test that we are able to read as many bytes as available"""
+        target = self.dbg.CreateTarget("linux-x86_64.out")
+        process = target.LoadCore("linux-x86_64.core")
+        self.assertTrue(process, PROCESS_IS_VALID)
+
+        error = lldb.SBError()
+        bytesread = process.ReadMemory(0x400FF0, 20, error)
+
+        # read only 16 bytes without zero bytes filling
+        self.assertEqual(len(bytesread), 16)
+        self.dbg.DeleteTarget(target)
+
+    @skipIfLLVMTargetMissing("X86")
+    def test_write_register(self):
+        """Test that writing to register results in an error and that error
+        message is set."""
+        target = self.dbg.CreateTarget("linux-x86_64.out")
+        process = target.LoadCore("linux-x86_64.core")
+        self.assertTrue(process, PROCESS_IS_VALID)
+
+        thread = process.GetSelectedThread()
+        self.assertTrue(thread)
+
+        frame = thread.GetSelectedFrame()
+        self.assertTrue(frame)
+
+        reg_value = frame.FindRegister("eax")
+        self.assertTrue(reg_value)
+
+        error = lldb.SBError()
+        success = reg_value.SetValueFromCString("10", error)
+        self.assertFalse(success)
+        self.assertTrue(error.Fail())
+        self.assertIsNotNone(error.GetCString())
+
     @skipIfLLVMTargetMissing("X86")
     def test_FPR_SSE(self):
         # check x86_64 core file
@@ -182,18 +212,36 @@ class LinuxCoreTestCase(TestBase):
         values["st5"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x80 0xff 0x3f}"
         values["st6"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
         values["st7"] = "{0x35 0xc2 0x68 0x21 0xa2 0xda 0x0f 0xc9 0x00 0x40}"
-        values["xmm0"] = "{0x29 0x31 0x64 0x46 0x29 0x31 0x64 0x46 0x29 0x31 0x64 0x46 0x29 0x31 0x64 0x46}"
-        values["xmm1"] = "{0x9c 0xed 0x86 0x64 0x9c 0xed 0x86 0x64 0x9c 0xed 0x86 0x64 0x9c 0xed 0x86 0x64}"
-        values["xmm2"] = "{0x07 0xc2 0x1f 0xd7 0x07 0xc2 0x1f 0xd7 0x07 0xc2 0x1f 0xd7 0x07 0xc2 0x1f 0xd7}"
-        values["xmm3"] = "{0xa2 0x20 0x48 0x25 0xa2 0x20 0x48 0x25 0xa2 0x20 0x48 0x25 0xa2 0x20 0x48 0x25}"
-        values["xmm4"] = "{0xeb 0x5a 0xa8 0xc4 0xeb 0x5a 0xa8 0xc4 0xeb 0x5a 0xa8 0xc4 0xeb 0x5a 0xa8 0xc4}"
-        values["xmm5"] = "{0x49 0x41 0x20 0x0b 0x49 0x41 0x20 0x0b 0x49 0x41 0x20 0x0b 0x49 0x41 0x20 0x0b}"
-        values["xmm6"] = "{0xf8 0xf1 0x8b 0x4f 0xf8 0xf1 0x8b 0x4f 0xf8 0xf1 0x8b 0x4f 0xf8 0xf1 0x8b 0x4f}"
-        values["xmm7"] = "{0x13 0xf1 0x30 0xcd 0x13 0xf1 0x30 0xcd 0x13 0xf1 0x30 0xcd 0x13 0xf1 0x30 0xcd}"
+        values[
+            "xmm0"
+        ] = "{0x29 0x31 0x64 0x46 0x29 0x31 0x64 0x46 0x29 0x31 0x64 0x46 0x29 0x31 0x64 0x46}"
+        values[
+            "xmm1"
+        ] = "{0x9c 0xed 0x86 0x64 0x9c 0xed 0x86 0x64 0x9c 0xed 0x86 0x64 0x9c 0xed 0x86 0x64}"
+        values[
+            "xmm2"
+        ] = "{0x07 0xc2 0x1f 0xd7 0x07 0xc2 0x1f 0xd7 0x07 0xc2 0x1f 0xd7 0x07 0xc2 0x1f 0xd7}"
+        values[
+            "xmm3"
+        ] = "{0xa2 0x20 0x48 0x25 0xa2 0x20 0x48 0x25 0xa2 0x20 0x48 0x25 0xa2 0x20 0x48 0x25}"
+        values[
+            "xmm4"
+        ] = "{0xeb 0x5a 0xa8 0xc4 0xeb 0x5a 0xa8 0xc4 0xeb 0x5a 0xa8 0xc4 0xeb 0x5a 0xa8 0xc4}"
+        values[
+            "xmm5"
+        ] = "{0x49 0x41 0x20 0x0b 0x49 0x41 0x20 0x0b 0x49 0x41 0x20 0x0b 0x49 0x41 0x20 0x0b}"
+        values[
+            "xmm6"
+        ] = "{0xf8 0xf1 0x8b 0x4f 0xf8 0xf1 0x8b 0x4f 0xf8 0xf1 0x8b 0x4f 0xf8 0xf1 0x8b 0x4f}"
+        values[
+            "xmm7"
+        ] = "{0x13 0xf1 0x30 0xcd 0x13 0xf1 0x30 0xcd 0x13 0xf1 0x30 0xcd 0x13 0xf1 0x30 0xcd}"
 
         for regname, value in values.items():
-            self.expect("register read {}".format(regname),
-                        substrs=["{} = {}".format(regname, value)])
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
 
         # now check i386 core file
         target = self.dbg.CreateTarget(None)
@@ -203,27 +251,24 @@ class LinuxCoreTestCase(TestBase):
         values["fioff"] = "0x080480cc"
 
         for regname, value in values.items():
-            self.expect("register read {}".format(regname),
-                        substrs=["{} = {}".format(regname, value)])
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("X86")
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_i386_sysroot(self):
         """Test that lldb can find the exe for an i386 linux core file using the sysroot."""
 
         # Copy linux-i386.out to tmp_sysroot/home/labath/test/a.out (since it was compiled as
         # /home/labath/test/a.out)
-        tmp_sysroot = os.path.join(
-            self.getBuildDir(), "lldb_i386_mock_sysroot")
-        executable = os.path.join(
-            tmp_sysroot, "home", "labath", "test", "a.out")
+        tmp_sysroot = os.path.join(self.getBuildDir(), "lldb_i386_mock_sysroot")
+        executable = os.path.join(tmp_sysroot, "home", "labath", "test", "a.out")
         lldbutil.mkdir_p(os.path.dirname(executable))
         shutil.copyfile("linux-i386.out", executable)
 
         # Set sysroot and load core
-        self.runCmd("platform select remote-linux --sysroot '%s'" %
-                    tmp_sysroot)
+        self.runCmd("platform select remote-linux --sysroot '%s'" % tmp_sysroot)
         target = self.dbg.CreateTarget(None)
         self.assertTrue(target, VALID_TARGET)
         process = target.LoadCore("linux-i386.core")
@@ -233,10 +278,34 @@ class LinuxCoreTestCase(TestBase):
 
         self.dbg.DeleteTarget(target)
 
-    @skipIf(triple='^mips')
+    def test_object_map(self):
+        """Test that lldb can find the exe for an i386 linux core file using the object map."""
+
+        # Copy linux-i386.out to lldb_i386_object_map/a.out
+        tmp_object_map_root = os.path.join(self.getBuildDir(), "lldb_i386_object_map")
+        executable = os.path.join(tmp_object_map_root, "a.out")
+        lldbutil.mkdir_p(os.path.dirname(executable))
+        shutil.copyfile("linux-i386.out", executable)
+
+        # Replace the original module path at /home/labath/test and load the core
+        self.runCmd(
+            "settings set target.object-map /home/labath/test {}".format(
+                tmp_object_map_root
+            )
+        )
+
+        target = self.dbg.CreateTarget(None)
+        process = target.LoadCore("linux-i386.core")
+
+        # Check that we did load the mapped executable
+        exe_module_spec = process.GetTarget().GetModuleAtIndex(0).GetFileSpec()
+        self.assertTrue(exe_module_spec.fullpath.startswith(tmp_object_map_root))
+
+        self.check_all(process, self._i386_pid, self._i386_regions, "a.out")
+        self.dbg.DeleteTarget(target)
+
     @skipIfLLVMTargetMissing("X86")
     @skipIfWindows
-    @skipIfReproducer  # lldb::FileSP used in typemap cannot be instrumented.
     def test_x86_64_sysroot(self):
         """Test that sysroot has more priority then local filesystem."""
 
@@ -247,8 +316,7 @@ class LinuxCoreTestCase(TestBase):
 
         # Copy correct executable to the location inside sysroot
         tmp_sysroot = os.path.join(self.getBuildDir(), "mock_sysroot")
-        exe_inside = os.path.join(
-            tmp_sysroot, os.path.relpath(exe_outside, "/"))
+        exe_inside = os.path.join(tmp_sysroot, os.path.relpath(exe_outside, "/"))
         lldbutil.mkdir_p(os.path.dirname(exe_inside))
         shutil.copyfile("linux-x86_64.out", exe_inside)
 
@@ -261,8 +329,7 @@ class LinuxCoreTestCase(TestBase):
             f.write(core)
 
         # Set sysroot and load core
-        self.runCmd("platform select remote-linux --sysroot '%s'" %
-                    tmp_sysroot)
+        self.runCmd("platform select remote-linux --sysroot '%s'" % tmp_sysroot)
         target = self.dbg.CreateTarget(None)
         self.assertTrue(target, VALID_TARGET)
         process = target.LoadCore(core_file)
@@ -270,13 +337,24 @@ class LinuxCoreTestCase(TestBase):
         # Check that we found executable from the sysroot
         mod_path = str(target.GetModuleAtIndex(0).GetFileSpec())
         self.assertEqual(mod_path, exe_inside)
-        self.check_all(process, self._x86_64_pid,
-                       self._x86_64_regions, "a.out")
+        self.check_all(process, self._x86_64_pid, self._x86_64_regions, "a.out")
 
         self.dbg.DeleteTarget(target)
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("AArch64")
+    def test_aarch64_pac(self):
+        """Test that lldb can unwind stack for AArch64 elf core file with PAC enabled."""
+
+        target = self.dbg.CreateTarget("linux-aarch64-pac.out")
+        self.assertTrue(target, VALID_TARGET)
+        process = target.LoadCore("linux-aarch64-pac.core")
+
+        self.check_all(process, self._aarch64_pac_pid, self._aarch64_regions, "a.out")
+
+        self.dbg.DeleteTarget(target)
+
+    @skipIfLLVMTargetMissing("AArch64")
+    # This test fails on FreeBSD 12 and earlier, see llvm.org/pr49415 for details.
     def test_aarch64_regs(self):
         # check 64 bit ARM core files
         target = self.dbg.CreateTarget(None)
@@ -286,53 +364,80 @@ class LinuxCoreTestCase(TestBase):
         values = {}
         values["x1"] = "0x000000000000002f"
         values["w1"] = "0x0000002f"
-        values["fp"] = "0x0000007fc5dd7f20"
-        values["lr"] = "0x0000000000400180"
-        values["sp"] = "0x0000007fc5dd7f00"
-        values["pc"] = "0x000000000040014c"
-        values["v0"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xe0 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v1"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xf8 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v2"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x04 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v3"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x0c 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v4"] = "{0x00 0x00 0x90 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v5"] = "{0x00 0x00 0xb0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v6"] = "{0x00 0x00 0xd0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v7"] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v8"] = "{0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11}"
-        values["v27"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v28"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v31"] = "{0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30}"
+        values["fp"] = "0x0000ffffdab7c770"
+        values["lr"] = "0x000000000040019c"
+        values["sp"] = "0x0000ffffdab7c750"
+        values["pc"] = "0x0000000000400168"
+        values[
+            "v0"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xe0 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v1"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xf8 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v2"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x04 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v3"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x0c 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v4"
+        ] = "{0x00 0x00 0x90 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v5"
+        ] = "{0x00 0x00 0xb0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v6"
+        ] = "{0x00 0x00 0xd0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v7"
+        ] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v8"
+        ] = "{0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11}"
+        values[
+            "v27"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v28"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v31"
+        ] = "{0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30}"
         values["s2"] = "0"
         values["s3"] = "0"
         values["s4"] = "4.5"
         values["s5"] = "5.5"
         values["s6"] = "6.5"
         values["s7"] = "7.5"
-        values["s8"] = "1.14437e-28"
+        values["s8"] = "1.14437421E-28"
         values["s30"] = "0"
-        values["s31"] = "6.40969e-10"
+        values["s31"] = "6.40969056E-10"
         values["d0"] = "0.5"
         values["d1"] = "1.5"
         values["d2"] = "2.5"
         values["d3"] = "3.5"
-        values["d4"] = "5.35161536149201e-315"
-        values["d5"] = "5.36197666906508e-315"
-        values["d6"] = "5.37233797663815e-315"
-        values["d7"] = "5.38269928421123e-315"
-        values["d8"] = "1.80107573659442e-226"
+        values["d4"] = "5.3516153614920076E-315"
+        values["d5"] = "5.3619766690650802E-315"
+        values["d6"] = "5.3723379766381528E-315"
+        values["d7"] = "5.3826992842112254E-315"
+        values["d8"] = "1.8010757365944223E-226"
         values["d30"] = "0"
-        values["d31"] = "1.39804328609529e-76"
+        values["d31"] = "1.3980432860952889E-76"
         values["fpsr"] = "0x00000000"
         values["fpcr"] = "0x00000000"
+        values["tpidr"] = "0x1122334455667788"
 
         for regname, value in values.items():
-            self.expect("register read {}".format(regname),
-                        substrs=["{} = {}".format(regname, value)])
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
 
         self.expect("register read --all")
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("AArch64")
+    # This test fails on FreeBSD 12 and earlier, see llvm.org/pr49415 for details.
     def test_aarch64_sve_regs_fpsimd(self):
         # check 64 bit ARM core files
         target = self.dbg.CreateTarget(None)
@@ -347,53 +452,101 @@ class LinuxCoreTestCase(TestBase):
         values["sp"] = "0x0000ffffcbad8d30"
         values["pc"] = "0x000000000040014c"
         values["cpsr"] = "0x00001000"
-        values["v0"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xe0 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v1"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xf8 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v2"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x04 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v3"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x0c 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v4"] = "{0x00 0x00 0x90 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v5"] = "{0x00 0x00 0xb0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v6"] = "{0x00 0x00 0xd0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v7"] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v8"] = "{0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11}"
-        values["v27"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v28"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v31"] = "{0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30}"
+        values[
+            "v0"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xe0 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v1"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xf8 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v2"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x04 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v3"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x0c 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v4"
+        ] = "{0x00 0x00 0x90 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v5"
+        ] = "{0x00 0x00 0xb0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v6"
+        ] = "{0x00 0x00 0xd0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v7"
+        ] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v8"
+        ] = "{0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11}"
+        values[
+            "v27"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v28"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v31"
+        ] = "{0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30}"
         values["s2"] = "0"
         values["s3"] = "0"
         values["s4"] = "4.5"
         values["s5"] = "5.5"
         values["s6"] = "6.5"
         values["s7"] = "7.5"
-        values["s8"] = "1.14437e-28"
+        values["s8"] = "1.14437421E-28"
         values["s30"] = "0"
-        values["s31"] = "6.40969e-10"
+        values["s31"] = "6.40969056E-10"
         values["d0"] = "0.5"
         values["d1"] = "1.5"
         values["d2"] = "2.5"
         values["d3"] = "3.5"
-        values["d4"] = "5.35161536149201e-315"
-        values["d5"] = "5.36197666906508e-315"
-        values["d6"] = "5.37233797663815e-315"
-        values["d7"] = "5.38269928421123e-315"
-        values["d8"] = "1.80107573659442e-226"
+        values["d4"] = "5.3516153614920076E-315"
+        values["d5"] = "5.3619766690650802E-315"
+        values["d6"] = "5.3723379766381528E-315"
+        values["d7"] = "5.3826992842112254E-315"
+        values["d8"] = "1.8010757365944223E-226"
         values["d30"] = "0"
-        values["d31"] = "1.39804328609529e-76"
+        values["d31"] = "1.3980432860952889E-76"
         values["fpsr"] = "0x00000000"
         values["fpcr"] = "0x00000000"
         values["vg"] = "0x0000000000000004"
-        values["z0"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xe0 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z1"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xf8 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z2"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x04 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z3"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x0c 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z4"] = "{0x00 0x00 0x90 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z5"] = "{0x00 0x00 0xb0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z6"] = "{0x00 0x00 0xd0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z7"] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z8"] = "{0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z27"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z28"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z31"] = "{0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z0"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xe0 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z1"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0xf8 0x3f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z2"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x04 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z3"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x0c 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z4"
+        ] = "{0x00 0x00 0x90 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z5"
+        ] = "{0x00 0x00 0xb0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z6"
+        ] = "{0x00 0x00 0xd0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z7"
+        ] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z8"
+        ] = "{0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x11 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z27"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z28"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z31"
+        ] = "{0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x30 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
         values["p0"] = "{0x00 0x00 0x00 0x00}"
         values["p1"] = "{0x00 0x00 0x00 0x00}"
         values["p2"] = "{0x00 0x00 0x00 0x00}"
@@ -413,12 +566,13 @@ class LinuxCoreTestCase(TestBase):
         values["ffr"] = "{0x00 0x00 0x00 0x00}"
 
         for regname, value in values.items():
-            self.expect("register read {}".format(regname),
-                        substrs=["{} = {}".format(regname, value)])
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
 
         self.expect("register read --all")
 
-    @skipIf(triple='^mips')
     @skipIfLLVMTargetMissing("AArch64")
     def test_aarch64_sve_regs_full(self):
         # check 64 bit ARM core files
@@ -431,10 +585,18 @@ class LinuxCoreTestCase(TestBase):
         values["lr"] = "0x0000000000400170"
         values["sp"] = "0x0000fffffc1ff4d0"
         values["pc"] = "0x000000000040013c"
-        values["v0"] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40}"
-        values["v1"] = "{0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41}"
-        values["v2"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["v3"] = "{0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41}"
+        values[
+            "v0"
+        ] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40}"
+        values[
+            "v1"
+        ] = "{0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41}"
+        values[
+            "v2"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "v3"
+        ] = "{0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41}"
         values["s0"] = "7.5"
         values["s1"] = "11.5"
         values["s2"] = "0"
@@ -442,12 +604,20 @@ class LinuxCoreTestCase(TestBase):
         values["d0"] = "65536.0158538818"
         values["d1"] = "1572864.25476074"
         values["d2"] = "0"
-        values["d3"] = "25165828.0917969"
+        values["d3"] = "25165828.091796875"
         values["vg"] = "0x0000000000000004"
-        values["z0"] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40}"
-        values["z1"] = "{0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41}"
-        values["z2"] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
-        values["z3"] = "{0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41}"
+        values[
+            "z0"
+        ] = "{0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40 0x00 0x00 0xf0 0x40}"
+        values[
+            "z1"
+        ] = "{0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41 0x00 0x00 0x38 0x41}"
+        values[
+            "z2"
+        ] = "{0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00}"
+        values[
+            "z3"
+        ] = "{0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41 0x00 0x00 0x78 0x41}"
         values["p0"] = "{0x11 0x11 0x11 0x11}"
         values["p1"] = "{0x11 0x11 0x11 0x11}"
         values["p2"] = "{0x00 0x00 0x00 0x00}"
@@ -455,12 +625,44 @@ class LinuxCoreTestCase(TestBase):
         values["p4"] = "{0x00 0x00 0x00 0x00}"
 
         for regname, value in values.items():
-            self.expect("register read {}".format(regname),
-                        substrs=["{} = {}".format(regname, value)])
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
 
         self.expect("register read --all")
 
-    @skipIf(triple='^mips')
+        # Register field information should work with core files as it does a live process.
+        # The N/Z/C/V bits are always present so just check for those.
+        self.expect("register read cpsr", substrs=["= (N = 0, Z = 0, C = 0, V = 0"])
+        self.expect("register read fpsr", substrs=["= (QC = 0, IDC = 0, IXC = 0"])
+        # AHP/DN/FZ/RMode always present, others may vary.
+        self.expect(
+            "register read fpcr", substrs=["= (AHP = 0, DN = 0, FZ = 0, RMode = RN"]
+        )
+        # RMode should have enumerator descriptions.
+        self.expect(
+            "register info fpcr",
+            substrs=["RMode: 0 = RN, 1 = RP, 2 = RM, 3 = RZ"],
+        )
+
+    @skipIfLLVMTargetMissing("AArch64")
+    def test_aarch64_pac_regs(self):
+        # Test AArch64/Linux Pointer Authentication register read
+        target = self.dbg.CreateTarget(None)
+        self.assertTrue(target, VALID_TARGET)
+        process = target.LoadCore("linux-aarch64-pac.core")
+
+        values = {"data_mask": "0x007f00000000000", "code_mask": "0x007f00000000000"}
+
+        for regname, value in values.items():
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
+
+        self.expect("register read --all")
+
     @skipIfLLVMTargetMissing("ARM")
     def test_arm_core(self):
         # check 32 bit ARM core file
@@ -487,10 +689,272 @@ class LinuxCoreTestCase(TestBase):
         values["pc"] = "0x0000000f"
         values["cpsr"] = "0x00000010"
         for regname, value in values.items():
-            self.expect("register read {}".format(regname),
-                        substrs=["{} = {}".format(regname, value)])
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
 
         self.expect("register read --all")
+
+    @skipIfLLVMTargetMissing("RISCV")
+    def test_riscv64_regs_gpr_fpr(self):
+        # check basic registers using 64 bit RISC-V core file
+        target = self.dbg.CreateTarget(None)
+        self.assertTrue(target, VALID_TARGET)
+        process = target.LoadCore("linux-riscv64.gpr_fpr.core")
+
+        values = {}
+        values["pc"] = "0x000000000001016e"
+        values["ra"] = "0x00000000000101a4"
+        values["sp"] = "0x0000003fffc1d2d0"
+        values["gp"] = "0x0000002ae6eccf50"
+        values["tp"] = "0x0000003ff3cb5400"
+        values["t0"] = "0x7f7f7f7fffffffff"
+        values["t1"] = "0x0000002ae6eb9b1c"
+        values["t2"] = "0xffffffffffffffff"
+        values["fp"] = "0x0000003fffc1d300"
+        values["s1"] = "0x0000002ae6eced98"
+        values["a0"] = "0x0"
+        values["a1"] = "0x0000000000010144"
+        values["a2"] = "0x0000002ae6ecedb0"
+        values["a3"] = "0xafdbdbff81cf7f81"
+        values["a4"] = "0x00000000000101e4"
+        values["a5"] = "0x0"
+        values["a6"] = "0x2f5b5a40014e0001"
+        values["a7"] = "0x00000000000000dd"
+        values["s2"] = "0x0000002ae6ec8860"
+        values["s3"] = "0x0000002ae6ecedb0"
+        values["s4"] = "0x0000003fff886c18"
+        values["s5"] = "0x0000002ae6eceb78"
+        values["s6"] = "0x0000002ae6ec8860"
+        values["s7"] = "0x0000002ae6ec8860"
+        values["s8"] = "0x0"
+        values["s9"] = "0x000000000000000f"
+        values["s10"] = "0x0000002ae6ecc8d0"
+        values["s11"] = "0x0000000000000008"
+        values["t3"] = "0x0000003ff3be3728"
+        values["t4"] = "0x0"
+        values["t5"] = "0x0000000000000002"
+        values["t6"] = "0x0000002ae6ed08b9"
+        values["zero"] = "0x0"
+        values["fa5"] = "0xffffffff423c0000"
+        values["fcsr"] = "0x00000000"
+
+        fpr_names = {
+            "ft0",
+            "ft1",
+            "ft2",
+            "ft3",
+            "ft4",
+            "ft5",
+            "ft6",
+            "ft7",
+            "ft8",
+            "ft9",
+            "ft10",
+            "ft11",
+            "fa0",
+            "fa1",
+            "fa2",
+            "fa3",
+            "fa4",
+            # fa5 is non-zero and checked in the list above.
+            "fa6",
+            "fa7",
+            "fs0",
+            "fs1",
+            "fs2",
+            "fs3",
+            "fs4",
+            "fs5",
+            "fs6",
+            "fs7",
+            "fs8",
+            "fs9",
+            "fs10",
+            "fs11",
+        }
+        fpr_value = "0x0000000000000000"
+
+        for regname, value in values.items():
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
+
+        for regname in fpr_names:
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, fpr_value)],
+            )
+
+        self.expect("register read --all")
+
+    @skipIfLLVMTargetMissing("RISCV")
+    def test_riscv64_regs_gpr_only(self):
+        # check registers using 64 bit RISC-V core file containing GP-registers only
+        target = self.dbg.CreateTarget(None)
+        self.assertTrue(target, VALID_TARGET)
+        process = target.LoadCore("linux-riscv64.gpr_only.core")
+
+        values = {}
+        values["pc"] = "0x0000000000010164"
+        values["ra"] = "0x0000000000010194"
+        values["sp"] = "0x00fffffff4d5fcc0"
+        values["gp"] = "0x0000000000157678"
+        values["tp"] = "0x00ffffff99c43400"
+        values["t0"] = "0x00ffffff99c6b260"
+        values["t1"] = "0x00ffffff99b7bd54"
+        values["t2"] = "0x0000000003f0b27f"
+        values["fp"] = "0x00fffffff4d5fcf0"
+        values["s1"] = "0x0000000000000003"
+        values["a0"] = "0x0"
+        values["a1"] = "0x0000000000010144"
+        values["a2"] = "0x0000000000176460"
+        values["a3"] = "0x000000000015ee38"
+        values["a4"] = "0x00000000423c0000"
+        values["a5"] = "0x0"
+        values["a6"] = "0x0"
+        values["a7"] = "0x00000000000000dd"
+        values["s2"] = "0x0"
+        values["s3"] = "0x000000000014ddf8"
+        values["s4"] = "0x000000000003651c"
+        values["s5"] = "0x00fffffffccd8d28"
+        values["s6"] = "0x000000000014ddf8"
+        values["s7"] = "0x00ffffff99c69d48"
+        values["s8"] = "0x00ffffff99c6a008"
+        values["s9"] = "0x0"
+        values["s10"] = "0x0"
+        values["s11"] = "0x0"
+        values["t3"] = "0x00ffffff99c42000"
+        values["t4"] = "0x00ffffff99af8e20"
+        values["t5"] = "0x0000000000000005"
+        values["t6"] = "0x44760bdd8d5f6381"
+        values["zero"] = "0x0"
+
+        for regname, value in values.items():
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
+
+        # Check that LLDB does not try to read other registers from core file
+        self.expect(
+            "register read --all",
+            matching=False,
+            substrs=["registers were unavailable"],
+        )
+
+    @skipIfLLVMTargetMissing("LoongArch")
+    def test_loongarch64_regs(self):
+        # check registers using 64 bit LoongArch core file containing GP and FP registers
+        target = self.dbg.CreateTarget(None)
+        self.assertTrue(target, VALID_TARGET)
+        process = target.LoadCore("linux-loongarch64.core")
+
+        values = {}
+        values["r0"] = "0x0000000000000000"
+        values["r1"] = "0x000000012000016c"
+        values["r2"] = "0x0000000000000000"
+        values["r3"] = "0x00007ffffb8249e0"
+        values["r4"] = "0x0000000000000000"
+        values["r5"] = "0x000000012000010c"
+        values["r6"] = "0x0000000000000000"
+        values["r7"] = "0x0000000000000000"
+        values["r8"] = "0x0000000000000000"
+        values["r9"] = "0x0000000000000000"
+        values["r10"] = "0x0000000000000000"
+        values["r11"] = "0x00000000000000dd"
+        values["r12"] = "0x0000000000000000"
+        values["r13"] = "0x000000000000002f"
+        values["r14"] = "0x0000000000000000"
+        values["r15"] = "0x0000000000000000"
+        values["r16"] = "0x0000000000000000"
+        values["r17"] = "0x0000000000000000"
+        values["r18"] = "0x0000000000000000"
+        values["r19"] = "0x0000000000000000"
+        values["r20"] = "0x0000000000000000"
+        values["r21"] = "0x0000000000000000"
+        values["r22"] = "0x00007ffffb824a10"
+        values["r23"] = "0x0000000000000000"
+        values["r24"] = "0x0000000000000000"
+        values["r25"] = "0x0000000000000000"
+        values["r26"] = "0x0000000000000000"
+        values["r27"] = "0x0000000000000000"
+        values["r28"] = "0x0000000000000000"
+        values["r29"] = "0x0000000000000000"
+        values["r30"] = "0x0000000000000000"
+        values["r31"] = "0x0000000000000000"
+        values["orig_a0"] = "0x0000555556b62d50"
+        values["pc"] = "0x000000012000012c"
+
+        fpr_values = {}
+        fpr_values["f0"] = "0x00000000ffffff05"
+        fpr_values["f1"] = "0x2525252525252525"
+        fpr_values["f2"] = "0x2525252525560005"
+        fpr_values["f3"] = "0x000000000000ffff"
+        fpr_values["f4"] = "0x0000000000000000"
+        fpr_values["f5"] = "0x0000000000000008"
+        fpr_values["f6"] = "0x0f0e0d0c0b0a0908"
+        fpr_values["f7"] = "0xffffffffffffffff"
+        fpr_values["f8"] = "0x6261747563657845"
+        fpr_values["f9"] = "0x766173206562206c"
+        fpr_values["f10"] = "0xffffffffffffffff"
+        fpr_values["f11"] = "0xffffffffffffffff"
+        fpr_values["f12"] = "0xffffffffffffffff"
+        fpr_values["f13"] = "0xffffffffffffffff"
+        fpr_values["f14"] = "0xffffffffffffffff"
+        fpr_values["f15"] = "0xffffffffffffffff"
+        fpr_values["f16"] = "0xffffffffffffffff"
+        fpr_values["f17"] = "0xffffffffffffffff"
+        fpr_values["f18"] = "0xffffffffffffffff"
+        fpr_values["f19"] = "0xffffffffffffffff"
+        fpr_values["f20"] = "0xffffffffffffffff"
+        fpr_values["f21"] = "0xffffffffffffffff"
+        fpr_values["f22"] = "0xffffffffffffffff"
+        fpr_values["f23"] = "0xffffffffffffffff"
+        fpr_values["f24"] = "0xffffffffffffffff"
+        fpr_values["f25"] = "0xffffffffffffffff"
+        fpr_values["f26"] = "0xffffffffffffffff"
+        fpr_values["f27"] = "0xffffffffffffffff"
+        fpr_values["f28"] = "0xffffffffffffffff"
+        fpr_values["f29"] = "0xffffffffffffffff"
+        fpr_values["f30"] = "0xffffffffffffffff"
+        fpr_values["f31"] = "0xffffffffffffffff"
+        fpr_values["fcc0"] = "0x01"
+        fpr_values["fcc1"] = "0x00"
+        fpr_values["fcc2"] = "0x01"
+        fpr_values["fcc3"] = "0x01"
+        fpr_values["fcc4"] = "0x01"
+        fpr_values["fcc5"] = "0x01"
+        fpr_values["fcc6"] = "0x00"
+        fpr_values["fcc7"] = "0x01"
+        fpr_values["fcsr"] = "0x00000000"
+
+        for regname, value in values.items():
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
+
+        for regname, value in fpr_values.items():
+            self.expect(
+                "register read {}".format(regname),
+                substrs=["{} = {}".format(regname, value)],
+            )
+
+        self.expect("register read --all")
+
+    def test_get_core_file_api(self):
+        """
+        Test SBProcess::GetCoreFile() API can successfully get the core file.
+        """
+        core_file_name = "linux-x86_64.core"
+        target = self.dbg.CreateTarget("linux-x86_64.out")
+        process = target.LoadCore(core_file_name)
+        self.assertTrue(process, PROCESS_IS_VALID)
+        self.assertEqual(process.GetCoreFile().GetFilename(), core_file_name)
+        self.dbg.DeleteTarget(target)
 
     def check_memory_regions(self, process, region_count):
         region_list = process.GetMemoryRegions()
@@ -502,9 +966,7 @@ class LinuxCoreTestCase(TestBase):
         self.assertEqual(region_list.GetSize(), region_count)
 
         # Check that getting a region beyond the last in the list fails.
-        self.assertFalse(
-            region_list.GetMemoryRegionAtIndex(
-                region_count, region))
+        self.assertFalse(region_list.GetMemoryRegionAtIndex(region_count, region))
 
         # Check each region is valid.
         for i in range(region_list.GetSize()):
@@ -523,11 +985,9 @@ class LinuxCoreTestCase(TestBase):
 
             # Test an address in the middle of a region returns it's enclosing
             # region.
-            middle_address = (region.GetRegionBase() +
-                              region.GetRegionEnd()) // 2
+            middle_address = (region.GetRegionBase() + region.GetRegionEnd()) // 2
             region_at_middle = lldb.SBMemoryRegionInfo()
-            error = process.GetMemoryRegionInfo(
-                middle_address, region_at_middle)
+            error = process.GetMemoryRegionInfo(middle_address, region_at_middle)
             self.assertEqual(region, region_at_middle)
 
             # Test the address at the end of a region returns it's enclosing
@@ -540,24 +1000,18 @@ class LinuxCoreTestCase(TestBase):
             # Check that quering the end address does not return this region but
             # the next one.
             next_region = lldb.SBMemoryRegionInfo()
-            error = process.GetMemoryRegionInfo(
-                region.GetRegionEnd(), next_region)
+            error = process.GetMemoryRegionInfo(region.GetRegionEnd(), next_region)
             self.assertNotEqual(region, next_region)
-            self.assertEqual(
-                region.GetRegionEnd(),
-                next_region.GetRegionBase())
+            self.assertEqual(region.GetRegionEnd(), next_region.GetRegionBase())
 
         # Check that query beyond the last region returns an unmapped region
         # that ends at LLDB_INVALID_ADDRESS
         last_region = lldb.SBMemoryRegionInfo()
         region_list.GetMemoryRegionAtIndex(region_count - 1, last_region)
         end_region = lldb.SBMemoryRegionInfo()
-        error = process.GetMemoryRegionInfo(
-            last_region.GetRegionEnd(), end_region)
+        error = process.GetMemoryRegionInfo(last_region.GetRegionEnd(), end_region)
         self.assertFalse(end_region.IsMapped())
-        self.assertEqual(
-            last_region.GetRegionEnd(),
-            end_region.GetRegionBase())
+        self.assertEqual(last_region.GetRegionEnd(), end_region.GetRegionBase())
         self.assertEqual(end_region.GetRegionEnd(), lldb.LLDB_INVALID_ADDRESS)
 
     def check_state(self, process):
@@ -579,9 +1033,9 @@ class LinuxCoreTestCase(TestBase):
             self.assertTrue(process.is_stopped)
 
             # command line
-            self.dbg.HandleCommand('s')
+            self.dbg.HandleCommand("s")
             self.assertTrue(process.is_stopped)
-            self.dbg.HandleCommand('c')
+            self.dbg.HandleCommand("c")
             self.assertTrue(process.is_stopped)
 
             # restore file handles
@@ -599,11 +1053,13 @@ class LinuxCoreTestCase(TestBase):
             frame = thread.GetFrameAtIndex(i)
             self.assertTrue(frame)
             self.assertEqual(frame.GetFunctionName(), backtrace[i])
-            self.assertEqual(frame.GetLineEntry().GetLine(),
-                             line_number("main.c", "Frame " + backtrace[i]))
             self.assertEqual(
-                frame.FindVariable("F").GetValueAsUnsigned(), ord(
-                    backtrace[i][0]))
+                frame.GetLineEntry().GetLine(),
+                line_number("main.c", "Frame " + backtrace[i]),
+            )
+            self.assertEqual(
+                frame.FindVariable("F").GetValueAsUnsigned(), ord(backtrace[i][0])
+            )
 
     def check_all(self, process, pid, region_count, thread_name):
         self.assertTrue(process, PROCESS_IS_VALID)

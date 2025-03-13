@@ -8,6 +8,7 @@
 
 #include "index/Background.h"
 #include "support/Logger.h"
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -20,7 +21,7 @@ void BackgroundQueue::preventThreadStarvationInTests() {
 
 void BackgroundQueue::work(std::function<void()> OnIdle) {
   while (true) {
-    llvm::Optional<Task> Task;
+    std::optional<Task> Task;
     {
       std::unique_lock<std::mutex> Lock(Mu);
       CV.wait(Lock, [&] { return ShouldStop || !Queue.empty(); });
@@ -72,10 +73,24 @@ void BackgroundQueue::stop() {
   CV.notify_all();
 }
 
+// Tweaks the priority of a newly-enqueued task, or returns false to cancel it.
+bool BackgroundQueue::adjust(Task &T) {
+  // It is tempting to drop duplicates of queued tasks, and merely deprioritize
+  // duplicates of completed tasks (i.e. reindexing on CDB changes). But:
+  //  - the background indexer doesn't support reindexing well, e.g. staleness
+  //    is checked at *enqueue* time only, and doesn't account for compile flags
+  //  - reindexing on compile flags is often a poor use of CPU in practice
+  if (T.Key && !SeenKeys.insert(T.Key).second)
+    return false;
+  T.QueuePri = std::max(T.QueuePri, Boosts.lookup(T.Tag));
+  return true;
+}
+
 void BackgroundQueue::push(Task T) {
   {
     std::lock_guard<std::mutex> Lock(Mu);
-    T.QueuePri = std::max(T.QueuePri, Boosts.lookup(T.Tag));
+    if (!adjust(T))
+      return;
     Queue.push_back(std::move(T));
     std::push_heap(Queue.begin(), Queue.end());
     ++Stat.Enqueued;
@@ -87,11 +102,13 @@ void BackgroundQueue::push(Task T) {
 void BackgroundQueue::append(std::vector<Task> Tasks) {
   {
     std::lock_guard<std::mutex> Lock(Mu);
-    for (Task &T : Tasks)
-      T.QueuePri = std::max(T.QueuePri, Boosts.lookup(T.Tag));
-    std::move(Tasks.begin(), Tasks.end(), std::back_inserter(Queue));
+    for (Task &T : Tasks) {
+      if (!adjust(T))
+        continue;
+      Queue.push_back(std::move(T));
+      ++Stat.Enqueued;
+    }
     std::make_heap(Queue.begin(), Queue.end());
-    Stat.Enqueued += Tasks.size();
     notifyProgress();
   }
   CV.notify_all();
@@ -117,7 +134,7 @@ void BackgroundQueue::boost(llvm::StringRef Tag, unsigned NewPriority) {
 }
 
 bool BackgroundQueue::blockUntilIdleForTest(
-    llvm::Optional<double> TimeoutSeconds) {
+    std::optional<double> TimeoutSeconds) {
   std::unique_lock<std::mutex> Lock(Mu);
   return wait(Lock, CV, timeoutSeconds(TimeoutSeconds),
               [&] { return Queue.empty() && Stat.Active == 0; });

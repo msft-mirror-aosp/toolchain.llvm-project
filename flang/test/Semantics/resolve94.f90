@@ -1,4 +1,4 @@
-! RUN: %S/test_errors.sh %s %t %f18
+! RUN: %python %S/test_errors.py %s %flang_fc1
 ! C929   No specifier shall appear more than once in a given 
 !   image-selector-spec-list.
 ! C930 TEAM and TEAM_NUMBER shall not both appear in the same
@@ -17,8 +17,15 @@ subroutine s1()
   intCoVar = 343
   ! OK
   rVar1 = rCoarray[1,2,3]
+  associate (x => rCoarray)
+    rVar1 = x[1,2,3] ! also ok
+  end associate
   !ERROR: 'rcoarray' has corank 3, but coindexed reference has 2 cosubscripts
   rVar1 = rCoarray[1,2]
+  associate (x => rCoarray)
+  !ERROR: 'x' has corank 3, but coindexed reference has 2 cosubscripts
+    rVar1 = x[1,2]
+  end associate
   !ERROR: Must have INTEGER type, but is REAL(4)
   rVar1 = rCoarray[1,2,3.4]
   !ERROR: Must have INTEGER type, but is REAL(4)

@@ -1,4 +1,4 @@
-; RUN: opt %loadPolly -polly-scops -analyze -S < %s | FileCheck %s
+; RUN: opt %loadNPMPolly '-passes=print<polly-function-scops>' -disable-output < %s 2>&1 | FileCheck %s
 ;
 ; int n, m;
 ; void foo(char* __restrict a)

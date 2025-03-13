@@ -39,6 +39,17 @@ int main() {
 " COMPILER_RT_TARGET_HAS_FCNTL_LCK)
 
 CHECK_CXX_SOURCE_COMPILES("
+#include <sys/file.h>
+
+int fd;
+int main() {
+  flock(fd, LOCK_EX);
+  return 0;
+}
+
+" COMPILER_RT_TARGET_HAS_FLOCK)
+
+CHECK_CXX_SOURCE_COMPILES("
 #include <sys/utsname.h>
 int main() {
  return 0;
@@ -53,7 +64,6 @@ set(PROFILE_SOURCES
   InstrProfiling.c
   InstrProfilingInternal.c
   InstrProfilingValue.c
-  InstrProfilingBiasVar.c
   InstrProfilingBuffer.c
   InstrProfilingFile.c
   InstrProfilingMerge.c
@@ -61,6 +71,7 @@ set(PROFILE_SOURCES
   InstrProfilingNameVar.c
   InstrProfilingVersionVar.c
   InstrProfilingWriter.c
+  InstrProfilingPlatformAIX.c
   InstrProfilingPlatformDarwin.c
   InstrProfilingPlatformFuchsia.c
   InstrProfilingPlatformLinux.c
@@ -81,7 +92,7 @@ set(PROFILE_HEADERS
 if(WIN32)
   list(APPEND PROFILE_SOURCES
     WindowsMMap.c
-    )
+  )
 endif()
 
 include_directories(..)
@@ -91,6 +102,13 @@ if(FUCHSIA OR UNIX)
  set(EXTRA_FLAGS
      -fPIC
      -Wno-pedantic)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+  set(EXTRA_FLAGS
+      ${EXTRA_FLAGS}
+      -D_WASI_EMULATED_MMAN
+      -D_WASI_EMULATED_GETPID)
 endif()
 
 if(COMPILER_RT_TARGET_HAS_ATOMICS)
@@ -105,21 +123,36 @@ if(COMPILER_RT_TARGET_HAS_FCNTL_LCK)
      -DCOMPILER_RT_HAS_FCNTL_LCK=1)
 endif()
 
+if(COMPILER_RT_TARGET_HAS_FLOCK)
+  set(EXTRA_FLAGS
+      ${EXTRA_FLAGS}
+      -DCOMPILER_RT_HAS_FLOCK=1)
+endif()
+
 if(COMPILER_RT_TARGET_HAS_UNAME)
  set(EXTRA_FLAGS
      ${EXTRA_FLAGS}
      -DCOMPILER_RT_HAS_UNAME=1)
 endif()
 
+if(MSVC)
+  # profile historically has only been supported with the static runtime
+  # on windows
+  set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+endif()
+
 # We don't use the C++ Standard Library here, so avoid including it by mistake.
 append_list_if(COMPILER_RT_HAS_NOSTDINCXX_FLAG -nostdinc++ EXTRA_FLAGS)
 # XRay uses C++ standard library headers.
-string(REGEX REPLACE "-stdlib=[a-zA-Z+]*" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+string(REGEX REPLACE "-stdlib=[a-zA-Z+]*" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
 # This appears to be a C-only warning banning the use of locals in aggregate
 # initializers. All other compilers accept this, though.
 # nonstandard extension used : 'identifier' : cannot be initialized using address of automatic variable
 append_list_if(COMPILER_RT_HAS_WD4221_FLAG /wd4221 EXTRA_FLAGS)
+
+# Disable 'nonstandard extension used: translation unit is empty'.
+append_list_if(COMPILER_RT_HAS_WD4206_FLAG /wd4206 EXTRA_FLAGS)
 
 if(APPLE)
   add_compiler_rt_runtime(clang_rt.profile
@@ -129,7 +162,8 @@ if(APPLE)
     CFLAGS ${EXTRA_FLAGS}
     SOURCES ${PROFILE_SOURCES}
     ADDITIONAL_HEADERS ${PROFILE_HEADERS}
-    PARENT_TARGET profile)
+    PARENT_TARGET profile
+    EXTENSIONS ON)
 else()
   add_compiler_rt_runtime(clang_rt.profile
     STATIC
@@ -137,5 +171,6 @@ else()
     CFLAGS ${EXTRA_FLAGS}
     SOURCES ${PROFILE_SOURCES}
     ADDITIONAL_HEADERS ${PROFILE_HEADERS}
-    PARENT_TARGET profile)
+    PARENT_TARGET profile
+    EXTENSIONS ON)
 endif()

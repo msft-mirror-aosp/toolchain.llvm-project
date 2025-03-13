@@ -7,17 +7,22 @@
 //===----------------------------------------------------------------------===//
 
 #include "TidyProvider.h"
+#include "../clang-tidy/ClangTidyModuleRegistry.h"
+#include "../clang-tidy/ClangTidyOptions.h"
 #include "Config.h"
 #include "support/FileCache.h"
 #include "support/Logger.h"
+#include "support/Path.h"
 #include "support/ThreadsafeFS.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/ErrorHandling.h"
+#include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/Process.h"
-#include "llvm/Support/VirtualFileSystem.h"
+#include "llvm/Support/SourceMgr.h"
 #include <memory>
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -38,10 +43,28 @@ public:
     std::shared_ptr<const tidy::ClangTidyOptions> Result;
     read(
         TFS, FreshTime,
-        [this](llvm::Optional<llvm::StringRef> Data) {
+        [this](std::optional<llvm::StringRef> Data) {
           Value.reset();
           if (Data && !Data->empty()) {
-            if (auto Parsed = tidy::parseConfiguration(*Data))
+            auto Diagnostics = [](const llvm::SMDiagnostic &D) {
+              switch (D.getKind()) {
+              case llvm::SourceMgr::DK_Error:
+                elog("tidy-config error at {0}:{1}:{2}: {3}", D.getFilename(),
+                     D.getLineNo(), D.getColumnNo(), D.getMessage());
+                break;
+              case llvm::SourceMgr::DK_Warning:
+                log("tidy-config warning at {0}:{1}:{2}: {3}", D.getFilename(),
+                    D.getLineNo(), D.getColumnNo(), D.getMessage());
+                break;
+              case llvm::SourceMgr::DK_Note:
+              case llvm::SourceMgr::DK_Remark:
+                vlog("tidy-config note at {0}:{1}:{2}: {3}", D.getFilename(),
+                     D.getLineNo(), D.getColumnNo(), D.getMessage());
+                break;
+              }
+            };
+            if (auto Parsed = tidy::parseConfigurationWithDiags(
+                    llvm::MemoryBufferRef(*Data, path()), Diagnostics))
               Value = std::make_shared<const tidy::ClangTidyOptions>(
                   std::move(*Parsed));
             else
@@ -80,18 +103,12 @@ public:
 
     // Compute absolute paths to all ancestors (substrings of P.Path).
     // Ensure cache entries for each ancestor exist in the map.
-    llvm::StringRef Parent = path::parent_path(AbsPath);
-    llvm::SmallVector<DotClangTidyCache *, 8> Caches;
+    llvm::SmallVector<DotClangTidyCache *> Caches;
     {
       std::lock_guard<std::mutex> Lock(Mu);
-      for (auto I = path::begin(Parent, path::Style::posix),
-                E = path::end(Parent);
-           I != E; ++I) {
-        assert(I->end() >= Parent.begin() && I->end() <= Parent.end() &&
-               "Canonical path components should be substrings");
-        llvm::StringRef Ancestor(Parent.begin(), I->end() - Parent.begin());
+      for (auto Ancestor = absoluteParent(AbsPath); !Ancestor.empty();
+           Ancestor = absoluteParent(Ancestor)) {
         auto It = Cache.find(Ancestor);
-
         // Assemble the actual config file path only if needed.
         if (It == Cache.end()) {
           llvm::SmallString<256> ConfigPath = Ancestor;
@@ -105,12 +122,12 @@ public:
     // This will take a (per-file) lock for each file that actually exists.
     std::chrono::steady_clock::time_point FreshTime =
         std::chrono::steady_clock::now() - MaxStaleness;
-    llvm::SmallVector<std::shared_ptr<const tidy::ClangTidyOptions>, 4>
+    llvm::SmallVector<std::shared_ptr<const tidy::ClangTidyOptions>>
         OptionStack;
     for (const DotClangTidyCache *Cache : Caches)
       if (auto Config = Cache->get(FS, FreshTime)) {
         OptionStack.push_back(std::move(Config));
-        if (!OptionStack.back()->InheritParentConfig.getValueOr(false))
+        if (!OptionStack.back()->InheritParentConfig.value_or(false))
           break;
       }
     unsigned Order = 1u;
@@ -121,7 +138,7 @@ public:
 
 } // namespace
 
-static void mergeCheckList(llvm::Optional<std::string> &Checks,
+static void mergeCheckList(std::optional<std::string> &Checks,
                            llvm::StringRef List) {
   if (List.empty())
     return;
@@ -132,9 +149,9 @@ static void mergeCheckList(llvm::Optional<std::string> &Checks,
   *Checks = llvm::join_items(",", *Checks, List);
 }
 
-TidyProviderRef provideEnvironment() {
-  static const llvm::Optional<std::string> User = [] {
-    llvm::Optional<std::string> Ret = llvm::sys::Process::GetEnv("USER");
+TidyProvider provideEnvironment() {
+  static const std::optional<std::string> User = [] {
+    std::optional<std::string> Ret = llvm::sys::Process::GetEnv("USER");
 #ifdef _WIN32
     if (!Ret)
       return llvm::sys::Process::GetEnv("USERNAME");
@@ -150,7 +167,7 @@ TidyProviderRef provideEnvironment() {
   return [](tidy::ClangTidyOptions &, llvm::StringRef) {};
 }
 
-TidyProviderRef provideDefaultChecks() {
+TidyProvider provideDefaultChecks() {
   // These default checks are chosen for:
   //  - low false-positive rate
   //  - providing a lot of value
@@ -178,31 +195,39 @@ TidyProvider addTidyChecks(llvm::StringRef Checks,
 }
 
 TidyProvider disableUnusableChecks(llvm::ArrayRef<std::string> ExtraBadChecks) {
-  constexpr llvm::StringLiteral Seperator(",");
-  static const std::string BadChecks =
-      llvm::join_items(Seperator,
-                       // We want this list to start with a seperator to
-                       // simplify appending in the lambda. So including an
-                       // empty string here will force that.
-                       "",
-                       // ----- False Positives -----
+  constexpr llvm::StringLiteral Separator(",");
+  static const std::string BadChecks = llvm::join_items(
+      Separator,
+      // We want this list to start with a separator to
+      // simplify appending in the lambda. So including an
+      // empty string here will force that.
+      "",
+      // include-cleaner is directly integrated in IncludeCleaner.cpp
+      "-misc-include-cleaner",
 
-                       // Check relies on seeing ifndef/define/endif directives,
-                       // clangd doesn't replay those when using a preamble.
-                       "-llvm-header-guard",
+      // ----- False Positives -----
 
-                       // ----- Crashing Checks -----
+      // Check relies on seeing ifndef/define/endif directives,
+      // clangd doesn't replay those when using a preamble.
+      "-llvm-header-guard", "-modernize-macro-to-enum",
 
-                       // Check can choke on invalid (intermediate) c++
-                       // code, which is often the case when clangd
-                       // tries to build an AST.
-                       "-bugprone-use-after-move");
+      // ----- Crashing Checks -----
+
+      // Check can choke on invalid (intermediate) c++
+      // code, which is often the case when clangd
+      // tries to build an AST.
+      "-bugprone-use-after-move",
+      // Alias for bugprone-use-after-move.
+      "-hicpp-invalid-access-moved",
+      // Check uses dataflow analysis, which might hang/crash unexpectedly on
+      // incomplete code.
+      "-bugprone-unchecked-optional-access");
 
   size_t Size = BadChecks.size();
   for (const std::string &Str : ExtraBadChecks) {
     if (Str.empty())
       continue;
-    Size += Seperator.size();
+    Size += Separator.size();
     if (LLVM_LIKELY(Str.front() != '-'))
       ++Size;
     Size += Str.size();
@@ -213,7 +238,7 @@ TidyProvider disableUnusableChecks(llvm::ArrayRef<std::string> ExtraBadChecks) {
   for (const std::string &Str : ExtraBadChecks) {
     if (Str.empty())
       continue;
-    DisableGlob += Seperator;
+    DisableGlob += Separator;
     if (LLVM_LIKELY(Str.front() != '-'))
       DisableGlob.push_back('-');
     DisableGlob += Str;
@@ -226,9 +251,9 @@ TidyProvider disableUnusableChecks(llvm::ArrayRef<std::string> ExtraBadChecks) {
   };
 }
 
-TidyProviderRef provideClangdConfig() {
+TidyProvider provideClangdConfig() {
   return [](tidy::ClangTidyOptions &Opts, llvm::StringRef) {
-    const auto &CurTidyConfig = Config::current().ClangTidy;
+    const auto &CurTidyConfig = Config::current().Diagnostics.ClangTidy;
     if (!CurTidyConfig.Checks.empty())
       mergeCheckList(Opts.Checks, CurTidyConfig.Checks);
 
@@ -259,11 +284,50 @@ TidyProvider combine(std::vector<TidyProvider> Providers) {
 
 tidy::ClangTidyOptions getTidyOptionsForFile(TidyProviderRef Provider,
                                              llvm::StringRef Filename) {
-  tidy::ClangTidyOptions Opts = tidy::ClangTidyOptions::getDefaults();
-  Opts.Checks->clear();
+  // getDefaults instantiates all check factories, which are registered at link
+  // time. So cache the results once.
+  static const auto *DefaultOpts = [] {
+    auto *Opts = new tidy::ClangTidyOptions;
+    *Opts = tidy::ClangTidyOptions::getDefaults();
+    Opts->Checks->clear();
+    return Opts;
+  }();
+  auto Opts = *DefaultOpts;
   if (Provider)
     Provider(Opts, Filename);
   return Opts;
 }
+
+bool isRegisteredTidyCheck(llvm::StringRef Check) {
+  assert(!Check.empty());
+  assert(!Check.contains('*') && !Check.contains(',') &&
+         "isRegisteredCheck doesn't support globs");
+  assert(Check.ltrim().front() != '-');
+
+  static const llvm::StringSet<llvm::BumpPtrAllocator> AllChecks = [] {
+    llvm::StringSet<llvm::BumpPtrAllocator> Result;
+    tidy::ClangTidyCheckFactories Factories;
+    for (tidy::ClangTidyModuleRegistry::entry E :
+         tidy::ClangTidyModuleRegistry::entries())
+      E.instantiate()->addCheckFactories(Factories);
+    for (const auto &Factory : Factories)
+      Result.insert(Factory.getKey());
+    return Result;
+  }();
+
+  return AllChecks.contains(Check);
+}
+
+std::optional<bool> isFastTidyCheck(llvm::StringRef Check) {
+  static auto &Fast = *new llvm::StringMap<bool>{
+#define FAST(CHECK, TIME) {#CHECK,true},
+#define SLOW(CHECK, TIME) {#CHECK,false},
+#include "TidyFastChecks.inc"
+  };
+  if (auto It = Fast.find(Check); It != Fast.end())
+    return It->second;
+  return std::nullopt;
+}
+
 } // namespace clangd
 } // namespace clang

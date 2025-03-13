@@ -39,6 +39,11 @@ auto OmnipotentCharC = MMTuple(
   MConstInt(0, 64)
 );
 
+auto AnyPtr = MMTuple(
+  MMString("any pointer"),
+  OmnipotentCharC,
+  MConstInt(0, 64)
+);
 
 auto OmnipotentCharCXX = MMTuple(
   MMString("omnipotent char"),
@@ -112,24 +117,18 @@ TEST(TBAAMetadataTest, BasicTypes) {
   ASSERT_TRUE(I);
 
   I = matchNext(I,
-      MInstruction(Instruction::Store,
-        MValType(Type::getInt8PtrTy(Compiler.Context)),
-        MMTuple(
-          MMTuple(
-            MMString("any pointer"),
-            OmnipotentCharC,
-            MConstInt(0)),
-          MSameAs(0),
-          MConstInt(0))));
+                MInstruction(Instruction::Store,
+                             MValType(PointerType::getUnqual(Compiler.Context)),
+                             MMTuple(AnyPtr, MSameAs(0), MConstInt(0))));
   ASSERT_TRUE(I);
 
   I = matchNext(I,
       MInstruction(Instruction::Store,
-        MValType(Type::getInt32PtrTy(Compiler.Context)),
+        MValType(PointerType::getUnqual(Compiler.Context)),
         MMTuple(
           MMTuple(
-            MMString("any pointer"),
-            OmnipotentCharC,
+            MMString("p1 int"),
+            AnyPtr,
             MConstInt(0)),
           MSameAs(0),
           MConstInt(0))));
@@ -968,13 +967,10 @@ TEST(TBAAMetadataTest, BaseClass) {
       MConstInt(0)),
     MConstInt(0));
 
-  auto ClassDerived = MMTuple(
-    MMString("_ZTS7Derived"),
-    MMTuple(
-      MMString("short"),
-      OmnipotentCharCXX,
-      MConstInt(0)),
-    MConstInt(4));
+  auto ClassDerived =
+      MMTuple(MMString("_ZTS7Derived"), ClassBase, MConstInt(0),
+              MMTuple(MMString("short"), OmnipotentCharCXX, MConstInt(0)),
+              MConstInt(4));
 
   const Instruction *I = match(BB,
       MInstruction(Instruction::Store,
@@ -1047,13 +1043,10 @@ TEST(TBAAMetadataTest, PolymorphicClass) {
       MConstInt(0)),
     MConstInt(Compiler.PtrSize));
 
-  auto ClassDerived = MMTuple(
-    MMString("_ZTS7Derived"),
-    MMTuple(
-      MMString("short"),
-      OmnipotentCharCXX,
-      MConstInt(0)),
-    MConstInt(Compiler.PtrSize + 4));
+  auto ClassDerived =
+      MMTuple(MMString("_ZTS7Derived"), ClassBase, MConstInt(0),
+              MMTuple(MMString("short"), OmnipotentCharCXX, MConstInt(0)),
+              MConstInt(Compiler.PtrSize + 4));
 
   const Instruction *I = match(BB,
       MInstruction(Instruction::Store,

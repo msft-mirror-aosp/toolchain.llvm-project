@@ -53,9 +53,9 @@ foo:
 
 # CHECK:      Relocations [
 # CHECK:        Section ({{[^ ]+}}) .rel.debug_line {
-# CHECK-NEXT:     0x2E R_386_32 .text 0x0
+# CHECK-NEXT:     0x2E R_386_32 .text
 # CHECK-NEXT:   }
 
-# DWARF-DUMP: Address            Line   Column File   ISA Discriminator Flags
-# DWARF-DUMP: ------------------ ------ ------ ------ --- ------------- -------------
-# DWARF-DUMP: 0x0000000000000000     2      0      1   0             1  is_stmt
+# DWARF-DUMP: Address            Line   Column File   ISA Discriminator OpIndex Flags
+# DWARF-DUMP: ------------------ ------ ------ ------ --- ------------- ------- -------------
+# DWARF-DUMP: 0x0000000000000000     2      0      1   0             1        0  is_stmt

@@ -1,4 +1,3 @@
-// -*- C++ -*-
 //===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -7,13 +6,26 @@
 //
 //===----------------------------------------------------------------------===//
 
-// REQUIRES: host-has-gdb
-// UNSUPPORTED: libcpp-has-no-localization
+// REQUIRES: host-has-gdb-with-python
+// REQUIRES: locale.en_US.UTF-8
+// UNSUPPORTED: no-localization
 // UNSUPPORTED: c++03
+
+// TODO: Investigate these failures which break the CI.
+// UNSUPPORTED: clang-18, clang-19, clang-20
+
+// The Android libc++ tests are run on a non-Android host, connected to an
+// Android device over adb. gdb needs special support to make this work (e.g.
+// gdbclient.py, ndk-gdb.py, gdbserver), and the Android organization doesn't
+// support gdb anymore, favoring lldb instead.
+// UNSUPPORTED: android
+
+// This test doesn't work as such on Windows.
+// UNSUPPORTED: windows
 
 // RUN: %{cxx} %{flags} %s -o %t.exe %{compile_flags} -g %{link_flags}
 // Ensure locale-independence for unicode tests.
-// RUN: %{gdb} -nx -batch -iex "set autoload off" -ex "source %S/../../../utils/gdb/libcxx/printers.py" -ex "python register_libcxx_printer_loader()" -ex "source %S/gdb_pretty_printer_test.py" %t.exe
+// RUN: env LANG=en_US.UTF-8 %{gdb} -nx -batch -iex "set autoload off" -ex "source %S/../../../utils/gdb/libcxx/printers.py" -ex "python register_libcxx_printer_loader()" -ex "source %S/gdb_pretty_printer_test.py" %t.exe
 
 #include <bitset>
 #include <deque>
@@ -43,7 +55,7 @@
 //
 //    Or
 //
-//    Call ComparePrettyPrintToChars with that variable, and a "const char*"
+//    Call ComparePrettyPrintToRegex with that variable, and a "const char*"
 //    *python* regular expression to match against the printer's output.
 //    The set of special characters in a Python regular expression overlaps
 //    with a lot of things the pretty printers print--brackets, for
@@ -92,24 +104,34 @@ void MarkAsLive(Type &&) {}
 template <typename TypeToPrint> void ComparePrettyPrintToChars(
     TypeToPrint value,
     const char *expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
 template <typename TypeToPrint> void ComparePrettyPrintToRegex(
     TypeToPrint value,
     const char *expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
 void CompareExpressionPrettyPrintToChars(
     std::string value,
     const char *expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
 void CompareExpressionPrettyPrintToRegex(
     std::string value,
     const char *expectation) {
+  MarkAsLive(value);
+  StopForDebugger(&value, &expectation);
+}
+
+template <typename TypeToPrint>
+void CompareListChildrenToChars(TypeToPrint value, const char* expectation) {
+  MarkAsLive(value);
   StopForDebugger(&value, &expectation);
 }
 
@@ -142,6 +164,11 @@ void framework_self_test() {
 template <typename T> class UncompressibleAllocator : public std::allocator<T> {
  public:
   char X;
+
+  template <class U>
+  struct rebind {
+    using other = UncompressibleAllocator<U>;
+  };
 };
 
 void string_test() {
@@ -167,22 +194,19 @@ using string_view = std::string_view;
 
 void string_view_test() {
   std::string_view i_am_empty;
-  ComparePrettyPrintToChars(i_am_empty, "std::string_view of length 0: \"\"");
+  ComparePrettyPrintToChars(i_am_empty, "\"\"");
 
   std::string source_string("to be or not to be");
   std::string_view to_be(source_string);
-  ComparePrettyPrintToChars(
-      to_be, "std::string_view of length 18: \"to be or not to be\"");
+  ComparePrettyPrintToChars(to_be, "\"to be or not to be\"");
 
   const char char_arr[] = "what a wonderful world";
   std::string_view wonderful(&char_arr[7], 9);
-  ComparePrettyPrintToChars(
-      wonderful, "std::string_view of length 9: \"wonderful\"");
+  ComparePrettyPrintToChars(wonderful, "\"wonderful\"");
 
   const char char_arr1[] = "namespace_stringview";
   string_view namespace_stringview(&char_arr1[10], 10);
-  ComparePrettyPrintToChars(
-      namespace_stringview, "std::string_view of length 10: \"stringview\"");
+  ComparePrettyPrintToChars(namespace_stringview, "\"stringview\"");
 }
 }
 
@@ -214,9 +238,7 @@ void u32string_test() {
 
 void tuple_test() {
   std::tuple<int, int, int> test0(2, 3, 4);
-  ComparePrettyPrintToChars(
-      test0,
-      "std::tuple containing = {[1] = 2, [2] = 3, [3] = 4}");
+  ComparePrettyPrintToChars(test0, "std::tuple containing = {[0] = 2, [1] = 3, [2] = 4}");
 
   std::tuple<> test1;
   ComparePrettyPrintToChars(
@@ -240,22 +262,22 @@ void unique_ptr_test() {
 
 void bitset_test() {
   std::bitset<258> i_am_empty(0);
-  ComparePrettyPrintToChars(i_am_empty, "std::bitset<258>");
+  ComparePrettyPrintToRegex(i_am_empty, "std::bitset<258(u|ul)?>");
 
   std::bitset<0> very_empty;
-  ComparePrettyPrintToChars(very_empty, "std::bitset<0>");
+  ComparePrettyPrintToRegex(very_empty, "std::bitset<0(u|ul)?>");
 
   std::bitset<15> b_000001111111100(1020);
-  ComparePrettyPrintToChars(b_000001111111100,
-      "std::bitset<15> = {[2] = 1, [3] = 1, [4] = 1, [5] = 1, [6] = 1, "
-      "[7] = 1, [8] = 1, [9] = 1}");
+  ComparePrettyPrintToRegex(b_000001111111100,
+      R"(std::bitset<15(u|ul)?> = {\[2\] = 1, \[3\] = 1, \[4\] = 1, \[5\] = 1, \[6\] = 1, )"
+      R"(\[7\] = 1, \[8\] = 1, \[9\] = 1})");
 
   std::bitset<258> b_0_129_132(0);
   b_0_129_132[0] = true;
   b_0_129_132[129] = true;
   b_0_129_132[132] = true;
-  ComparePrettyPrintToChars(b_0_129_132,
-      "std::bitset<258> = {[0] = 1, [129] = 1, [132] = 1}");
+  ComparePrettyPrintToRegex(b_0_129_132,
+      R"(std::bitset<258(u|ul)?> = {\[0\] = 1, \[129\] = 1, \[132\] = 1})");
 }
 
 void list_test() {
@@ -345,28 +367,28 @@ void multimap_test() {
 
 void queue_test() {
   std::queue<int> i_am_empty;
-  ComparePrettyPrintToChars(i_am_empty,
-      "std::queue wrapping = {std::deque is empty}");
+  ComparePrettyPrintToChars(i_am_empty, "std::queue wrapping: std::deque is empty");
 
   std::queue<int> one_two_three(std::deque<int>{1, 2, 3});
-    ComparePrettyPrintToChars(one_two_three,
-        "std::queue wrapping = {"
-        "std::deque with 3 elements = {1, 2, 3}}");
+  ComparePrettyPrintToChars(
+      one_two_three,
+      "std::queue wrapping: "
+      "std::deque with 3 elements = {1, 2, 3}");
 }
 
 void priority_queue_test() {
   std::priority_queue<int> i_am_empty;
-  ComparePrettyPrintToChars(i_am_empty,
-      "std::priority_queue wrapping = {std::vector of length 0, capacity 0}");
+  ComparePrettyPrintToChars(i_am_empty, "std::priority_queue wrapping: std::vector of length 0, capacity 0");
 
   std::priority_queue<int> one_two_three;
   one_two_three.push(11111);
   one_two_three.push(22222);
   one_two_three.push(33333);
 
-  ComparePrettyPrintToRegex(one_two_three,
-      R"(std::priority_queue wrapping = )"
-      R"({std::vector of length 3, capacity 3 = {33333)");
+  ComparePrettyPrintToRegex(
+      one_two_three,
+      R"(std::priority_queue wrapping: )"
+      R"(std::vector of length 3, capacity 3 = {33333)");
 
   ComparePrettyPrintToRegex(one_two_three, ".*11111.*");
   ComparePrettyPrintToRegex(one_two_three, ".*22222.*");
@@ -394,25 +416,22 @@ void set_test() {
 
 void stack_test() {
   std::stack<int> test0;
-  ComparePrettyPrintToChars(test0,
-                            "std::stack wrapping = {std::deque is empty}");
+  ComparePrettyPrintToChars(test0, "std::stack wrapping: std::deque is empty");
   test0.push(5);
   test0.push(6);
-  ComparePrettyPrintToChars(
-      test0, "std::stack wrapping = {std::deque with 2 elements = {5, 6}}");
+  ComparePrettyPrintToChars(test0, "std::stack wrapping: std::deque with 2 elements = {5, 6}");
   std::stack<bool> test1;
   test1.push(true);
   test1.push(false);
-  ComparePrettyPrintToChars(
-      test1,
-      "std::stack wrapping = {std::deque with 2 elements = {true, false}}");
+  ComparePrettyPrintToChars(test1, "std::stack wrapping: std::deque with 2 elements = {true, false}");
 
   std::stack<std::string> test2;
   test2.push("Hello");
   test2.push("World");
-  ComparePrettyPrintToChars(test2,
-                            "std::stack wrapping = {std::deque with 2 elements "
-                            "= {\"Hello\", \"World\"}}");
+  ComparePrettyPrintToChars(
+      test2,
+      "std::stack wrapping: std::deque with 2 elements "
+      "= {\"Hello\", \"World\"}");
 }
 
 void multiset_test() {
@@ -427,9 +446,9 @@ void multiset_test() {
 
 void vector_test() {
   std::vector<bool> test0 = {true, false};
-  ComparePrettyPrintToChars(test0,
+  ComparePrettyPrintToRegex(test0,
                             "std::vector<bool> of "
-                            "length 2, capacity 64 = {1, 0}");
+                            "length 2, capacity (32|64) = {1, 0}");
   for (int i = 0; i < 31; ++i) {
     test0.push_back(true);
     test0.push_back(false);
@@ -444,9 +463,9 @@ void vector_test() {
   ComparePrettyPrintToRegex(
       test0,
       "std::vector<bool> of length 65, "
-      "capacity 128 = {1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, "
-      "1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, "
-      "1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}");
+      "capacity (96|128) = {1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, "
+      "0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, "
+      "0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}");
 
   std::vector<int> test1;
   ComparePrettyPrintToChars(test1, "std::vector of length 0, capacity 0");
@@ -489,8 +508,9 @@ void map_iterator_test() {
 
   auto not_found = one_two_three.find(7);
   MarkAsLive(not_found);
-  CompareExpressionPrettyPrintToRegex("not_found",
-      R"(std::__map_iterator  = {\[0x[a-f0-9]+\] =  end\(\)})");
+  // Because the end_node is not easily detected, just be sure it doesn't crash.
+  CompareExpressionPrettyPrintToRegex(
+      "not_found", R"(std::__map_iterator ( = {\[0x[a-f0-9]+\] = .*}|<error reading variable:.*>))");
 }
 
 void unordered_set_test() {
@@ -607,25 +627,27 @@ void shared_ptr_test() {
   // due to which there is one more count for the pointer. Hence, all the
   // following tests are testing with expected count plus 1.
   std::shared_ptr<const int> test0 = std::make_shared<const int>(5);
+  // The python regular expression matcher treats newlines as significant, so
+  // these regular expressions should be on one line.
   ComparePrettyPrintToRegex(
       test0,
-      R"(std::shared_ptr<int> count 2, weak 0 containing = {__ptr_ = 0x[a-f0-9]+})");
+      R"(std::shared_ptr<int> count [2\?], weak [0\?]( \(libc\+\+ missing debug info\))? containing = {__ptr_ = 0x[a-f0-9]+})");
 
   std::shared_ptr<const int> test1(test0);
   ComparePrettyPrintToRegex(
       test1,
-      R"(std::shared_ptr<int> count 3, weak 0 containing = {__ptr_ = 0x[a-f0-9]+})");
+      R"(std::shared_ptr<int> count [3\?], weak [0\?]( \(libc\+\+ missing debug info\))? containing = {__ptr_ = 0x[a-f0-9]+})");
 
   {
     std::weak_ptr<const int> test2 = test1;
     ComparePrettyPrintToRegex(
         test0,
-        R"(std::shared_ptr<int> count 3, weak 1 containing = {__ptr_ = 0x[a-f0-9]+})");
+        R"(std::shared_ptr<int> count [3\?], weak [1\?]( \(libc\+\+ missing debug info\))? containing = {__ptr_ = 0x[a-f0-9]+})");
   }
 
   ComparePrettyPrintToRegex(
       test0,
-      R"(std::shared_ptr<int> count 3, weak 0 containing = {__ptr_ = 0x[a-f0-9]+})");
+      R"(std::shared_ptr<int> count [3\?], weak [0\?]( \(libc\+\+ missing debug info\))? containing = {__ptr_ = 0x[a-f0-9]+})");
 
   std::shared_ptr<const int> test3;
   ComparePrettyPrintToChars(test3, "std::shared_ptr is nullptr");
@@ -633,17 +655,33 @@ void shared_ptr_test() {
 
 void streampos_test() {
   std::streampos test0 = 67;
-  ComparePrettyPrintToChars(
-      test0, "std::fpos with stream offset:67 with state: {count:0 value:0}");
+  ComparePrettyPrintToRegex(test0, "^std::fpos with stream offset:67( with state: {count:0 value:0})?$");
   std::istringstream input("testing the input stream here");
   std::streampos test1 = input.tellg();
-  ComparePrettyPrintToChars(
-      test1, "std::fpos with stream offset:0 with state: {count:0 value:0}");
+  ComparePrettyPrintToRegex(test1, "^std::fpos with stream offset:0( with state: {count:0 value:0})?$");
   std::unique_ptr<char[]> buffer(new char[5]);
   input.read(buffer.get(), 5);
   test1 = input.tellg();
-  ComparePrettyPrintToChars(
-      test1, "std::fpos with stream offset:5 with state: {count:0 value:0}");
+  ComparePrettyPrintToRegex(test1, "^std::fpos with stream offset:5( with state: {count:0 value:0})?$");
+}
+
+void mi_mode_test() {
+  std::map<int, std::string> one_two_three_map;
+  one_two_three_map.insert({1, "one"});
+  one_two_three_map.insert({2, "two"});
+  one_two_three_map.insert({3, "three"});
+  CompareListChildrenToChars(
+      one_two_three_map, R"([{"key": 1, "value": "one"}, {"key": 2, "value": "two"}, {"key": 3, "value": "three"}])");
+
+  std::unordered_map<int, std::string> one_two_three_umap;
+  one_two_three_umap.insert({3, "three"});
+  one_two_three_umap.insert({2, "two"});
+  one_two_three_umap.insert({1, "one"});
+  CompareListChildrenToChars(
+      one_two_three_umap, R"([{"key": 3, "value": "three"}, {"key": 2, "value": "two"}, {"key": 1, "value": "one"}])");
+
+  std::deque<int> one_two_three_deque{1, 2, 3};
+  CompareListChildrenToChars(one_two_three_deque, "[1, 2, 3]");
 }
 
 int main(int, char**) {
@@ -652,6 +690,7 @@ int main(int, char**) {
   string_test();
   a_namespace::string_view_test();
 
+  //u16string_test();
   u32string_test();
   tuple_test();
   unique_ptr_test();
@@ -677,5 +716,6 @@ int main(int, char**) {
   unordered_set_iterator_test();
   pointer_negative_test();
   streampos_test();
+  mi_mode_test();
   return 0;
 }

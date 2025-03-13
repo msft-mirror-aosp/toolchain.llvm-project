@@ -1,20 +1,19 @@
 add_llvm_component_library(LLVMDWARFLinker
-  DWARFLinkerCompileUnit.cpp
-  DWARFLinkerDeclContext.cpp
-  DWARFLinker.cpp
-  DWARFStreamer.cpp
+  DWARFLinkerBase.cpp
+  Utils.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/DWARFLinker
-
   DEPENDS
   intrinsics_gen
 
   LINK_COMPONENTS
-  DebugInfoDWARF
-  AsmPrinter
+  BinaryFormat
   CodeGen
-  MC
+  DebugInfoDWARF
   Object
   Support
   )
+
+add_subdirectory(Classic)
+add_subdirectory(Parallel)

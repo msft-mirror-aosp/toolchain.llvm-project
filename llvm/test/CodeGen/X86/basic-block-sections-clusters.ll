@@ -3,22 +3,36 @@
 ; Test1: Basic blocks #0 (entry) and #2 will be placed in the same section.
 ; Basic block 1 will be placed in a unique section.
 ; The rest will be placed in the cold section.
+;;
+;; Profile for version 0:
 ; RUN: echo '!foo' > %t1
 ; RUN: echo '!!0 2' >> %t1
 ; RUN: echo '!!1' >> %t1
+;;
+;; Profile for version 1:
+; RUN: echo 'v1' > %t2
+; RUN: echo 'f foo' >> %t2
+; RUN: echo 'c 0 2' >> %t2
+; RUN: echo 'c 1' >> %t2
+; 
 ; RUN: llc < %s -O0 -mtriple=x86_64-pc-linux -function-sections -basic-block-sections=%t1 | FileCheck %s -check-prefix=LINUX-SECTIONS1
+; RUN: llc < %s -O0 -mtriple=x86_64-pc-linux -function-sections -basic-block-sections=%t2 | FileCheck %s -check-prefix=LINUX-SECTIONS1
 ;
 ; Test2: Basic blocks #1 and #3 will be placed in the same section.
 ; All other BBs (including the entry block) go into the function's section.
-; RUN: echo '!foo' > %t2
-; RUN: echo '!!1 3' >> %t2
-; RUN: llc < %s -O0 -mtriple=x86_64-pc-linux -function-sections -basic-block-sections=%t2 | FileCheck %s -check-prefix=LINUX-SECTIONS2
+; RUN: echo '!foo' > %t3
+; RUN: echo '!!1 3' >> %t3
+; RUN: echo 'v1' > %t4
+; RUN: echo 'f foo' >> %t4
+; RUN: echo 'c 1 3' >> %t4
+; RUN: llc < %s -O0 -mtriple=x86_64-pc-linux -function-sections -basic-block-sections=%t3 | FileCheck %s -check-prefix=LINUX-SECTIONS2
+; RUN: llc < %s -O0 -mtriple=x86_64-pc-linux -function-sections -basic-block-sections=%t4 | FileCheck %s -check-prefix=LINUX-SECTIONS2
 
 define void @foo(i1 zeroext) nounwind {
   %2 = alloca i8, align 1
   %3 = zext i1 %0 to i8
-  store i8 %3, i8* %2, align 1
-  %4 = load i8, i8* %2, align 1
+  store i8 %3, ptr %2, align 1
+  %4 = load i8, ptr %2, align 1
   %5 = trunc i8 %4 to i1
   br i1 %5, label %6, label %8
 
@@ -46,9 +60,9 @@ declare i32 @baz() #1
 ; LINUX-SECTIONS1-LABEL:	# %bb.2:
 ; LINUX-SECTIONS1-NOT:  	.LBB_END0_{{0-9}}+
 ; LINUX-SECTIONS1:		.section        .text.foo,"ax",@progbits,unique,1
-; LINUX-SECTIONS1-LABEL:	foo.1:
+; LINUX-SECTIONS1-LABEL:	foo.__part.1:
 ; LINUX-SECTIONS1-LABEL:	.LBB_END0_1:
-; LINUX-SECTIONS1-NEXT:        .size   foo.1, .LBB_END0_1-foo.1
+; LINUX-SECTIONS1-NEXT:        .size   foo.__part.1, .LBB_END0_1-foo.__part.1
 ; LINUX-SECTIONS1-NOT:  	.section
 ; LINUX-SECTIONS1:		.section        .text.split.foo,"ax",@progbits
 ; LINUX-SECTIONS1-LABEL:	foo.cold:
@@ -66,12 +80,12 @@ declare i32 @baz() #1
 ; LINUX-SECTIONS2-LABEL:	# %bb.2:
 ; LINUX-SECTIONS2-NOT:  	.LBB_END0_{{0-9}}+
 ; LINUX-SECTIONS2:		.section        .text.foo,"ax",@progbits,unique,1
-; LINUX-SECTIONS2-NEXT:		foo.0:
+; LINUX-SECTIONS2-NEXT:		foo.__part.0:
 ; LINUX-SECTIONS2-NOT:  	.LBB_END0_{{0-9}}+
 ; LINUX-SECTIONS2-NOT:  	.section
 ; LINUX-SECTIONS2-LABEL:	.LBB0_3:
 ; LINUX-SECTIONS2-LABEL:	.LBB_END0_3:
-; LINUX-SECTIONS2-NEXT:        .size   foo.0, .LBB_END0_3-foo.0
+; LINUX-SECTIONS2-NEXT:        .size   foo.__part.0, .LBB_END0_3-foo.__part.0
 ; LINUX-SECTIONS2:		.section        .text.foo,"ax",@progbits
 ; LINUX-SECTIONS2-NOT:  	.LBB_END0_{{0-9}}+
 ; LINUX-SECTIONS2-LABEL:	.Lfunc_end0:

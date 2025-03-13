@@ -11,9 +11,10 @@
 #include "polly/CodeGen/PerfMonitor.h"
 #include "polly/CodeGen/RuntimeDebugBuilder.h"
 #include "polly/ScopInfo.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/IntrinsicsX86.h"
+#include "llvm/IR/Module.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 using namespace polly;
@@ -24,8 +25,8 @@ Function *PerfMonitor::getAtExit() {
 
   if (!F) {
     GlobalValue::LinkageTypes Linkage = Function::ExternalLinkage;
-    FunctionType *Ty = FunctionType::get(Builder.getInt32Ty(),
-                                         {Builder.getInt8PtrTy()}, false);
+    FunctionType *Ty =
+        FunctionType::get(Builder.getInt32Ty(), {Builder.getPtrTy()}, false);
     F = Function::Create(Ty, Linkage, Name, M);
   }
 
@@ -44,12 +45,12 @@ void PerfMonitor::addToGlobalConstructors(Function *Fn) {
     GV->eraseFromParent();
   }
 
-  StructType *ST = StructType::get(Builder.getInt32Ty(), Fn->getType(),
-                                   Builder.getInt8PtrTy());
+  StructType *ST =
+      StructType::get(Builder.getInt32Ty(), Fn->getType(), Builder.getPtrTy());
 
   V.push_back(
       ConstantStruct::get(ST, Builder.getInt32(10), Fn,
-                          ConstantPointerNull::get(Builder.getInt8PtrTy())));
+                          ConstantPointerNull::get(Builder.getPtrTy())));
   ArrayType *Ty = ArrayType::get(ST, V.size());
 
   GV = new GlobalVariable(*M, Ty, true, GlobalValue::AppendingLinkage,
@@ -58,7 +59,7 @@ void PerfMonitor::addToGlobalConstructors(Function *Fn) {
 }
 
 Function *PerfMonitor::getRDTSCP() {
-  return Intrinsic::getDeclaration(M, Intrinsic::x86_rdtscp);
+  return Intrinsic::getOrInsertDeclaration(M, Intrinsic::x86_rdtscp);
 }
 
 PerfMonitor::PerfMonitor(const Scop &S, Module *M)
@@ -103,7 +104,7 @@ void PerfMonitor::addGlobalVariables() {
   TryRegisterGlobal(M, "__polly_perf_cycles_total_start", Builder.getInt64(0),
                     &CyclesTotalStartPtr);
 
-  TryRegisterGlobal(M, "__polly_perf_initialized", Builder.getInt1(0),
+  TryRegisterGlobal(M, "__polly_perf_initialized", Builder.getInt1(false),
                     &AlreadyInitializedPtr);
 
   TryRegisterGlobal(M, "__polly_perf_cycles_in_scops", Builder.getInt64(0),
@@ -138,11 +139,12 @@ Function *PerfMonitor::insertFinalReporting() {
   // Measure current cycles and compute final timings.
   Function *RDTSCPFn = getRDTSCP();
 
+  Type *Int64Ty = Builder.getInt64Ty();
   Value *CurrentCycles =
       Builder.CreateExtractValue(Builder.CreateCall(RDTSCPFn), {0});
-  Value *CyclesStart = Builder.CreateLoad(CyclesTotalStartPtr, true);
+  Value *CyclesStart = Builder.CreateLoad(Int64Ty, CyclesTotalStartPtr, true);
   Value *CyclesTotal = Builder.CreateSub(CurrentCycles, CyclesStart);
-  Value *CyclesInScops = Builder.CreateLoad(CyclesInScopsPtr, true);
+  Value *CyclesInScops = Builder.CreateLoad(Int64Ty, CyclesInScopsPtr, true);
 
   // Print the runtime information.
   RuntimeDebugBuilder::createCPUPrinter(Builder, "Polly runtime information\n");
@@ -175,11 +177,12 @@ void PerfMonitor::AppendScopReporting() {
   Builder.SetInsertPoint(FinalStartBB);
   ReturnFromFinal->eraseFromParent();
 
+  Type *Int64Ty = Builder.getInt64Ty();
   Value *CyclesInCurrentScop =
-      Builder.CreateLoad(this->CyclesInCurrentScopPtr, true);
+      Builder.CreateLoad(Int64Ty, this->CyclesInCurrentScopPtr, true);
 
   Value *TripCountForCurrentScop =
-      Builder.CreateLoad(this->TripCountForCurrentScopPtr, true);
+      Builder.CreateLoad(Int64Ty, this->TripCountForCurrentScopPtr, true);
 
   std::string EntryName, ExitName;
   std::tie(EntryName, ExitName) = S.getEntryExitStr();
@@ -231,7 +234,8 @@ Function *PerfMonitor::insertInitFunction(Function *FinalReporting) {
   // multiple times. To avoid initializations being run multiple times (and
   // especially to avoid that atExitFn is called more than once), we bail
   // out if the initializer is run more than once.
-  Value *HasRunBefore = Builder.CreateLoad(AlreadyInitializedPtr);
+  Value *HasRunBefore =
+      Builder.CreateLoad(Builder.getInt1Ty(), AlreadyInitializedPtr);
   Builder.CreateCondBr(HasRunBefore, EarlyReturn, InitBB);
   Builder.SetInsertPoint(EarlyReturn);
   Builder.CreateRetVoid();
@@ -243,7 +247,7 @@ Function *PerfMonitor::insertInitFunction(Function *FinalReporting) {
 
   // Register the final reporting function with atexit().
   Value *FinalReportingPtr =
-      Builder.CreatePointerCast(FinalReporting, Builder.getInt8PtrTy());
+      Builder.CreatePointerCast(FinalReporting, Builder.getPtrTy());
   Function *AtExitFn = getAtExit();
   Builder.CreateCall(AtExitFn, {FinalReportingPtr});
 
@@ -276,20 +280,23 @@ void PerfMonitor::insertRegionEnd(Instruction *InsertBefore) {
 
   Builder.SetInsertPoint(InsertBefore);
   Function *RDTSCPFn = getRDTSCP();
-  LoadInst *CyclesStart = Builder.CreateLoad(CyclesInScopStartPtr, true);
+  Type *Int64Ty = Builder.getInt64Ty();
+  LoadInst *CyclesStart =
+      Builder.CreateLoad(Int64Ty, CyclesInScopStartPtr, true);
   Value *CurrentCycles =
       Builder.CreateExtractValue(Builder.CreateCall(RDTSCPFn), {0});
   Value *CyclesInScop = Builder.CreateSub(CurrentCycles, CyclesStart);
-  Value *CyclesInScops = Builder.CreateLoad(CyclesInScopsPtr, true);
+  Value *CyclesInScops = Builder.CreateLoad(Int64Ty, CyclesInScopsPtr, true);
   CyclesInScops = Builder.CreateAdd(CyclesInScops, CyclesInScop);
   Builder.CreateStore(CyclesInScops, CyclesInScopsPtr, true);
 
-  Value *CyclesInCurrentScop = Builder.CreateLoad(CyclesInCurrentScopPtr, true);
+  Value *CyclesInCurrentScop =
+      Builder.CreateLoad(Int64Ty, CyclesInCurrentScopPtr, true);
   CyclesInCurrentScop = Builder.CreateAdd(CyclesInCurrentScop, CyclesInScop);
   Builder.CreateStore(CyclesInCurrentScop, CyclesInCurrentScopPtr, true);
 
   Value *TripCountForCurrentScop =
-      Builder.CreateLoad(TripCountForCurrentScopPtr, true);
+      Builder.CreateLoad(Int64Ty, TripCountForCurrentScopPtr, true);
   TripCountForCurrentScop =
       Builder.CreateAdd(TripCountForCurrentScop, Builder.getInt64(1));
   Builder.CreateStore(TripCountForCurrentScop, TripCountForCurrentScopPtr,

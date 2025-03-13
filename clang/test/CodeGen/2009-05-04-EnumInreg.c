@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -emit-llvm -triple i686-apple-darwin -mregparm 3 %s -o - | FileCheck %s
+// RUN: %clang_cc1 -no-enable-noundef-analysis -emit-llvm -triple i686-apple-darwin -mregparm 3 %s -o - | FileCheck %s
 // PR3967
 
 enum kobject_action {
@@ -14,4 +14,4 @@ enum kobject_action {
 struct kobject;
 
 // CHECK: i32 inreg %action
-int kobject_uevent(struct kobject *kobj, enum kobject_action action) {}
+void kobject_uevent(struct kobject *kobj, enum kobject_action action) {}

@@ -5,9 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
+/// \file
 /// Provides analysis for continuously CSEing during GISel passes.
-//
+///
 //===----------------------------------------------------------------------===//
 #ifndef LLVM_CODEGEN_GLOBALISEL_CSEINFO_H
 #define LLVM_CODEGEN_GLOBALISEL_CSEINFO_H
@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
 #include "llvm/CodeGen/GlobalISel/GISelWorkList.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CodeGen.h"
 
@@ -39,14 +40,14 @@ public:
 class CSEConfigFull : public CSEConfigBase {
 public:
   virtual ~CSEConfigFull() = default;
-  virtual bool shouldCSEOpc(unsigned Opc) override;
+  bool shouldCSEOpc(unsigned Opc) override;
 };
 
 // Commonly used for O0 config.
 class CSEConfigConstantOnly : public CSEConfigBase {
 public:
   virtual ~CSEConfigConstantOnly() = default;
-  virtual bool shouldCSEOpc(unsigned Opc) override;
+  bool shouldCSEOpc(unsigned Opc) override;
 };
 
 // Returns the standard expected CSEConfig for the given optimization level.
@@ -54,7 +55,7 @@ public:
 // TargetPassConfig, but can't put this logic into TargetPassConfig directly
 // because the CodeGen library can't depend on GlobalISel.
 std::unique_ptr<CSEConfigBase>
-getStandardCSEConfigForOpt(CodeGenOpt::Level Level);
+getStandardCSEConfigForOpt(CodeGenOptLevel Level);
 
 /// The CSE Analysis object.
 /// This installs itself as a delegate to the MachineFunction to track
@@ -110,6 +111,8 @@ class GISelCSEInfo : public GISelChangeObserver {
   /// Use this method to allocate a new UniqueMachineInstr for MI and insert it
   /// into the CSEMap. MI should return true for shouldCSE(MI->getOpcode())
   void insertInstr(MachineInstr *MI, void *InsertPos = nullptr);
+
+  bool HandlingRecordedInstrs = false;
 
 public:
   GISelCSEInfo() = default;
@@ -175,6 +178,8 @@ public:
   const GISelInstProfileBuilder &addNodeIDOpcode(unsigned Opc) const;
   const GISelInstProfileBuilder &addNodeIDRegType(const LLT Ty) const;
   const GISelInstProfileBuilder &addNodeIDRegType(const Register) const;
+  const GISelInstProfileBuilder &
+      addNodeIDRegType(MachineRegisterInfo::VRegAttrs) const;
 
   const GISelInstProfileBuilder &
   addNodeIDRegType(const TargetRegisterClass *RC) const;

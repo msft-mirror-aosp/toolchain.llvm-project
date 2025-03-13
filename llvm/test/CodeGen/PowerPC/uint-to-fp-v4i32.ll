@@ -14,31 +14,19 @@
 define dso_local <2 x double> @test1(<8 x i16> %a) {
 ; P9BE-LABEL: test1:
 ; P9BE:       # %bb.0: # %entry
-; P9BE-NEXT:    li r3, 0
-; P9BE-NEXT:    vextuhlx r3, r3, v2
-; P9BE-NEXT:    clrlwi r3, r3, 16
-; P9BE-NEXT:    mtfprwz f0, r3
-; P9BE-NEXT:    li r3, 2
-; P9BE-NEXT:    vextuhlx r3, r3, v2
-; P9BE-NEXT:    xscvuxddp f0, f0
-; P9BE-NEXT:    clrlwi r3, r3, 16
-; P9BE-NEXT:    mtfprwz f1, r3
-; P9BE-NEXT:    xscvuxddp f1, f1
+; P9BE-NEXT:    vextractuh v3, v2, 0
+; P9BE-NEXT:    vextractuh v2, v2, 2
+; P9BE-NEXT:    xscvuxddp f0, v3
+; P9BE-NEXT:    xscvuxddp f1, v2
 ; P9BE-NEXT:    xxmrghd v2, vs0, vs1
 ; P9BE-NEXT:    blr
 ;
 ; P9LE-LABEL: test1:
 ; P9LE:       # %bb.0: # %entry
-; P9LE-NEXT:    li r3, 0
-; P9LE-NEXT:    vextuhrx r3, r3, v2
-; P9LE-NEXT:    clrlwi r3, r3, 16
-; P9LE-NEXT:    mtfprwz f0, r3
-; P9LE-NEXT:    li r3, 2
-; P9LE-NEXT:    vextuhrx r3, r3, v2
-; P9LE-NEXT:    xscvuxddp f0, f0
-; P9LE-NEXT:    clrlwi r3, r3, 16
-; P9LE-NEXT:    mtfprwz f1, r3
-; P9LE-NEXT:    xscvuxddp f1, f1
+; P9LE-NEXT:    vextractuh v3, v2, 14
+; P9LE-NEXT:    vextractuh v2, v2, 12
+; P9LE-NEXT:    xscvuxddp f0, v3
+; P9LE-NEXT:    xscvuxddp f1, v2
 ; P9LE-NEXT:    xxmrghd v2, vs1, vs0
 ; P9LE-NEXT:    blr
 ;
@@ -102,12 +90,12 @@ define dso_local <2 x double> @test2(<4 x i32> %a, <4 x i32> %b) {
 ; P8BE-LABEL: test2:
 ; P8BE:       # %bb.0: # %entry
 ; P8BE-NEXT:    xxsldwi vs0, v2, v2, 3
-; P8BE-NEXT:    mfvsrwz r4, v3
-; P8BE-NEXT:    mtfprwz f1, r4
 ; P8BE-NEXT:    mffprwz r3, f0
-; P8BE-NEXT:    xscvuxddp f1, f1
 ; P8BE-NEXT:    mtfprwz f0, r3
+; P8BE-NEXT:    mfvsrwz r3, v3
+; P8BE-NEXT:    mtfprwz f1, r3
 ; P8BE-NEXT:    xscvuxddp f0, f0
+; P8BE-NEXT:    xscvuxddp f1, f1
 ; P8BE-NEXT:    xxmrghd v2, vs0, vs1
 ; P8BE-NEXT:    blr
 ;
@@ -116,9 +104,9 @@ define dso_local <2 x double> @test2(<4 x i32> %a, <4 x i32> %b) {
 ; P8LE-NEXT:    xxswapd vs0, v2
 ; P8LE-NEXT:    xxsldwi vs1, v3, v3, 1
 ; P8LE-NEXT:    mffprwz r3, f0
-; P8LE-NEXT:    mffprwz r4, f1
 ; P8LE-NEXT:    mtfprwz f0, r3
-; P8LE-NEXT:    mtfprwz f1, r4
+; P8LE-NEXT:    mffprwz r3, f1
+; P8LE-NEXT:    mtfprwz f1, r3
 ; P8LE-NEXT:    xscvuxddp f0, f0
 ; P8LE-NEXT:    xscvuxddp f1, f1
 ; P8LE-NEXT:    xxmrghd v2, vs1, vs0

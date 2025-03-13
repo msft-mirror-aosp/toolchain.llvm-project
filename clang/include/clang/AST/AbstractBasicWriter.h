@@ -6,24 +6,23 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_AST_ABSTRACTBASICWRITER_H
-#define CLANG_AST_ABSTRACTBASICWRITER_H
+#ifndef LLVM_CLANG_AST_ABSTRACTBASICWRITER_H
+#define LLVM_CLANG_AST_ABSTRACTBASICWRITER_H
 
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclTemplate.h"
+#include <optional>
 
 namespace clang {
 namespace serialization {
 
 template <class T>
-inline llvm::Optional<T> makeOptionalFromNullable(const T &value) {
-  return (value.isNull()
-            ? llvm::Optional<T>()
-            : llvm::Optional<T>(value));
+inline std::optional<T> makeOptionalFromNullable(const T &value) {
+  return (value.isNull() ? std::optional<T>() : std::optional<T>(value));
 }
 
-template <class T>
-inline llvm::Optional<T*> makeOptionalFromPointer(T *value) {
-  return (value ? llvm::Optional<T*>(value) : llvm::Optional<T*>());
+template <class T> inline std::optional<T *> makeOptionalFromPointer(T *value) {
+  return (value ? std::optional<T *>(value) : std::optional<T *>());
 }
 
 // PropertyWriter is a class concept that requires the following method:
@@ -50,7 +49,7 @@ inline llvm::Optional<T*> makeOptionalFromPointer(T *value) {
 //     type-specific writers for all the enum types.
 //
 //   template <class ValueType>
-//   void writeOptional(Optional<ValueType> value);
+//   void writeOptional(std::optional<ValueType> value);
 //
 //     Writes an optional value as the current property.
 //
@@ -121,6 +120,7 @@ template <class Impl>
 class DataStreamBasicWriter : public BasicWriterBase<Impl> {
 protected:
   using BasicWriterBase<Impl>::asImpl;
+  DataStreamBasicWriter(ASTContext &ctx) : BasicWriterBase<Impl>(ctx) {}
 
 public:
   /// Implement property-find by ignoring it.  We rely on properties being
@@ -146,8 +146,7 @@ public:
     }
   }
 
-  template <class T>
-  void writeOptional(llvm::Optional<T> value) {
+  template <class T> void writeOptional(std::optional<T> value) {
     WriteDispatcher<T>::write(asImpl(), PackOptionalValue<T>::pack(value));
   }
 
@@ -163,10 +162,43 @@ public:
       asImpl().writeUInt64(words[i]);
   }
 
+  void writeFixedPointSemantics(const llvm::FixedPointSemantics &sema) {
+    asImpl().writeUInt32(sema.getWidth());
+    asImpl().writeUInt32(sema.getScale());
+    asImpl().writeUInt32(sema.isSigned() | sema.isSaturated() << 1 |
+                         sema.hasUnsignedPadding() << 2);
+  }
+
+  void writeLValuePathSerializationHelper(
+      APValue::LValuePathSerializationHelper lvaluePath) {
+    ArrayRef<APValue::LValuePathEntry> path = lvaluePath.Path;
+    QualType elemTy = lvaluePath.getType();
+    asImpl().writeQualType(elemTy);
+    asImpl().writeUInt32(path.size());
+    auto &ctx = ((BasicWriterBase<Impl> *)this)->getASTContext();
+    for (auto elem : path) {
+      if (elemTy->getAs<RecordType>()) {
+        asImpl().writeUInt32(elem.getAsBaseOrMember().getInt());
+        const Decl *baseOrMember = elem.getAsBaseOrMember().getPointer();
+        if (const auto *recordDecl = dyn_cast<CXXRecordDecl>(baseOrMember)) {
+          asImpl().writeDeclRef(recordDecl);
+          elemTy = ctx.getRecordType(recordDecl);
+        } else {
+          const auto *valueDecl = cast<ValueDecl>(baseOrMember);
+          asImpl().writeDeclRef(valueDecl);
+          elemTy = valueDecl->getType();
+        }
+      } else {
+        asImpl().writeUInt32(elem.getAsArrayIndex());
+        elemTy = ctx.getAsArrayType(elemTy)->getElementType();
+      }
+    }
+  }
+
   void writeQualifiers(Qualifiers value) {
-    static_assert(sizeof(value.getAsOpaqueValue()) <= sizeof(uint32_t),
+    static_assert(sizeof(value.getAsOpaqueValue()) <= sizeof(uint64_t),
                   "update this if the value size changes");
-    asImpl().writeUInt32(value.getAsOpaqueValue());
+    asImpl().writeUInt64(value.getAsOpaqueValue());
   }
 
   void writeExceptionSpecInfo(
@@ -188,6 +220,14 @@ public:
     static_assert(sizeof(epi.getOpaqueValue()) <= sizeof(uint32_t),
                   "opaque value doesn't fit into uint32_t");
     asImpl().writeUInt32(epi.getOpaqueValue());
+  }
+
+  void writeFunctionEffect(FunctionEffect E) {
+    asImpl().writeUInt32(E.toOpaqueInt32());
+  }
+
+  void writeEffectConditionExpr(EffectConditionExpr CE) {
+    asImpl().writeExprRef(CE.getCondition());
   }
 
   void writeNestedNameSpecifier(NestedNameSpecifier *NNS) {

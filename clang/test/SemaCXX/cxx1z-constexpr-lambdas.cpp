@@ -93,7 +93,7 @@ void f() {
 }
   
 void f(char c) { //expected-note{{declared here}}
-  auto L = [] { return c; }; //expected-error{{cannot be implicitly captured}} expected-note{{lambda expression begins here}}
+  auto L = [] { return c; }; //expected-error{{cannot be implicitly captured}} expected-note{{lambda expression begins here}} expected-note 2 {{capture 'c' by}} expected-note 2 {{default capture by}}
   int I = L();
 }
 
@@ -349,3 +349,27 @@ static_assert(OtherCaptures(), "");
 } // namespace PR36054
 
 #endif // ndef CPP14_AND_EARLIER
+
+
+#if __cpp_constexpr >= 201907L
+namespace GH114234 {
+template <auto Arg>
+auto g() { return Arg; }
+
+template <typename>
+auto f() {
+    []<typename>() {
+        g<[] { return 123; }()>();
+    }.template operator()<int>();
+}
+
+void test() { f<int>(); }
+}
+
+namespace GH97958 {
+static_assert(
+  []<int I=0>() -> decltype([]{ return true; })
+  { return {}; }()());
+}
+
+#endif

@@ -39,7 +39,7 @@ unsigned test_cmse_primitives(void *p) {
 }
 
 void *test_address_range(void *p) {
-// CHECK: define {{.*}} i8* @test_address_range
+// CHECK: define {{.*}} ptr @test_address_range
   return cmse_check_address_range(p, 128, CMSE_MPU_UNPRIV
                                         | CMSE_MPU_NONSECURE
                                         | CMSE_MPU_READWRITE);
@@ -53,8 +53,8 @@ typedef struct {
   int x, y, z;
 } Point;
 
-void *test_pointed_object(void *p) {
-// CHECK: define {{.*}} i8* @test_pointed_object
+void test_pointed_object(void *p) {
+// CHECK: define {{.*}} void @test_pointed_object
   Point *pt = (Point *)p;
   cmse_check_pointed_object(pt, CMSE_NONSECURE
                               | CMSE_MPU_READ

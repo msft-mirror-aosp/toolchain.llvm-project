@@ -15,13 +15,13 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/Support/ConvertUTF.h"
+#include <optional>
 
 using clang::analyze_format_string::ArgType;
 using clang::analyze_format_string::FormatStringHandler;
 using clang::analyze_format_string::FormatSpecifier;
 using clang::analyze_format_string::LengthModifier;
 using clang::analyze_format_string::OptionalAmount;
-using clang::analyze_format_string::PositionContext;
 using clang::analyze_format_string::ConversionSpecifier;
 using namespace clang;
 
@@ -322,6 +322,12 @@ bool clang::analyze_format_string::ParseUTF8InvalidSpecifier(
 
 clang::analyze_format_string::ArgType::MatchKind
 ArgType::matchesType(ASTContext &C, QualType argTy) const {
+  // When using the format attribute in C++, you can receive a function or an
+  // array that will necessarily decay to a pointer when passed to the final
+  // format consumer. Apply decay before type comparison.
+  if (argTy->canDecayToPointerType())
+    argTy = C.getDecayedType(argTy);
+
   if (Ptr) {
     // It has to be a pointer.
     const PointerType *PT = argTy->getAs<PointerType>();
@@ -343,102 +349,189 @@ ArgType::matchesType(ASTContext &C, QualType argTy) const {
       return Match;
 
     case AnyCharTy: {
-      if (const EnumType *ETy = argTy->getAs<EnumType>()) {
+      if (const auto *ETy = argTy->getAs<EnumType>()) {
         // If the enum is incomplete we know nothing about the underlying type.
-        // Assume that it's 'int'.
+        // Assume that it's 'int'. Do not use the underlying type for a scoped
+        // enumeration.
         if (!ETy->getDecl()->isComplete())
           return NoMatch;
-        argTy = ETy->getDecl()->getIntegerType();
+        if (ETy->isUnscopedEnumerationType())
+          argTy = ETy->getDecl()->getIntegerType();
       }
 
-      if (const BuiltinType *BT = argTy->getAs<BuiltinType>())
+      if (const auto *BT = argTy->getAs<BuiltinType>()) {
+        // The types are perfectly matched?
         switch (BT->getKind()) {
+        default:
+          break;
+        case BuiltinType::Char_S:
+        case BuiltinType::SChar:
+        case BuiltinType::UChar:
+        case BuiltinType::Char_U:
+            return Match;
+        case BuiltinType::Bool:
+          if (!Ptr)
+            return Match;
+          break;
+        }
+        // "Partially matched" because of promotions?
+        if (!Ptr) {
+          switch (BT->getKind()) {
           default:
             break;
-          case BuiltinType::Char_S:
-          case BuiltinType::SChar:
-          case BuiltinType::UChar:
-          case BuiltinType::Char_U:
-          case BuiltinType::Bool:
-            return Match;
+          case BuiltinType::Int:
+          case BuiltinType::UInt:
+            return MatchPromotion;
+          case BuiltinType::Short:
+          case BuiltinType::UShort:
+          case BuiltinType::WChar_S:
+          case BuiltinType::WChar_U:
+            return NoMatchPromotionTypeConfusion;
+          }
         }
+      }
       return NoMatch;
     }
 
     case SpecificTy: {
       if (const EnumType *ETy = argTy->getAs<EnumType>()) {
         // If the enum is incomplete we know nothing about the underlying type.
-        // Assume that it's 'int'.
+        // Assume that it's 'int'. Do not use the underlying type for a scoped
+        // enumeration as that needs an exact match.
         if (!ETy->getDecl()->isComplete())
           argTy = C.IntTy;
-        else
+        else if (ETy->isUnscopedEnumerationType())
           argTy = ETy->getDecl()->getIntegerType();
       }
+
+      if (argTy->isSaturatedFixedPointType())
+        argTy = C.getCorrespondingUnsaturatedType(argTy);
+
       argTy = C.getCanonicalType(argTy).getUnqualifiedType();
 
       if (T == argTy)
         return Match;
-      // Check for "compatible types".
-      if (const BuiltinType *BT = argTy->getAs<BuiltinType>())
+      if (const auto *BT = argTy->getAs<BuiltinType>()) {
+        // Check if the only difference between them is signed vs unsigned
+        // if true, return match signedness.
         switch (BT->getKind()) {
           default:
             break;
+          case BuiltinType::Bool:
+            if (Ptr && (T == C.UnsignedCharTy || T == C.SignedCharTy))
+              return NoMatch;
+            [[fallthrough]];
           case BuiltinType::Char_S:
           case BuiltinType::SChar:
-          case BuiltinType::Char_U:
-          case BuiltinType::UChar:
-          case BuiltinType::Bool:
             if (T == C.UnsignedShortTy || T == C.ShortTy)
               return NoMatchTypeConfusion;
-            return T == C.UnsignedCharTy || T == C.SignedCharTy ? Match
-                                                                : NoMatch;
-          case BuiltinType::Short:
-            return T == C.UnsignedShortTy ? Match : NoMatch;
-          case BuiltinType::UShort:
-            return T == C.ShortTy ? Match : NoMatch;
-          case BuiltinType::Int:
-            return T == C.UnsignedIntTy ? Match : NoMatch;
-          case BuiltinType::UInt:
-            return T == C.IntTy ? Match : NoMatch;
-          case BuiltinType::Long:
-            return T == C.UnsignedLongTy ? Match : NoMatch;
-          case BuiltinType::ULong:
-            return T == C.LongTy ? Match : NoMatch;
-          case BuiltinType::LongLong:
-            return T == C.UnsignedLongLongTy ? Match : NoMatch;
-          case BuiltinType::ULongLong:
-            return T == C.LongLongTy ? Match : NoMatch;
-        }
-      return NoMatch;
-    }
-
-    case CStrTy: {
-      const PointerType *PT = argTy->getAs<PointerType>();
-      if (!PT)
-        return NoMatch;
-      QualType pointeeTy = PT->getPointeeType();
-      if (const BuiltinType *BT = pointeeTy->getAs<BuiltinType>())
-        switch (BT->getKind()) {
+            if (T == C.UnsignedCharTy)
+              return NoMatchSignedness;
+            if (T == C.SignedCharTy)
+              return Match;
+            break;
           case BuiltinType::Char_U:
           case BuiltinType::UChar:
-          case BuiltinType::Char_S:
-          case BuiltinType::SChar:
-            return Match;
-          default:
+            if (T == C.UnsignedShortTy || T == C.ShortTy)
+              return NoMatchTypeConfusion;
+            if (T == C.UnsignedCharTy)
+              return Match;
+            if (T == C.SignedCharTy)
+              return NoMatchSignedness;
             break;
-        }
-
+          case BuiltinType::Short:
+            if (T == C.UnsignedShortTy)
+              return NoMatchSignedness;
+            break;
+          case BuiltinType::UShort:
+            if (T == C.ShortTy)
+              return NoMatchSignedness;
+            break;
+          case BuiltinType::Int:
+            if (T == C.UnsignedIntTy)
+              return NoMatchSignedness;
+            break;
+          case BuiltinType::UInt:
+            if (T == C.IntTy)
+              return NoMatchSignedness;
+            break;
+          case BuiltinType::Long:
+            if (T == C.UnsignedLongTy)
+              return NoMatchSignedness;
+            break;
+          case BuiltinType::ULong:
+            if (T == C.LongTy)
+              return NoMatchSignedness;
+            break;
+          case BuiltinType::LongLong:
+            if (T == C.UnsignedLongLongTy)
+              return NoMatchSignedness;
+            break;
+          case BuiltinType::ULongLong:
+            if (T == C.LongLongTy)
+              return NoMatchSignedness;
+            break;
+          }
+          // "Partially matched" because of promotions?
+          if (!Ptr) {
+            switch (BT->getKind()) {
+            default:
+              break;
+            case BuiltinType::Bool:
+              if (T == C.IntTy || T == C.UnsignedIntTy)
+                return MatchPromotion;
+              break;
+            case BuiltinType::Int:
+            case BuiltinType::UInt:
+              if (T == C.SignedCharTy || T == C.UnsignedCharTy ||
+                  T == C.ShortTy || T == C.UnsignedShortTy || T == C.WCharTy ||
+                  T == C.WideCharTy)
+                return MatchPromotion;
+              break;
+            case BuiltinType::Char_U:
+              if (T == C.UnsignedIntTy)
+                return MatchPromotion;
+              if (T == C.UnsignedShortTy)
+                return NoMatchPromotionTypeConfusion;
+              break;
+            case BuiltinType::Char_S:
+              if (T == C.IntTy)
+                return MatchPromotion;
+              if (T == C.ShortTy)
+                return NoMatchPromotionTypeConfusion;
+              break;
+            case BuiltinType::Half:
+            case BuiltinType::Float:
+              if (T == C.DoubleTy)
+                return MatchPromotion;
+              break;
+            case BuiltinType::Short:
+            case BuiltinType::UShort:
+              if (T == C.SignedCharTy || T == C.UnsignedCharTy)
+                return NoMatchPromotionTypeConfusion;
+              break;
+            case BuiltinType::WChar_U:
+            case BuiltinType::WChar_S:
+              if (T != C.WCharTy && T != C.WideCharTy)
+                return NoMatchPromotionTypeConfusion;
+            }
+          }
+      }
       return NoMatch;
     }
 
-    case WCStrTy: {
-      const PointerType *PT = argTy->getAs<PointerType>();
-      if (!PT)
-        return NoMatch;
-      QualType pointeeTy =
-        C.getCanonicalType(PT->getPointeeType()).getUnqualifiedType();
-      return pointeeTy == C.getWideCharType() ? Match : NoMatch;
-    }
+    case CStrTy:
+      if (const auto *PT = argTy->getAs<PointerType>();
+          PT && PT->getPointeeType()->isCharType())
+        return Match;
+      return NoMatch;
+
+    case WCStrTy:
+      if (const auto *PT = argTy->getAs<PointerType>();
+          PT &&
+          C.hasSameUnqualifiedType(PT->getPointeeType(), C.getWideCharType()))
+        return Match;
+      return NoMatch;
 
     case WIntTy: {
       QualType WInt = C.getCanonicalType(C.getWIntType()).getUnqualifiedType();
@@ -446,7 +539,7 @@ ArgType::matchesType(ASTContext &C, QualType argTy) const {
       if (C.getCanonicalType(argTy).getUnqualifiedType() == WInt)
         return Match;
 
-      QualType PromoArg = argTy->isPromotableIntegerType()
+      QualType PromoArg = C.isPromotableIntegerType(argTy)
                               ? C.getPromotedIntegerType(argTy)
                               : argTy;
       PromoArg = C.getCanonicalType(PromoArg).getUnqualifiedType();
@@ -461,14 +554,24 @@ ArgType::matchesType(ASTContext &C, QualType argTy) const {
     }
 
     case CPointerTy:
-      if (argTy->isVoidPointerType()) {
-        return Match;
-      } if (argTy->isPointerType() || argTy->isObjCObjectPointerType() ||
-            argTy->isBlockPointerType() || argTy->isNullPtrType()) {
+      if (const auto *PT = argTy->getAs<PointerType>()) {
+        QualType PointeeTy = PT->getPointeeType();
+        if (PointeeTy->isVoidType() || (!Ptr && PointeeTy->isCharType()))
+          return Match;
         return NoMatchPedantic;
-      } else {
-        return NoMatch;
       }
+
+      // nullptr_t* is not a double pointer, so reject when something like
+      // void** is expected.
+      // In C++, nullptr is promoted to void*. In C23, va_arg(ap, void*) is not
+      // undefined when the next argument is of type nullptr_t.
+      if (!Ptr && argTy->isNullPtrType())
+        return C.getLangOpts().CPlusPlus ? MatchPromotion : Match;
+
+      if (argTy->isObjCObjectPointerType() || argTy->isBlockPointerType())
+        return NoMatchPedantic;
+
+      return NoMatch;
 
     case ObjCPointerTy: {
       if (argTy->getAs<ObjCObjectPointerType>() ||
@@ -619,6 +722,8 @@ analyze_format_string::LengthModifier::toString() const {
 
 const char *ConversionSpecifier::toString() const {
   switch (kind) {
+  case bArg: return "b";
+  case BArg: return "B";
   case dArg: return "d";
   case DArg: return "D";
   case iArg: return "i";
@@ -664,17 +769,27 @@ const char *ConversionSpecifier::toString() const {
 
   // MS specific specifiers.
   case ZArg: return "Z";
+
+  // ISO/IEC TR 18037 (fixed-point) specific specifiers.
+  case rArg:
+    return "r";
+  case RArg:
+    return "R";
+  case kArg:
+    return "k";
+  case KArg:
+    return "K";
   }
   return nullptr;
 }
 
-Optional<ConversionSpecifier>
+std::optional<ConversionSpecifier>
 ConversionSpecifier::getStandardSpecifier() const {
   ConversionSpecifier::Kind NewKind;
 
   switch (getKind()) {
   default:
-    return None;
+    return std::nullopt;
   case DArg:
     NewKind = dArg;
     break;
@@ -728,6 +843,9 @@ bool FormatSpecifier::hasValidLengthModifier(const TargetInfo &Target,
       if (LO.OpenCL && CS.isDoubleArg())
         return !VectorNumElts.isInvalid();
 
+      if (CS.isFixedPointArg())
+        return true;
+
       if (Target.getTriple().isOSMSVCRT()) {
         switch (CS.getKind()) {
           case ConversionSpecifier::cArg:
@@ -740,7 +858,7 @@ bool FormatSpecifier::hasValidLengthModifier(const TargetInfo &Target,
             break;
         }
       }
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case LengthModifier::AsChar:
     case LengthModifier::AsLongLong:
     case LengthModifier::AsQuad:
@@ -748,6 +866,8 @@ bool FormatSpecifier::hasValidLengthModifier(const TargetInfo &Target,
     case LengthModifier::AsSizeT:
     case LengthModifier::AsPtrDiff:
       switch (CS.getKind()) {
+        case ConversionSpecifier::bArg:
+        case ConversionSpecifier::BArg:
         case ConversionSpecifier::dArg:
         case ConversionSpecifier::DArg:
         case ConversionSpecifier::iArg:
@@ -761,7 +881,7 @@ bool FormatSpecifier::hasValidLengthModifier(const TargetInfo &Target,
           return true;
         case ConversionSpecifier::FreeBSDrArg:
         case ConversionSpecifier::FreeBSDyArg:
-          return Target.getTriple().isOSFreeBSD() || Target.getTriple().isPS4();
+          return Target.getTriple().isOSFreeBSD() || Target.getTriple().isPS();
         default:
           return false;
       }
@@ -778,7 +898,12 @@ bool FormatSpecifier::hasValidLengthModifier(const TargetInfo &Target,
         return true;
       }
 
+      if (CS.isFixedPointArg())
+        return true;
+
       switch (CS.getKind()) {
+        case ConversionSpecifier::bArg:
+        case ConversionSpecifier::BArg:
         case ConversionSpecifier::dArg:
         case ConversionSpecifier::DArg:
         case ConversionSpecifier::iArg:
@@ -796,7 +921,7 @@ bool FormatSpecifier::hasValidLengthModifier(const TargetInfo &Target,
           return true;
         case ConversionSpecifier::FreeBSDrArg:
         case ConversionSpecifier::FreeBSDyArg:
-          return Target.getTriple().isOSFreeBSD() || Target.getTriple().isPS4();
+          return Target.getTriple().isOSFreeBSD() || Target.getTriple().isPS();
         default:
           return false;
       }
@@ -903,6 +1028,8 @@ bool FormatSpecifier::hasStandardLengthModifier() const {
 bool FormatSpecifier::hasStandardConversionSpecifier(
     const LangOptions &LangOpt) const {
   switch (CS.getKind()) {
+    case ConversionSpecifier::bArg:
+    case ConversionSpecifier::BArg:
     case ConversionSpecifier::cArg:
     case ConversionSpecifier::dArg:
     case ConversionSpecifier::iArg:
@@ -940,6 +1067,11 @@ bool FormatSpecifier::hasStandardConversionSpecifier(
     case ConversionSpecifier::UArg:
     case ConversionSpecifier::ZArg:
       return false;
+    case ConversionSpecifier::rArg:
+    case ConversionSpecifier::RArg:
+    case ConversionSpecifier::kArg:
+    case ConversionSpecifier::KArg:
+      return LangOpt.FixedPoint;
   }
   llvm_unreachable("Invalid ConversionSpecifier Kind!");
 }
@@ -961,7 +1093,8 @@ bool FormatSpecifier::hasStandardLengthConversionCombination() const {
   return true;
 }
 
-Optional<LengthModifier> FormatSpecifier::getCorrectedLengthModifier() const {
+std::optional<LengthModifier>
+FormatSpecifier::getCorrectedLengthModifier() const {
   if (CS.isAnyIntArg() || CS.getKind() == ConversionSpecifier::nArg) {
     if (LM.getKind() == LengthModifier::AsLongDouble ||
         LM.getKind() == LengthModifier::AsQuad) {
@@ -971,15 +1104,14 @@ Optional<LengthModifier> FormatSpecifier::getCorrectedLengthModifier() const {
     }
   }
 
-  return None;
+  return std::nullopt;
 }
 
 bool FormatSpecifier::namedTypeToLengthModifier(QualType QT,
                                                 LengthModifier &LM) {
-  assert(isa<TypedefType>(QT) && "Expected a TypedefType");
-  const TypedefNameDecl *Typedef = cast<TypedefType>(QT)->getDecl();
-
-  for (;;) {
+  for (/**/; const auto *TT = QT->getAs<TypedefType>();
+       QT = TT->getDecl()->getUnderlyingType()) {
+    const TypedefNameDecl *Typedef = TT->getDecl();
     const IdentifierInfo *Identifier = Typedef->getIdentifier();
     if (Identifier->getName() == "size_t") {
       LM.setKind(LengthModifier::AsSizeT);
@@ -998,12 +1130,6 @@ bool FormatSpecifier::namedTypeToLengthModifier(QualType QT,
       LM.setKind(LengthModifier::AsPtrDiff);
       return true;
     }
-
-    QualType T = Typedef->getUnderlyingType();
-    if (!isa<TypedefType>(T))
-      break;
-
-    Typedef = cast<TypedefType>(T)->getDecl();
   }
   return false;
 }

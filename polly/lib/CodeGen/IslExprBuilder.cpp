@@ -34,7 +34,7 @@ static cl::opt<OverflowTrackingChoice> OTMode(
                           "Track the overflow bit if requested."),
                clEnumValN(OT_ALWAYS, "always",
                           "Always track the overflow bit.")),
-    cl::Hidden, cl::init(OT_REQUEST), cl::ZeroOrMore, cl::cat(PollyCategory));
+    cl::Hidden, cl::init(OT_REQUEST), cl::cat(PollyCategory));
 
 IslExprBuilder::IslExprBuilder(Scop &S, PollyIRBuilder &Builder,
                                IDToValueTy &IDToValue, ValueMapT &GlobalMap,
@@ -42,8 +42,21 @@ IslExprBuilder::IslExprBuilder(Scop &S, PollyIRBuilder &Builder,
                                DominatorTree &DT, LoopInfo &LI,
                                BasicBlock *StartBlock)
     : S(S), Builder(Builder), IDToValue(IDToValue), GlobalMap(GlobalMap),
-      DL(DL), SE(SE), DT(DT), LI(LI), StartBlock(StartBlock) {
+      DL(DL), SE(SE), StartBlock(StartBlock), GenDT(&DT), GenLI(&LI),
+      GenSE(&SE) {
   OverflowState = (OTMode == OT_ALWAYS) ? Builder.getFalse() : nullptr;
+}
+
+void IslExprBuilder::switchGeneratedFunc(llvm::Function *GenFn,
+                                         llvm::DominatorTree *GenDT,
+                                         llvm::LoopInfo *GenLI,
+                                         llvm::ScalarEvolution *GenSE) {
+  assert(GenFn == GenDT->getRoot()->getParent());
+  assert(GenLI->getTopLevelLoops().empty() ||
+         GenFn == GenLI->getTopLevelLoops().front()->getHeader()->getParent());
+  this->GenDT = GenDT;
+  this->GenLI = GenLI;
+  this->GenSE = GenSE;
 }
 
 void IslExprBuilder::setTrackOverflow(bool Enable) {
@@ -116,16 +129,16 @@ Value *IslExprBuilder::createBinOp(BinaryOperator::BinaryOps Opc, Value *LHS,
   Module *M = Builder.GetInsertBlock()->getModule();
   switch (Opc) {
   case Instruction::Add:
-    F = Intrinsic::getDeclaration(M, Intrinsic::sadd_with_overflow,
-                                  {LHS->getType()});
+    F = Intrinsic::getOrInsertDeclaration(M, Intrinsic::sadd_with_overflow,
+                                          {LHS->getType()});
     break;
   case Instruction::Sub:
-    F = Intrinsic::getDeclaration(M, Intrinsic::ssub_with_overflow,
-                                  {LHS->getType()});
+    F = Intrinsic::getOrInsertDeclaration(M, Intrinsic::ssub_with_overflow,
+                                          {LHS->getType()});
     break;
   case Instruction::Mul:
-    F = Intrinsic::getDeclaration(M, Intrinsic::smul_with_overflow,
-                                  {LHS->getType()});
+    F = Intrinsic::getOrInsertDeclaration(M, Intrinsic::smul_with_overflow,
+                                          {LHS->getType()});
     break;
   default:
     llvm_unreachable("No overflow intrinsic for binary operator found!");
@@ -231,7 +244,8 @@ Value *IslExprBuilder::createOpNAry(__isl_take isl_ast_expr *Expr) {
   return V;
 }
 
-Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
+std::pair<Value *, Type *>
+IslExprBuilder::createAccessAddress(__isl_take isl_ast_expr *Expr) {
   assert(isl_ast_expr_get_type(Expr) == isl_ast_expr_op &&
          "isl ast expression not of type isl_ast_op");
   assert(isl_ast_expr_get_op_type(Expr) == isl_ast_op_access &&
@@ -270,18 +284,11 @@ Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
   assert(Base->getType()->isPointerTy() && "Access base should be a pointer");
   StringRef BaseName = Base->getName();
 
-  auto PointerTy = PointerType::get(SAI->getElementType(),
-                                    Base->getType()->getPointerAddressSpace());
-  if (Base->getType() != PointerTy) {
-    Base =
-        Builder.CreateBitCast(Base, PointerTy, "polly.access.cast." + BaseName);
-  }
-
   if (isl_ast_expr_get_op_n_arg(Expr) == 1) {
     isl_ast_expr_free(Expr);
     if (PollyDebugPrinting)
       RuntimeDebugBuilder::createCPUPrinter(Builder, "\n");
-    return Base;
+    return {Base, SAI->getElementType()};
   }
 
   IndexOp = nullptr;
@@ -313,14 +320,12 @@ Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
 
     const SCEV *DimSCEV = SAI->getDimensionSize(u);
 
-    llvm::ValueToSCEVMapTy Map;
-    for (auto &KV : GlobalMap)
-      Map[KV.first] = SE.getSCEV(KV.second);
-    DimSCEV = SCEVParameterRewriter::rewrite(DimSCEV, SE, Map);
-    Value *DimSize =
-        expandCodeFor(S, SE, DL, "polly", DimSCEV, DimSCEV->getType(),
-                      &*Builder.GetInsertPoint(), nullptr,
-                      StartBlock->getSinglePredecessor());
+    // DimSize should be invariant to the SCoP, so no BBMap nor LoopToScev
+    // needed. But GlobalMap may contain SCoP-invariant vars.
+    Value *DimSize = expandCodeFor(
+        S, SE, Builder.GetInsertBlock()->getParent(), *GenSE, DL, "polly",
+        DimSCEV, DimSCEV->getType(), &*Builder.GetInsertPoint(), &GlobalMap,
+        /*LoopMap*/ nullptr, StartBlock->getSinglePredecessor());
 
     Type *Ty = getWidestType(DimSize->getType(), IndexOp->getType());
 
@@ -333,18 +338,20 @@ Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
     IndexOp = createMul(IndexOp, DimSize, "polly.access.mul." + BaseName);
   }
 
-  Access = Builder.CreateGEP(Base, IndexOp, "polly.access." + BaseName);
+  Access = Builder.CreateGEP(SAI->getElementType(), Base, IndexOp,
+                             "polly.access." + BaseName);
 
   if (PollyDebugPrinting)
     RuntimeDebugBuilder::createCPUPrinter(Builder, "\n");
   isl_ast_expr_free(Expr);
-  return Access;
+  return {Access, SAI->getElementType()};
 }
 
-Value *IslExprBuilder::createOpAccess(isl_ast_expr *Expr) {
-  Value *Addr = createAccessAddress(Expr);
-  assert(Addr && "Could not create op access address");
-  return Builder.CreateLoad(Addr, Addr->getName() + ".load");
+Value *IslExprBuilder::createOpAccess(__isl_take isl_ast_expr *Expr) {
+  auto Info = createAccessAddress(Expr);
+  assert(Info.first && "Could not create op access address");
+  return Builder.CreateLoad(Info.second, Info.first,
+                            Info.first->getName() + ".load");
 }
 
 Value *IslExprBuilder::createOpBin(__isl_take isl_ast_expr *Expr) {
@@ -523,8 +530,8 @@ Value *IslExprBuilder::createOpICmp(__isl_take isl_ast_expr *Expr) {
   isl_ast_op_type OpType = isl_ast_expr_get_op_type(Expr);
   assert(OpType >= isl_ast_op_eq && OpType <= isl_ast_op_gt &&
          "Unsupported ICmp isl ast expression");
-  assert(isl_ast_op_eq + 4 == isl_ast_op_gt &&
-         "Isl ast op type interface changed");
+  static_assert(isl_ast_op_eq + 4 == isl_ast_op_gt,
+                "Isl ast op type interface changed");
 
   CmpInst::Predicate Predicates[5][2] = {
       {CmpInst::ICMP_EQ, CmpInst::ICMP_EQ},
@@ -606,10 +613,10 @@ IslExprBuilder::createOpBooleanConditional(__isl_take isl_ast_expr *Expr) {
 
   auto InsertBB = Builder.GetInsertBlock();
   auto InsertPoint = Builder.GetInsertPoint();
-  auto NextBB = SplitBlock(InsertBB, &*InsertPoint, &DT, &LI);
+  auto NextBB = SplitBlock(InsertBB, &*InsertPoint, GenDT, GenLI);
   BasicBlock *CondBB = BasicBlock::Create(Context, "polly.cond", F);
-  LI.changeLoopFor(CondBB, LI.getLoopFor(InsertBB));
-  DT.addNewBlock(CondBB, InsertBB);
+  GenLI->changeLoopFor(CondBB, GenLI->getLoopFor(InsertBB));
+  GenDT->addNewBlock(CondBB, InsertBB);
 
   InsertBB->getTerminator()->eraseFromParent();
   Builder.SetInsertPoint(InsertBB);
@@ -704,7 +711,7 @@ Value *IslExprBuilder::createOpAddressOf(__isl_take isl_ast_expr *Expr) {
   assert(isl_ast_expr_get_op_type(Op) == isl_ast_op_access &&
          "Expected address of operator to be an access expression.");
 
-  Value *V = createAccessAddress(Op);
+  Value *V = createAccessAddress(Op).first;
 
   isl_ast_expr_free(Expr);
 
@@ -762,7 +769,7 @@ Value *IslExprBuilder::createInt(__isl_take isl_ast_expr *Expr) {
   else
     T = Builder.getIntNTy(BitWidth);
 
-  APValue = APValue.sextOrSelf(T->getBitWidth());
+  APValue = APValue.sext(T->getBitWidth());
   V = ConstantInt::get(T, APValue);
 
   isl_ast_expr_free(Expr);
@@ -782,4 +789,11 @@ Value *IslExprBuilder::create(__isl_take isl_ast_expr *Expr) {
   }
 
   llvm_unreachable("Unexpected enum value");
+}
+
+llvm::Value *IslExprBuilder::createBool(__isl_take isl_ast_expr *Expr) {
+  Value *Result = create(Expr);
+  if (!Result->getType()->isIntegerTy(1))
+    Result = Builder.CreateICmpNE(Result, Builder.getInt1(false));
+  return Result;
 }

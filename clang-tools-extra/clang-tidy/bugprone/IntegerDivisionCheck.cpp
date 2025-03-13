@@ -12,9 +12,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 void IntegerDivisionCheck::registerMatchers(MatchFinder *Finder) {
   const auto IntType = hasType(isInteger());
@@ -30,7 +28,7 @@ void IntegerDivisionCheck::registerMatchers(MatchFinder *Finder) {
             callExpr(IntType), explicitCastExpr(IntType), UnaryOperators);
 
   Finder->addMatcher(
-      traverse(ast_type_traits::TK_AsIs,
+      traverse(TK_AsIs,
                binaryOperator(
                    hasOperatorName("/"), hasLHS(expr(IntType)),
                    hasRHS(expr(IntType)),
@@ -49,6 +47,4 @@ void IntegerDivisionCheck::check(const MatchFinder::MatchResult &Result) {
                               "point context; possible loss of precision");
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

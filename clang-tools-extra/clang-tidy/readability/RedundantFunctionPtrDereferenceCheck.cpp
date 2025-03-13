@@ -12,17 +12,15 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace readability {
+namespace clang::tidy::readability {
 
 void RedundantFunctionPtrDereferenceCheck::registerMatchers(MatchFinder *Finder) {
-  Finder->addMatcher(traverse(ast_type_traits::TK_AsIs,
-                              unaryOperator(hasOperatorName("*"),
-                                            has(implicitCastExpr(hasCastKind(
-                                                CK_FunctionToPointerDecay))))
-                                  .bind("op")),
-                     this);
+  Finder->addMatcher(
+      traverse(TK_AsIs, unaryOperator(hasOperatorName("*"),
+                                      has(implicitCastExpr(hasCastKind(
+                                          CK_FunctionToPointerDecay))))
+                            .bind("op")),
+      this);
 }
 
 void RedundantFunctionPtrDereferenceCheck::check(const MatchFinder::MatchResult &Result) {
@@ -32,6 +30,4 @@ void RedundantFunctionPtrDereferenceCheck::check(const MatchFinder::MatchResult 
       << FixItHint::CreateRemoval(Operator->getOperatorLoc());
 }
 
-} // namespace readability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::readability

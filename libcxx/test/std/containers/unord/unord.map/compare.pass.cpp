@@ -12,8 +12,8 @@
 //           class Alloc = allocator<pair<const Key, T>>>
 // class unordered_map
 
-// https://bugs.llvm.org/show_bug.cgi?id=16538
-// https://bugs.llvm.org/show_bug.cgi?id=16549
+// https://llvm.org/PR16538
+// https://llvm.org/PR16549
 
 #include <unordered_map>
 #include <cassert>
@@ -25,14 +25,10 @@ struct Key {
   bool operator== (const Key&) const { return true; }
 };
 
-namespace std
-{
-    template <>
-    struct hash<Key>
-    {
-        size_t operator()(Key const &) const {return 0;}
-    };
-}
+template <>
+struct std::hash<Key> {
+  std::size_t operator()(Key const&) const { return 0; }
+};
 
 int main(int, char**)
 {

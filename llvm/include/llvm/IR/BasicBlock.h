@@ -14,17 +14,16 @@
 #define LLVM_IR_BASICBLOCK_H
 
 #include "llvm-c/Types.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/SymbolTableListTraits.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CBindingWrapping.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/Compiler.h"
 #include <cassert>
 #include <cstddef>
 #include <iterator>
@@ -33,12 +32,15 @@ namespace llvm {
 
 class AssemblyAnnotationWriter;
 class CallInst;
+class DataLayout;
 class Function;
 class LandingPadInst;
 class LLVMContext;
 class Module;
 class PHINode;
 class ValueSymbolTable;
+class DbgVariableRecord;
+class DbgMarker;
 
 /// LLVM Basic Block Representation
 ///
@@ -58,15 +60,100 @@ class ValueSymbolTable;
 class BasicBlock final : public Value, // Basic blocks are data objects also
                          public ilist_node_with_parent<BasicBlock, Function> {
 public:
-  using InstListType = SymbolTableList<Instruction>;
+  using InstListType = SymbolTableList<Instruction, ilist_iterator_bits<true>,
+                                       ilist_parent<BasicBlock>>;
+  /// Flag recording whether or not this block stores debug-info in the form
+  /// of intrinsic instructions (false) or non-instruction records (true).
+  bool IsNewDbgInfoFormat;
 
 private:
+  // Allow Function to renumber blocks.
+  friend class Function;
+  /// Per-function unique number.
+  unsigned Number = -1u;
+
   friend class BlockAddress;
   friend class SymbolTableListTraits<BasicBlock>;
 
   InstListType InstList;
   Function *Parent;
 
+public:
+  /// Attach a DbgMarker to the given instruction. Enables the storage of any
+  /// debug-info at this position in the program.
+  DbgMarker *createMarker(Instruction *I);
+  DbgMarker *createMarker(InstListType::iterator It);
+
+  /// Convert variable location debugging information stored in dbg.value
+  /// intrinsics into DbgMarkers / DbgRecords. Deletes all dbg.values in
+  /// the process and sets IsNewDbgInfoFormat = true. Only takes effect if
+  /// the UseNewDbgInfoFormat LLVM command line option is given.
+  void convertToNewDbgValues();
+
+  /// Convert variable location debugging information stored in DbgMarkers and
+  /// DbgRecords into the dbg.value intrinsic representation. Sets
+  /// IsNewDbgInfoFormat = false.
+  void convertFromNewDbgValues();
+
+  /// Ensure the block is in "old" dbg.value format (\p NewFlag == false) or
+  /// in the new format (\p NewFlag == true), converting to the desired format
+  /// if necessary.
+  void setIsNewDbgInfoFormat(bool NewFlag);
+  void setNewDbgInfoFormatFlag(bool NewFlag);
+
+  unsigned getNumber() const {
+    assert(getParent() && "only basic blocks in functions have valid numbers");
+    return Number;
+  }
+
+  /// Record that the collection of DbgRecords in \p M "trails" after the last
+  /// instruction of this block. These are equivalent to dbg.value intrinsics
+  /// that exist at the end of a basic block with no terminator (a transient
+  /// state that occurs regularly).
+  void setTrailingDbgRecords(DbgMarker *M);
+
+  /// Fetch the collection of DbgRecords that "trail" after the last instruction
+  /// of this block, see \ref setTrailingDbgRecords. If there are none, returns
+  /// nullptr.
+  DbgMarker *getTrailingDbgRecords();
+
+  /// Delete any trailing DbgRecords at the end of this block, see
+  /// \ref setTrailingDbgRecords.
+  void deleteTrailingDbgRecords();
+
+  void dumpDbgValues() const;
+
+  /// Return the DbgMarker for the position given by \p It, so that DbgRecords
+  /// can be inserted there. This will either be nullptr if not present, a
+  /// DbgMarker, or TrailingDbgRecords if It is end().
+  DbgMarker *getMarker(InstListType::iterator It);
+
+  /// Return the DbgMarker for the position that comes after \p I. \see
+  /// BasicBlock::getMarker, this can be nullptr, a DbgMarker, or
+  /// TrailingDbgRecords if there is no next instruction.
+  DbgMarker *getNextMarker(Instruction *I);
+
+  /// Insert a DbgRecord into a block at the position given by \p I.
+  void insertDbgRecordAfter(DbgRecord *DR, Instruction *I);
+
+  /// Insert a DbgRecord into a block at the position given by \p Here.
+  void insertDbgRecordBefore(DbgRecord *DR, InstListType::iterator Here);
+
+  /// Eject any debug-info trailing at the end of a block. DbgRecords can
+  /// transiently be located "off the end" of a block if the blocks terminator
+  /// is temporarily removed. Once a terminator is re-inserted this method will
+  /// move such DbgRecords back to the right place (ahead of the terminator).
+  void flushTerminatorDbgRecords();
+
+  /// In rare circumstances instructions can be speculatively removed from
+  /// blocks, and then be re-inserted back into that position later. When this
+  /// happens in RemoveDIs debug-info mode, some special patching-up needs to
+  /// occur: inserting into the middle of a sequence of dbg.value intrinsics
+  /// does not have an equivalent with DbgRecords.
+  void reinsertInstInDbgRecords(Instruction *I,
+                                std::optional<DbgRecord::self_iterator> Pos);
+
+private:
   void setParent(Function *parent);
 
   /// Constructor.
@@ -91,6 +178,32 @@ public:
   using const_iterator = InstListType::const_iterator;
   using reverse_iterator = InstListType::reverse_iterator;
   using const_reverse_iterator = InstListType::const_reverse_iterator;
+
+  // These functions and classes need access to the instruction list.
+  friend void Instruction::removeFromParent();
+  friend BasicBlock::iterator Instruction::eraseFromParent();
+  friend BasicBlock::iterator Instruction::insertInto(BasicBlock *BB,
+                                                      BasicBlock::iterator It);
+  friend class llvm::SymbolTableListTraits<
+      llvm::Instruction, ilist_iterator_bits<true>, ilist_parent<BasicBlock>>;
+  friend class llvm::ilist_node_with_parent<llvm::Instruction, llvm::BasicBlock,
+                                            ilist_iterator_bits<true>,
+                                            ilist_parent<BasicBlock>>;
+
+  // Friendly methods that need to access us for the maintenence of
+  // debug-info attachments.
+  friend void Instruction::insertBefore(BasicBlock::iterator InsertPos);
+  friend void Instruction::insertAfter(Instruction *InsertPos);
+  friend void Instruction::insertAfter(BasicBlock::iterator InsertPos);
+  friend void Instruction::insertBefore(BasicBlock &BB,
+                                        InstListType::iterator InsertPos);
+  friend void Instruction::moveBeforeImpl(BasicBlock &BB,
+                                          InstListType::iterator I,
+                                          bool Preserve);
+  friend iterator_range<DbgRecord::self_iterator>
+  Instruction::cloneDebugInfoFrom(
+      const Instruction *From, std::optional<DbgRecord::self_iterator> FromHere,
+      bool InsertAtHead);
 
   /// Creates a new BasicBlock.
   ///
@@ -117,9 +230,18 @@ public:
                             static_cast<const BasicBlock *>(this)->getModule());
   }
 
+  /// Get the data layout of the module this basic block belongs to.
+  ///
+  /// Requires the basic block to have a parent module.
+  const DataLayout &getDataLayout() const;
+
   /// Returns the terminator instruction if the block is well formed or null
   /// if the block is not well formed.
-  const Instruction *getTerminator() const LLVM_READONLY;
+  const Instruction *getTerminator() const LLVM_READONLY {
+    if (InstList.empty() || !InstList.back().isTerminator())
+      return nullptr;
+    return &InstList.back();
+  }
   Instruction *getTerminator() {
     return const_cast<Instruction *>(
         static_cast<const BasicBlock *>(this)->getTerminator());
@@ -158,31 +280,53 @@ public:
   /// When adding instructions to the beginning of the basic block, they should
   /// be added before the returned value, not before the first instruction,
   /// which might be PHI. Returns 0 is there's no non-PHI instruction.
-  const Instruction* getFirstNonPHI() const;
-  Instruction* getFirstNonPHI() {
-    return const_cast<Instruction *>(
-                       static_cast<const BasicBlock *>(this)->getFirstNonPHI());
+  ///
+  /// Deprecated in favour of getFirstNonPHIIt, which returns an iterator that
+  /// preserves some debugging information.
+  LLVM_DEPRECATED("Use iterators as instruction positions", "getFirstNonPHIIt")
+  const Instruction *getFirstNonPHI() const;
+  LLVM_DEPRECATED("Use iterators as instruction positions instead",
+                  "getFirstNonPHIIt")
+  Instruction *getFirstNonPHI();
+
+  /// Returns an iterator to the first instruction in this block that is not a
+  /// PHINode instruction.
+  ///
+  /// When adding instructions to the beginning of the basic block, they should
+  /// be added before the returned value, not before the first instruction,
+  /// which might be PHI. Returns end() if there's no non-PHI instruction.
+  ///
+  /// Avoid unwrapping the iterator to an Instruction* before inserting here,
+  /// as important debug-info is preserved in the iterator.
+  InstListType::const_iterator getFirstNonPHIIt() const;
+  InstListType::iterator getFirstNonPHIIt() {
+    BasicBlock::iterator It =
+        static_cast<const BasicBlock *>(this)->getFirstNonPHIIt().getNonConst();
+    It.setHeadBit(true);
+    return It;
   }
 
   /// Returns a pointer to the first instruction in this block that is not a
   /// PHINode or a debug intrinsic, or any pseudo operation if \c SkipPseudoOp
   /// is true.
-  const Instruction *getFirstNonPHIOrDbg(bool SkipPseudoOp = false) const;
-  Instruction *getFirstNonPHIOrDbg(bool SkipPseudoOp = false) {
-    return const_cast<Instruction *>(
-        static_cast<const BasicBlock *>(this)->getFirstNonPHIOrDbg(
-            SkipPseudoOp));
+  InstListType::const_iterator
+  getFirstNonPHIOrDbg(bool SkipPseudoOp = true) const;
+  InstListType::iterator getFirstNonPHIOrDbg(bool SkipPseudoOp = true) {
+    return static_cast<const BasicBlock *>(this)
+        ->getFirstNonPHIOrDbg(SkipPseudoOp)
+        .getNonConst();
   }
 
   /// Returns a pointer to the first instruction in this block that is not a
   /// PHINode, a debug intrinsic, or a lifetime intrinsic, or any pseudo
   /// operation if \c SkipPseudoOp is true.
-  const Instruction *
-  getFirstNonPHIOrDbgOrLifetime(bool SkipPseudoOp = false) const;
-  Instruction *getFirstNonPHIOrDbgOrLifetime(bool SkipPseudoOp = false) {
-    return const_cast<Instruction *>(
-        static_cast<const BasicBlock *>(this)->getFirstNonPHIOrDbgOrLifetime(
-            SkipPseudoOp));
+  InstListType::const_iterator
+  getFirstNonPHIOrDbgOrLifetime(bool SkipPseudoOp = true) const;
+  InstListType::iterator
+  getFirstNonPHIOrDbgOrLifetime(bool SkipPseudoOp = true) {
+    return static_cast<const BasicBlock *>(this)
+        ->getFirstNonPHIOrDbgOrLifetime(SkipPseudoOp)
+        .getNonConst();
   }
 
   /// Returns an iterator to the first instruction in this block that is
@@ -195,19 +339,37 @@ public:
                                           ->getFirstInsertionPt().getNonConst();
   }
 
+  /// Returns an iterator to the first instruction in this block that is
+  /// not a PHINode, a debug intrinsic, a static alloca or any pseudo operation.
+  const_iterator getFirstNonPHIOrDbgOrAlloca() const;
+  iterator getFirstNonPHIOrDbgOrAlloca() {
+    return static_cast<const BasicBlock *>(this)
+        ->getFirstNonPHIOrDbgOrAlloca()
+        .getNonConst();
+  }
+
+  /// Returns the first potential AsynchEH faulty instruction
+  /// currently it checks for loads/stores (which may dereference a null
+  /// pointer) and calls/invokes (which may propagate exceptions)
+  const Instruction* getFirstMayFaultInst() const;
+  Instruction* getFirstMayFaultInst() {
+      return const_cast<Instruction*>(
+          static_cast<const BasicBlock*>(this)->getFirstMayFaultInst());
+  }
+
   /// Return a const iterator range over the instructions in the block, skipping
   /// any debug instructions. Skip any pseudo operations as well if \c
   /// SkipPseudoOp is true.
   iterator_range<filter_iterator<BasicBlock::const_iterator,
                                  std::function<bool(const Instruction &)>>>
-  instructionsWithoutDebug(bool SkipPseudoOp = false) const;
+  instructionsWithoutDebug(bool SkipPseudoOp = true) const;
 
   /// Return an iterator range over the instructions in the block, skipping any
   /// debug instructions. Skip and any pseudo operations as well if \c
   /// SkipPseudoOp is true.
   iterator_range<
       filter_iterator<BasicBlock::iterator, std::function<bool(Instruction &)>>>
-  instructionsWithoutDebug(bool SkipPseudoOp = false);
+  instructionsWithoutDebug(bool SkipPseudoOp = true);
 
   /// Return the size of the basic block ignoring debug instructions
   filter_iterator<BasicBlock::const_iterator,
@@ -224,7 +386,10 @@ public:
 
   /// Unlink this basic block from its current function and insert it into
   /// the function that \p MovePos lives in, right before \p MovePos.
-  void moveBefore(BasicBlock *MovePos);
+  inline void moveBefore(BasicBlock *MovePos) {
+    moveBefore(MovePos->getIterator());
+  }
+  void moveBefore(SymbolTableList<BasicBlock>::iterator MovePos);
 
   /// Unlink this basic block from its current function and insert it
   /// right after \p MovePos in the function \p MovePos lives in.
@@ -293,8 +458,19 @@ public:
   //===--------------------------------------------------------------------===//
   /// Instruction iterator methods
   ///
-  inline iterator                begin()       { return InstList.begin(); }
-  inline const_iterator          begin() const { return InstList.begin(); }
+  inline iterator begin() {
+    iterator It = InstList.begin();
+    // Set the head-inclusive bit to indicate that this iterator includes
+    // any debug-info at the start of the block. This is a no-op unless the
+    // appropriate CMake flag is set.
+    It.setHeadBit(true);
+    return It;
+  }
+  inline const_iterator begin() const {
+    const_iterator It = InstList.begin();
+    It.setHeadBit(true);
+    return It;
+  }
   inline iterator                end  ()       { return InstList.end();   }
   inline const_iterator          end  () const { return InstList.end();   }
 
@@ -327,7 +503,9 @@ public:
     phi_iterator_impl() = default;
 
     // Allow conversion between instantiations where valid.
-    template <typename PHINodeU, typename BBIteratorU>
+    template <typename PHINodeU, typename BBIteratorU,
+              typename = std::enable_if_t<
+                  std::is_convertible<PHINodeU *, PHINodeT *>::value>>
     phi_iterator_impl(const phi_iterator_impl<PHINodeU, BBIteratorU> &Arg)
         : PN(Arg.PN) {}
 
@@ -354,18 +532,39 @@ public:
   }
   iterator_range<phi_iterator> phis();
 
+private:
   /// Return the underlying instruction list container.
-  ///
-  /// Currently you need to access the underlying instruction list container
-  /// directly if you want to modify it.
+  /// This is deliberately private because we have implemented an adequate set
+  /// of functions to modify the list, including BasicBlock::splice(),
+  /// BasicBlock::erase(), Instruction::insertInto() etc.
   const InstListType &getInstList() const { return InstList; }
-        InstListType &getInstList()       { return InstList; }
+  InstListType &getInstList() { return InstList; }
 
   /// Returns a pointer to a member of the instruction list.
-  static InstListType BasicBlock::*getSublistAccess(Instruction*) {
+  /// This is private on purpose, just like `getInstList()`.
+  static InstListType BasicBlock::*getSublistAccess(Instruction *) {
     return &BasicBlock::InstList;
   }
 
+  /// Dedicated function for splicing debug-info: when we have an empty
+  /// splice (i.e. zero instructions), the caller may still intend any
+  /// debug-info in between the two "positions" to be spliced.
+  void spliceDebugInfoEmptyBlock(BasicBlock::iterator ToIt, BasicBlock *FromBB,
+                                 BasicBlock::iterator FromBeginIt,
+                                 BasicBlock::iterator FromEndIt);
+
+  /// Perform any debug-info specific maintenence for the given splice
+  /// activity. In the DbgRecord debug-info representation, debug-info is not
+  /// in instructions, and so it does not automatically move from one block
+  /// to another.
+  void spliceDebugInfo(BasicBlock::iterator ToIt, BasicBlock *FromBB,
+                       BasicBlock::iterator FromBeginIt,
+                       BasicBlock::iterator FromEndIt);
+  void spliceDebugInfoImpl(BasicBlock::iterator ToIt, BasicBlock *FromBB,
+                           BasicBlock::iterator FromBeginIt,
+                           BasicBlock::iterator FromEndIt);
+
+public:
   /// Returns a pointer to the symbol table if one exists.
   ValueSymbolTable *getValueSymbolTable();
 
@@ -396,23 +595,76 @@ public:
 
   /// Split the basic block into two basic blocks at the specified instruction.
   ///
-  /// Note that all instructions BEFORE the specified iterator stay as part of
-  /// the original basic block, an unconditional branch is added to the original
-  /// BB, and the rest of the instructions in the BB are moved to the new BB,
-  /// including the old terminator.  The newly formed BasicBlock is returned.
-  /// This function invalidates the specified iterator.
+  /// If \p Before is true, splitBasicBlockBefore handles the
+  /// block splitting. Otherwise, execution proceeds as described below.
+  ///
+  /// Note that all instructions BEFORE the specified iterator
+  /// stay as part of the original basic block, an unconditional branch is added
+  /// to the original BB, and the rest of the instructions in the BB are moved
+  /// to the new BB, including the old terminator.  The newly formed basic block
+  /// is returned. This function invalidates the specified iterator.
   ///
   /// Note that this only works on well formed basic blocks (must have a
-  /// terminator), and 'I' must not be the end of instruction list (which would
-  /// cause a degenerate basic block to be formed, having a terminator inside of
-  /// the basic block).
+  /// terminator), and \p 'I' must not be the end of instruction list (which
+  /// would cause a degenerate basic block to be formed, having a terminator
+  /// inside of the basic block).
   ///
   /// Also note that this doesn't preserve any passes. To split blocks while
   /// keeping loop information consistent, use the SplitBlock utility function.
-  BasicBlock *splitBasicBlock(iterator I, const Twine &BBName = "");
-  BasicBlock *splitBasicBlock(Instruction *I, const Twine &BBName = "") {
-    return splitBasicBlock(I->getIterator(), BBName);
+  BasicBlock *splitBasicBlock(iterator I, const Twine &BBName = "",
+                              bool Before = false);
+  BasicBlock *splitBasicBlock(Instruction *I, const Twine &BBName = "",
+                              bool Before = false) {
+    return splitBasicBlock(I->getIterator(), BBName, Before);
   }
+
+  /// Split the basic block into two basic blocks at the specified instruction
+  /// and insert the new basic blocks as the predecessor of the current block.
+  ///
+  /// This function ensures all instructions AFTER and including the specified
+  /// iterator \p I are part of the original basic block. All Instructions
+  /// BEFORE the iterator \p I are moved to the new BB and an unconditional
+  /// branch is added to the new BB. The new basic block is returned.
+  ///
+  /// Note that this only works on well formed basic blocks (must have a
+  /// terminator), and \p 'I' must not be the end of instruction list (which
+  /// would cause a degenerate basic block to be formed, having a terminator
+  /// inside of the basic block).  \p 'I' cannot be a iterator for a PHINode
+  /// with multiple incoming blocks.
+  ///
+  /// Also note that this doesn't preserve any passes. To split blocks while
+  /// keeping loop information consistent, use the SplitBlockBefore utility
+  /// function.
+  BasicBlock *splitBasicBlockBefore(iterator I, const Twine &BBName = "");
+  BasicBlock *splitBasicBlockBefore(Instruction *I, const Twine &BBName = "") {
+    return splitBasicBlockBefore(I->getIterator(), BBName);
+  }
+
+  /// Transfer all instructions from \p FromBB to this basic block at \p ToIt.
+  void splice(BasicBlock::iterator ToIt, BasicBlock *FromBB) {
+    splice(ToIt, FromBB, FromBB->begin(), FromBB->end());
+  }
+
+  /// Transfer one instruction from \p FromBB at \p FromIt to this basic block
+  /// at \p ToIt.
+  void splice(BasicBlock::iterator ToIt, BasicBlock *FromBB,
+              BasicBlock::iterator FromIt) {
+    auto FromItNext = std::next(FromIt);
+    // Single-element splice is a noop if destination == source.
+    if (ToIt == FromIt || ToIt == FromItNext)
+      return;
+    splice(ToIt, FromBB, FromIt, FromItNext);
+  }
+
+  /// Transfer a range of instructions that belong to \p FromBB from \p
+  /// FromBeginIt to \p FromEndIt, to this basic block at \p ToIt.
+  void splice(BasicBlock::iterator ToIt, BasicBlock *FromBB,
+              BasicBlock::iterator FromBeginIt,
+              BasicBlock::iterator FromEndIt);
+
+  /// Erases a range of instructions from \p FromIt to (not including) \p ToIt.
+  /// \Returns \p ToIt.
+  BasicBlock::iterator erase(BasicBlock::iterator FromIt, BasicBlock::iterator ToIt);
 
   /// Returns true if there are any uses of this basic block other than
   /// direct branches, switches, etc. to it.
@@ -433,7 +685,7 @@ public:
   void replaceSuccessorsPhiUsesWith(BasicBlock *New);
 
   /// Return true if this basic block is an exception handling block.
-  bool isEHPad() const { return getFirstNonPHI()->isEHPad(); }
+  bool isEHPad() const { return getFirstNonPHIIt()->isEHPad(); }
 
   /// Return true if this basic block is a landing pad.
   ///
@@ -451,7 +703,11 @@ public:
   /// Return true if it is legal to hoist instructions into this block.
   bool isLegalToHoistInto() const;
 
-  Optional<uint64_t> getIrrLoopHeaderWeight() const;
+  /// Return true if this is the entry block of the containing function.
+  /// This method can only be used on blocks that have a parent function.
+  bool isEntryBlock() const;
+
+  std::optional<uint64_t> getIrrLoopHeaderWeight() const;
 
   /// Returns true if the Order field of child Instructions is valid.
   bool isInstrOrderValid() const {
@@ -480,7 +736,7 @@ public:
   void validateInstrOrdering() const;
 
 private:
-#if defined(_AIX) && (!defined(__GNUC__) || defined(__ibmxl__))
+#if defined(_AIX) && (!defined(__GNUC__) || defined(__clang__))
 // Except for GCC; by default, AIX compilers store bit-fields in 4-byte words
 // and give the `pack` pragma push semantics.
 #define BEGIN_TWO_BYTE_PACK() _Pragma("pack(2)")
@@ -549,6 +805,32 @@ BasicBlock::iterator skipDebugIntrinsics(BasicBlock::iterator It);
 /// implemented in the .cpp file to avoid circular header deps.
 inline void BasicBlock::validateInstrOrdering() const {}
 #endif
+
+// Specialize DenseMapInfo for iterators, so that ththey can be installed into
+// maps and sets. The iterator is made up of its node pointer, and the
+// debug-info "head" bit.
+template <> struct DenseMapInfo<BasicBlock::iterator> {
+  static inline BasicBlock::iterator getEmptyKey() {
+    return BasicBlock::iterator(nullptr);
+  }
+
+  static inline BasicBlock::iterator getTombstoneKey() {
+    BasicBlock::iterator It(nullptr);
+    It.setHeadBit(true);
+    return It;
+  }
+
+  static unsigned getHashValue(const BasicBlock::iterator &It) {
+    return DenseMapInfo<void *>::getHashValue(
+               reinterpret_cast<void *>(It.getNodePtr())) ^
+           (unsigned)It.getHeadBit();
+  }
+
+  static bool isEqual(const BasicBlock::iterator &LHS,
+                      const BasicBlock::iterator &RHS) {
+    return LHS == RHS && LHS.getHeadBit() == RHS.getHeadBit();
+  }
+};
 
 } // end namespace llvm
 

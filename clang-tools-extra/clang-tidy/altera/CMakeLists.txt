@@ -3,14 +3,20 @@ set(LLVM_LINK_COMPONENTS
   support
   )
 
-add_clang_library(clangTidyAlteraModule
+add_clang_library(clangTidyAlteraModule STATIC
   AlteraTidyModule.cpp
+  IdDependentBackwardBranchCheck.cpp
   KernelNameRestrictionCheck.cpp
+  SingleWorkItemBarrierCheck.cpp
   StructPackAlignCheck.cpp
+  UnrollLoopsCheck.cpp
 
   LINK_LIBS
   clangTidy
   clangTidyUtils
+
+  DEPENDS
+  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyAlteraModule

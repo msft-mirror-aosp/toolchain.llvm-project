@@ -1,20 +1,24 @@
 // RUN: %clang_cc1 -emit-llvm %s -o - -triple=x86_64-apple-darwin9 | FileCheck %s
+// RUN: %clang_cc1 -emit-llvm %s -o - -triple=x86_64-apple-darwin9 -fclang-abi-compat=19 | FileCheck %s --check-prefix=CHECK-CLANG-19
+
+//CHECK: @_ZTCN16MangleCtorVTable4InstE0_NS_1A4ImplINS1_4WrapEEE
+//CHECK-CLANG-19: @_ZTCN16MangleCtorVTable4InstE0_NS_1A4ImplINS0_4WrapEEE
 
 struct X {};
 
-// CHECK-LABEL: define void @_Z1f1XS_(
+// CHECK-LABEL: define{{.*}} void @_Z1f1XS_(
 void f(X, X) { }
 
-// CHECK-LABEL: define void @_Z1fR1XS0_(
+// CHECK-LABEL: define{{.*}} void @_Z1fR1XS0_(
 void f(X&, X&) { }
 
-// CHECK-LABEL: define void @_Z1fRK1XS1_(
+// CHECK-LABEL: define{{.*}} void @_Z1fRK1XS1_(
 void f(const X&, const X&) { }
 
 typedef void T();
 struct S {};
 
-// CHECK-LABEL: define void @_Z1fPFvvEM1SFvvE(
+// CHECK-LABEL: define{{.*}} void @_Z1fPFvvEM1SFvvE(
 void f(T*, T (S::*)) {}
 
 namespace A {
@@ -22,14 +26,14 @@ namespace A {
   struct B { };
 };
 
-// CHECK-LABEL: define void @_Z1fN1A1AENS_1BE(
+// CHECK-LABEL: define{{.*}} void @_Z1fN1A1AENS_1BE(
 void f(A::A a, A::B b) { }
 
 struct C {
   struct D { };
 };
 
-// CHECK-LABEL: define void @_Z1fN1C1DERS_PS_S1_(
+// CHECK-LABEL: define{{.*}} void @_Z1fN1C1DERS_PS_S1_(
 void f(C::D, C&, C*, C&) { }
 
 template<typename T>
@@ -95,4 +99,27 @@ typename X<T>::template Y<T>::type f(typename X<T>::template Y<T>::type2) { retu
 
 // CHECK: @_ZN12ManglePrefix1fIiEENS_1XIT_E1YIS2_E4typeENS5_5type2E
 template int f<int>(int);
+}
+
+namespace MangleCtorVTable {
+namespace A {
+
+class VBase {
+ public:
+  virtual ~VBase() {};
+};
+
+struct Wrap {};
+
+template <typename T>
+class Impl : public virtual VBase {
+ public:
+};
+
+}  // namespace A
+
+struct Inst : public A::Impl<A::Wrap> {};
+
+void Test() { Inst a; }
+
 }

@@ -97,7 +97,7 @@ void use_F() {
 // CHECK-DAG: @_ZTV1B = external unnamed_addr constant
 
 // C has no key function, so its vtable should have weak_odr linkage
-// and hidden visibility (rdar://problem/7523229).
+// and hidden visibility.
 // CHECK-DAG: @_ZTV1C = linkonce_odr unnamed_addr constant {{.*}}, comdat, align 8{{$}}
 // CHECK-DAG: @_ZTS1C = linkonce_odr constant {{.*}}, comdat, align 1{{$}}
 // CHECK-DAG: @_ZTI1C = linkonce_odr constant {{.*}}, comdat, align 8{{$}}
@@ -105,16 +105,16 @@ void use_F() {
 
 // D has a key function that is defined in this translation unit so its vtable is
 // defined in the translation unit.
-// CHECK-DAG: @_ZTV1D = unnamed_addr constant
-// CHECK-DAG: @_ZTS1D = constant
-// CHECK-DAG: @_ZTI1D = constant
+// CHECK-DAG: @_ZTV1D ={{.*}} unnamed_addr constant
+// CHECK-DAG: @_ZTS1D ={{.*}} constant
+// CHECK-DAG: @_ZTI1D ={{.*}} constant
 
 // E<char> is an explicit specialization with a key function defined
 // in this translation unit, so its vtable should have external
 // linkage.
-// CHECK-DAG: @_ZTV1EIcE = unnamed_addr constant
-// CHECK-DAG: @_ZTS1EIcE = constant
-// CHECK-DAG: @_ZTI1EIcE = constant
+// CHECK-DAG: @_ZTV1EIcE ={{.*}} unnamed_addr constant
+// CHECK-DAG: @_ZTS1EIcE ={{.*}} constant
+// CHECK-DAG: @_ZTI1EIcE ={{.*}} constant
 
 // E<short> is an explicit template instantiation with a key function
 // defined in this translation unit, so its vtable should have

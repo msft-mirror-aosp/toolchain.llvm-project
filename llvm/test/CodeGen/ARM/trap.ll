@@ -1,3 +1,6 @@
+;; Check encodings of trap instructions and that their properties are set
+;; correctly so that they are not placed after the stack frame is destroyed.
+
 ; RUN: llc < %s -mtriple=arm-apple-darwin | FileCheck %s -check-prefix=DARWIN
 ; RUN: llc < %s -mtriple=arm-apple-darwin -trap-func=_trap | FileCheck %s -check-prefix=FUNC
 ; RUN: llc < %s -mtriple=arm-apple-darwin -trap-func=_trap -O0 | FileCheck %s -check-prefix=FUNC
@@ -29,58 +32,76 @@
 ; rdar://7961298
 ; rdar://9249183
 
-define void @t() nounwind {
+define void @t() noinline optnone {
 entry:
+  ;; So that we have a stack frame.
+  %1 = alloca i32, align 4
+  store volatile i32 0, ptr %1, align 4
+
 ; DARWIN-LABEL: t:
-; DARWIN: trap
+; DARWIN:      trap
+; DARWIN-NEXT: add sp, sp, #4
 
 ; FUNC-LABEL: t:
-; FUNC: bl __trap
+; FUNC:      bl __trap
+; FUNC-NEXT: add sp, sp, #4
 
 ; NACL-LABEL: t:
-; NACL: .inst 0xe7fedef0
+; NACL:      .inst 0xe7fedef0
+; NACL-NEXT: add sp, sp, #4
 
 ; ARM-LABEL: t:
-; ARM: .inst 0xe7ffdefe
+; ARM:      .inst 0xe7ffdefe
+; ARM-NEXT: add sp, sp, #4
 
 ; THUMB-LABEL: t:
-; THUMB: .inst.n 0xdefe
+; THUMB:      .inst.n 0xdefe
+; THUMB-NEXT: add sp, #4
 
-; ENCODING-NACL: f0 de fe e7 trap
+; ENCODING-NACL: e7fedef0    trap
 
-; ENCODING-ARM: fe de ff e7 trap
+; ENCODING-ARM: e7ffdefe    trap
 
-; ENCODING-THUMB: fe de trap
+; ENCODING-THUMB: defe  trap
 
   call void @llvm.trap()
-  unreachable
+  ret void
 }
 
-define void @t2() nounwind {
+define void @t2() {
 entry:
+  ;; So that we have a stack frame.
+  %1 = alloca i32, align 4
+  store volatile i32 0, ptr %1, align 4
+
 ; DARWIN-LABEL: t2:
-; DARWIN: udf #254
+; DARWIN:      udf #254
+; DARWIN-NEXT: add sp, sp, #4
 
 ; FUNC-LABEL: t2:
-; FUNC: bl __trap
+; FUNC:      bl __trap
+; FUNC-NEXT: add sp, sp, #4
 
 ; NACL-LABEL: t2:
-; NACL: bkpt #0
+; NACL:      bkpt #0
+; NACL-NEXT: add sp, sp, #4
 
 ; ARM-LABEL: t2:
-; ARM: bkpt #0
+; ARM:      bkpt #0
+; ARM-NEXT: add sp, sp, #4
 
 ; THUMB-LABEL: t2:
-; THUMB: bkpt #0
+; THUMB:      bkpt #0
+; THUMB-NEXT: add sp, #4
 
-; ENCODING-NACL: 70 00 20 e1 bkpt #0
+; ENCODING-NACL: e1200070    bkpt #0
 
-; ENCODING-ARM: 70 00 20 e1 bkpt #0
+; ENCODING-ARM: e1200070    bkpt #0
 
-; ENCODING-THUMB: 00 be bkpt #0
+; ENCODING-THUMB: be00  bkpt #0
 
   call void @llvm.debugtrap()
-  unreachable
+  ret void
 }
 
 declare void @llvm.trap() nounwind

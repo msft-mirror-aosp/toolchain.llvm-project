@@ -12,20 +12,30 @@
 //===----------------------------------------------------------------------===//
 
 #include "toy/MLIRGen.h"
+#include "mlir/IR/Block.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Value.h"
 #include "toy/AST.h"
 #include "toy/Dialect.h"
 
-#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
+#include "toy/Lexer.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
+#include <cassert>
+#include <cstdint>
+#include <functional>
 #include <numeric>
+#include <optional>
+#include <vector>
 
 using namespace mlir::toy;
 using namespace toy;
@@ -34,7 +44,6 @@ using llvm::ArrayRef;
 using llvm::cast;
 using llvm::dyn_cast;
 using llvm::isa;
-using llvm::makeArrayRef;
 using llvm::ScopedHashTableScope;
 using llvm::SmallVector;
 using llvm::StringRef;
@@ -58,12 +67,8 @@ public:
     // add them to the module.
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
 
-    for (FunctionAST &F : moduleAST) {
-      auto func = mlirGen(F);
-      if (!func)
-        return nullptr;
-      theModule.push_back(func);
-    }
+    for (FunctionAST &f : moduleAST)
+      mlirGen(f);
 
     // Verify the module after we have finished constructing it, this will check
     // the structural properties of the IR and invoke any specific verifiers we
@@ -92,14 +97,14 @@ private:
   llvm::ScopedHashTable<StringRef, mlir::Value> symbolTable;
 
   /// Helper conversion for a Toy AST location to an MLIR location.
-  mlir::Location loc(Location loc) {
-    return builder.getFileLineColLoc(builder.getIdentifier(*loc.file), loc.line,
+  mlir::Location loc(const Location &loc) {
+    return mlir::FileLineColLoc::get(builder.getStringAttr(*loc.file), loc.line,
                                      loc.col);
   }
 
   /// Declare a variable in the current scope, return success if the variable
   /// wasn't declared yet.
-  mlir::LogicalResult declare(llvm::StringRef var, mlir::Value value) {
+  llvm::LogicalResult declare(llvm::StringRef var, mlir::Value value) {
     if (symbolTable.count(var))
       return mlir::failure();
     symbolTable.insert(var, value);
@@ -108,38 +113,38 @@ private:
 
   /// Create the prototype for an MLIR function with as many arguments as the
   /// provided Toy AST prototype.
-  mlir::FuncOp mlirGen(PrototypeAST &proto) {
+  mlir::toy::FuncOp mlirGen(PrototypeAST &proto) {
     auto location = loc(proto.loc());
 
     // This is a generic function, the return type will be inferred later.
     // Arguments type are uniformly unranked tensors.
-    llvm::SmallVector<mlir::Type, 4> arg_types(proto.getArgs().size(),
-                                               getType(VarType{}));
-    auto func_type = builder.getFunctionType(arg_types, llvm::None);
-    return mlir::FuncOp::create(location, proto.getName(), func_type);
+    llvm::SmallVector<mlir::Type, 4> argTypes(proto.getArgs().size(),
+                                              getType(VarType{}));
+    auto funcType = builder.getFunctionType(argTypes, std::nullopt);
+    return builder.create<mlir::toy::FuncOp>(location, proto.getName(),
+                                             funcType);
   }
 
   /// Emit a new function and add it to the MLIR module.
-  mlir::FuncOp mlirGen(FunctionAST &funcAST) {
+  mlir::toy::FuncOp mlirGen(FunctionAST &funcAST) {
     // Create a scope in the symbol table to hold variable declarations.
-    ScopedHashTableScope<llvm::StringRef, mlir::Value> var_scope(symbolTable);
+    ScopedHashTableScope<llvm::StringRef, mlir::Value> varScope(symbolTable);
 
     // Create an MLIR function for the given prototype.
-    mlir::FuncOp function(mlirGen(*funcAST.getProto()));
+    builder.setInsertionPointToEnd(theModule.getBody());
+    mlir::toy::FuncOp function = mlirGen(*funcAST.getProto());
     if (!function)
       return nullptr;
 
     // Let's start the body of the function now!
-    // In MLIR the entry block of the function is special: it must have the same
-    // argument list as the function itself.
-    auto &entryBlock = *function.addEntryBlock();
+    mlir::Block &entryBlock = function.front();
     auto protoArgs = funcAST.getProto()->getArgs();
 
     // Declare all the function arguments in the symbol table.
-    for (const auto &name_value :
+    for (const auto nameValue :
          llvm::zip(protoArgs, entryBlock.getArguments())) {
-      if (failed(declare(std::get<0>(name_value)->getName(),
-                         std::get<1>(name_value))))
+      if (failed(declare(std::get<0>(nameValue)->getName(),
+                         std::get<1>(nameValue))))
         return nullptr;
     }
 
@@ -165,8 +170,8 @@ private:
     } else if (returnOp.hasOperand()) {
       // Otherwise, if this return operation has an operand then add a result to
       // the function.
-      function.setType(builder.getFunctionType(function.getType().getInputs(),
-                                               getType(VarType{})));
+      function.setType(builder.getFunctionType(
+          function.getFunctionType().getInputs(), getType(VarType{})));
     }
 
     // If this function isn't main, then set the visibility to private.
@@ -223,19 +228,19 @@ private:
   }
 
   /// Emit a return operation. This will return failure if any generation fails.
-  mlir::LogicalResult mlirGen(ReturnExprAST &ret) {
+  llvm::LogicalResult mlirGen(ReturnExprAST &ret) {
     auto location = loc(ret.loc());
 
     // 'return' takes an optional expression, handle that case here.
     mlir::Value expr = nullptr;
-    if (ret.getExpr().hasValue()) {
-      if (!(expr = mlirGen(*ret.getExpr().getValue())))
+    if (ret.getExpr().has_value()) {
+      if (!(expr = mlirGen(**ret.getExpr())))
         return mlir::failure();
     }
 
     // Otherwise, this return operation has zero operands.
-    builder.create<ReturnOp>(location, expr ? makeArrayRef(expr)
-                                            : ArrayRef<mlir::Value>());
+    builder.create<ReturnOp>(location,
+                             expr ? ArrayRef(expr) : ArrayRef<mlir::Value>());
     return mlir::success();
   }
 
@@ -275,7 +280,7 @@ private:
     // This is the actual attribute that holds the list of values for this
     // tensor literal.
     auto dataAttribute =
-        mlir::DenseElementsAttr::get(dataType, llvm::makeArrayRef(data));
+        mlir::DenseElementsAttr::get(dataType, llvm::ArrayRef(data));
 
     // Build the MLIR op `toy.constant`. This invokes the `ConstantOp::build`
     // method.
@@ -335,7 +340,7 @@ private:
 
   /// Emit a print expression. It emits specific operations for two builtins:
   /// transpose(x) and print(x).
-  mlir::LogicalResult mlirGen(PrintExprAST &call) {
+  llvm::LogicalResult mlirGen(PrintExprAST &call) {
     auto arg = mlirGen(*call.getArg());
     if (!arg)
       return mlir::failure();
@@ -375,7 +380,7 @@ private:
   /// Future expressions will be able to reference this variable through symbol
   /// table lookup.
   mlir::Value mlirGen(VarDeclExprAST &vardecl) {
-    auto init = vardecl.getInitVal();
+    auto *init = vardecl.getInitVal();
     if (!init) {
       emitError(loc(vardecl.loc()),
                 "missing initializer in variable declaration");
@@ -401,8 +406,8 @@ private:
   }
 
   /// Codegen a list of expression, return failure if one of them hit an error.
-  mlir::LogicalResult mlirGen(ExprASTList &blockAST) {
-    ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
+  llvm::LogicalResult mlirGen(ExprASTList &blockAST) {
+    ScopedHashTableScope<StringRef, mlir::Value> varScope(symbolTable);
     for (auto &expr : blockAST) {
       // Specific handling for variable declarations, return statement, and
       // print. These can only appear in block list and not in nested
@@ -447,8 +452,8 @@ private:
 namespace toy {
 
 // The public API for codegen.
-mlir::OwningModuleRef mlirGen(mlir::MLIRContext &context,
-                              ModuleAST &moduleAST) {
+mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context,
+                                          ModuleAST &moduleAST) {
   return MLIRGenImpl(context).mlirGen(moduleAST);
 }
 

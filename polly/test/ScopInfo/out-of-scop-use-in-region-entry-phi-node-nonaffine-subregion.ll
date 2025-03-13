@@ -1,4 +1,4 @@
-; RUN: opt %loadPolly -polly-codegen -S < %s | FileCheck %s
+; RUN: opt %loadNPMPolly -passes=polly-codegen -S < %s 2>&1 | FileCheck %s
 ;
 ; Check whether %newval is identified as escaping value, even though it is used
 ; in a phi that is in the region. Non-affine subregion case.
@@ -10,17 +10,17 @@
 ; CHECK:         %newval.merge = phi float [ %newval.final_reload, %polly.exiting ], [ %newval, %subregion_exit.region_exiting ]
 ;
 ; CHECK-LABEL: polly.start:
-; CHECK:         store float %loop_carried.ph, float* %loop_carried.phiops
+; CHECK:         store float %loop_carried.ph, ptr %loop_carried.phiops
 ;
 ; CHECK-LABEL: polly.stmt.subregion_entry.entry:
-; CHECK:         %loop_carried.phiops.reload = load float, float* %loop_carried.phiops
+; CHECK:         %loop_carried.phiops.reload = load float, ptr %loop_carried.phiops
 ;
 ; CHECK-LABEL: polly.stmt.subregion_entry:
 ; CHECK:         %polly.loop_carried = phi float [ %loop_carried.phiops.reload, %polly.stmt.subregion_entry.entry ]
 ; CHECK:         %p_newval = fadd float %polly.loop_carried, 1.000000e+00
 ;
 ; CHECK-LABEL: polly.stmt.polly.merge_new_and_old.exit:
-; CHECK:         %newval.final_reload = load float, float* %newval.s2a
+; CHECK:         %newval.final_reload = load float, ptr %newval.s2a
 
 define void @func() {
 entry:

@@ -19,15 +19,17 @@
 #include <cassert>
 
 #include "test_macros.h"
+#include "test_constexpr_container.h"
 
 template <class C>
-void
+TEST_CONSTEXPR_CXX14 bool
 test(C c)
 {
     const typename C::value_type v = typename C::value_type();
     std::back_insert_iterator<C> i(c);
     i = v;
     assert(c.back() == v);
+    return true;
 }
 
 class Copyable
@@ -35,6 +37,8 @@ class Copyable
     int data_;
 public:
     Copyable() : data_(0) {}
+    Copyable(const Copyable&) = default;
+    Copyable& operator=(const Copyable&) = default;
     ~Copyable() {data_ = -1;}
 
     friend bool operator==(const Copyable& x, const Copyable& y)
@@ -44,6 +48,9 @@ public:
 int main(int, char**)
 {
     test(std::vector<Copyable>());
-
-  return 0;
+#if TEST_STD_VER >= 20
+    test(ConstexprFixedCapacityDeque<int, 10>());
+    static_assert(test(ConstexprFixedCapacityDeque<int, 10>()));
+#endif
+    return 0;
 }

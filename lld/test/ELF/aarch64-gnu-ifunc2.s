@@ -1,5 +1,5 @@
 # REQUIRES: aarch64
-# RUN: llvm-mc -filetype=obj -triple=aarch64-none-linux-gnu %s -o %t.o
+# RUN: llvm-mc -filetype=obj -triple=aarch64 %s -o %t.o
 # RUN: ld.lld %t.o -o %t
 # RUN: llvm-objdump -d --no-show-raw-insn --print-imm-hex %t | FileCheck %s
 # RUN: llvm-readelf -S %t | FileCheck %s --check-prefix=SEC
@@ -12,7 +12,7 @@
 
 # CHECK:      <main>:
 # .got.plt - page(0x210174) = 0x220190 - 0x210000 = 0x10190
-# CHECK-NEXT:   210174: adrp    x8, #0x10000
+# CHECK-NEXT:   210174: adrp    x8, 0x220000
 # CHECK-NEXT:   210178: ldr     x8, [x8, #0x190]
 # CHECK-NEXT:   21017c: ret
 
@@ -20,7 +20,7 @@
 # CHECK-EMPTY:
 # CHECK-NEXT: <.iplt>:
 # .got.plt - page(0x210180) = 0x220190 - 0x210000 = 0x10190
-# CHECK-NEXT:   210180: adrp    x16, #0x10000
+# CHECK-NEXT:   210180: adrp    x16, 0x220000
 # CHECK-NEXT:   210184: ldr     x17, [x16, #0x190]
 # CHECK-NEXT:   210188: add     x16, x16, #0x190
 # CHECK-NEXT:   21018c: br      x17

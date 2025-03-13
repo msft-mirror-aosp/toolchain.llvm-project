@@ -1198,7 +1198,7 @@ static isl_bool better_div_constraint(__isl_keep isl_basic_map *bmap,
  * a "better" expression for a div for which we already have an expression.
  * "sum" is the sum of the constant terms of the constraints.
  * If this sum is strictly smaller than the coefficient of one
- * of the divs, then this pair can be used define the div.
+ * of the divs, then this pair can be used to define the div.
  * To avoid the introduction of circular definitions of divs, we
  * do not use the pair if the resulting expression would refer to
  * any other undefined divs or if any known div is defined in
@@ -2149,6 +2149,7 @@ static __isl_give isl_basic_map *isl_basic_map_remove_shifted_constraints(
 		return bmap;
 	}
 
+	bmap = isl_basic_map_order_divs(bmap);
 	context = isl_basic_map_align_divs(context, bmap);
 	bmap = isl_basic_map_align_divs(bmap, context);
 
@@ -3284,6 +3285,7 @@ __isl_give isl_basic_map *isl_basic_map_gist(__isl_take isl_basic_map *bmap,
 
 	bmap = isl_basic_map_remove_redundancies(bmap);
 	context = isl_basic_map_remove_redundancies(context);
+	bmap = isl_basic_map_order_divs(bmap);
 	context = isl_basic_map_align_divs(context, bmap);
 
 	n_div = isl_basic_map_dim(context, isl_dim_div);
@@ -3520,6 +3522,7 @@ __isl_give isl_basic_map *isl_basic_map_plain_gist(
 		isl_die(isl_basic_map_get_ctx(bmap), isl_error_invalid,
 			"context has unknown divs", goto error);
 
+	context = isl_basic_map_order_divs(context);
 	bmap = isl_basic_map_align_divs(bmap, context);
 	bmap = isl_basic_map_gauss(bmap, NULL);
 	bmap = isl_basic_map_sort_constraints(bmap);

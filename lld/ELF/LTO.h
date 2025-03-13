@@ -27,36 +27,34 @@
 #include <memory>
 #include <vector>
 
-namespace llvm {
-namespace lto {
+namespace llvm::lto {
 class LTO;
 }
-} // namespace llvm
 
-namespace lld {
-namespace elf {
-
+namespace lld::elf {
+struct Ctx;
 class BitcodeFile;
 class InputFile;
-class LazyObjFile;
 
 class BitcodeCompiler {
 public:
-  BitcodeCompiler();
+  BitcodeCompiler(Ctx &ctx);
   ~BitcodeCompiler();
 
   void add(BitcodeFile &f);
-  std::vector<InputFile *> compile();
+  SmallVector<std::unique_ptr<InputFile>, 0> compile();
 
 private:
+  Ctx &ctx;
   std::unique_ptr<llvm::lto::LTO> ltoObj;
-  std::vector<SmallString<0>> buf;
+  // An array of (module name, native relocatable file content) pairs.
+  SmallVector<std::pair<std::string, SmallString<0>>, 0> buf;
   std::vector<std::unique_ptr<MemoryBuffer>> files;
+  SmallVector<std::string, 0> filenames;
   llvm::DenseSet<StringRef> usedStartStop;
   std::unique_ptr<llvm::raw_fd_ostream> indexFile;
   llvm::DenseSet<StringRef> thinIndices;
 };
-} // namespace elf
-} // namespace lld
+} // namespace lld::elf
 
 #endif

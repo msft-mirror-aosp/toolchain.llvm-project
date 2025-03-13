@@ -1,4 +1,4 @@
-REQUIRES: system-windows, msvc
+REQUIRES: target-windows, msvc
 RUN: %build --compiler=clang-cl --mode=compile --arch=32 --nodefaultlib --output=%T/ClassLayoutTest.cpp.obj %S/Inputs/ClassLayoutTest.cpp
 RUN: %build --compiler=msvc --mode=link --arch=32 --nodefaultlib --output=%T/ClassLayoutTest.cpp.exe %T/ClassLayoutTest.cpp.obj
 RUN: lldb-test symbols %T/ClassLayoutTest.cpp.exe | FileCheck %s
@@ -85,7 +85,7 @@ CLASS:    int m_protected;
 CLASS:    Class();
 CLASS:    Class(int);
 CLASS:    ~Class();
-CLASS:    static int {{.*}}StaticMemberFunc(int, ...);
+CLASS:    {{(static )?}}int {{.*}}StaticMemberFunc(int, ...);
 CLASS:    int Get();
 CLASS:    int f(MemberTest::Friend);
 CLASS:    bool operator==(const MemberTest::Class &)

@@ -11,19 +11,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef DIALECT_TOSA_UTILS_QUANT_UTILS_H
-#define DIALECT_TOSA_UTILS_QUANT_UTILS_H
+#ifndef MLIR_DIALECT_TOSA_UTILS_QUANTUTILS_H
+#define MLIR_DIALECT_TOSA_UTILS_QUANTUTILS_H
 
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 
-#include "mlir/Dialect/Quant/FakeQuantSupport.h"
-#include "mlir/Dialect/Quant/UniformSupport.h"
+#include "mlir/Dialect/Quant/Utils/FakeQuantSupport.h"
+#include "mlir/Dialect/Quant/Utils/UniformSupport.h"
 
 namespace mlir {
 namespace tosa {
 
 //===----------------------------------------------------------------------===//
-// Utililty functions to support quantization handling in Tosa.
+// Utility functions to support quantization handling in Tosa.
 //===----------------------------------------------------------------------===//
 
 /// From a scale value, computes multiplier and shift values
@@ -68,4 +68,4 @@ TypeAttr buildQTypeAttrFromMinMax(OpBuilder builder, Type inputDType,
 } // namespace tosa
 } // namespace mlir
 
-#endif // DIALECT_TOSA_UTILS_QUANT_UTILS_H
+#endif // MLIR_DIALECT_TOSA_UTILS_QUANTUTILS_H

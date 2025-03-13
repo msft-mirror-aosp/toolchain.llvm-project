@@ -1,5 +1,5 @@
-; RUN: llc -O2 -march=bpfel -mattr=+alu32 < %s | FileCheck %s
-; RUN: llc -O2 -march=bpfel -mcpu=v3 < %s | FileCheck %s
+; RUN: llc -O2 -mtriple=bpfel -mattr=+alu32 < %s | FileCheck %s
+; RUN: llc -O2 -mtriple=bpfel -mcpu=v3 < %s | FileCheck %s
 ;
 ; int mov(int a)
 ; {
@@ -49,6 +49,16 @@
 ; unsigned div_i(unsigned a)
 ; {
 ;   return a / 0xf;
+; }
+;
+; unsigned rem(unsigned a, unsigned b)
+; {
+;   return a % b;
+; }
+;
+; unsigned rem_i(unsigned a)
+; {
+;   return a % 0xf;
 ; }
 ;
 ; int or(int a, int b)
@@ -190,8 +200,24 @@ entry:
 define dso_local i32 @div_i(i32 %a) local_unnamed_addr #0 {
 entry:
   %div = udiv i32 %a, 15
-; CHECK: w{{[0-9]+}} /= 15
+; CHECK-NOT: w{{[0-9]+}} /= 15
   ret i32 %div
+}
+
+; Function Attrs: norecurse nounwind readnone
+define dso_local i32 @rem(i32 %a, i32 %b) local_unnamed_addr #0 {
+entry:
+  %rem = urem i32 %a, %b
+; CHECK: w{{[0-9]+}} %= w{{[0-9]+}}
+  ret i32 %rem
+}
+
+; Function Attrs: norecurse nounwind readnone
+define dso_local i32 @rem_i(i32 %a) local_unnamed_addr #0 {
+entry:
+  %rem = urem i32 %a, 15
+; CHECK-NOT: w{{[0-9]+}} %= 15
+  ret i32 %rem
 }
 
 ; Function Attrs: norecurse nounwind readnone

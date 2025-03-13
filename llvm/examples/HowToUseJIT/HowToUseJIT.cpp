@@ -6,6 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 //
+//  WARNING: This example demonstrates how to use LLVM's older ExecutionEngine
+//           JIT APIs. The newer LLJIT APIs should be preferred for new
+//           projects. See llvm/examples/HowToUseLLJIT.
+//
 //  This small program provides an example of how to quickly build a small
 //  module with two functions and execute it with the JIT.
 //
@@ -36,6 +40,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
+#include "llvm/ExecutionEngine/MCJIT.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -59,6 +64,7 @@ using namespace llvm;
 
 int main() {
   InitializeNativeTarget();
+  LLVMInitializeNativeAsmPrinter();
 
   LLVMContext Context;
   

@@ -9,8 +9,8 @@
 #ifndef LLVM_COV_COVERAGEVIEWOPTIONS_H
 #define LLVM_COV_COVERAGEVIEWOPTIONS_H
 
-#include "llvm/Config/llvm-config.h"
 #include "RenderingSupport.h"
+#include "llvm/Config/llvm-config.h"
 #include <vector>
 
 namespace llvm {
@@ -23,26 +23,40 @@ struct CoverageViewOptions {
     Lcov
   };
 
+  enum class BranchOutputType { Count, Percent, Off };
+
   bool Debug;
   bool Colors;
   bool ShowLineNumbers;
   bool ShowLineStats;
   bool ShowRegionMarkers;
+  bool ShowMCDC;
+  bool ShowBranchCounts;
+  bool ShowBranchPercents;
   bool ShowExpandedRegions;
   bool ShowFunctionInstantiations;
   bool ShowFullFilenames;
+  bool ShowBranchSummary;
+  bool ShowMCDCSummary;
   bool ShowRegionSummary;
   bool ShowInstantiationSummary;
+  bool ShowDirectoryCoverage;
   bool ExportSummaryOnly;
   bool SkipExpansions;
   bool SkipFunctions;
+  bool SkipBranches;
+  bool BinaryCounters;
   OutputFormat Format;
+  BranchOutputType ShowBranches;
   std::string ShowOutputDirectory;
   std::vector<std::string> DemanglerOpts;
   uint32_t TabSize;
   std::string ProjectTitle;
   std::string CreatedTimeStr;
   unsigned NumThreads;
+  std::string CompilationDirectory;
+  float HighCovWatermark;
+  float LowCovWatermark;
 
   /// Change the output's stream color if the colors are enabled.
   ColoredRawOstream colored_ostream(raw_ostream &OS,

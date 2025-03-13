@@ -8,12 +8,8 @@
 
 // In macosx10.9 to macosx10.14, streams are provided in the dylib AND they
 // have a bug in how they handle null-termination in case of errors (see D40677).
-// XFAIL: with_system_cxx_lib=macosx10.14
-// XFAIL: with_system_cxx_lib=macosx10.13
-// XFAIL: with_system_cxx_lib=macosx10.12
-// XFAIL: with_system_cxx_lib=macosx10.11
-// XFAIL: with_system_cxx_lib=macosx10.10
-// XFAIL: with_system_cxx_lib=macosx10.9
+// Requires 396145d in the built library.
+// XFAIL: using-built-library-before-llvm-9
 
 // <istream>
 
@@ -21,6 +17,7 @@
 
 #include <istream>
 #include <cassert>
+#include <streambuf>
 
 #include "test_macros.h"
 
@@ -84,6 +81,7 @@ int main(int, char**)
         assert(std::string(s) == "");
         assert(is.gcount() == 0);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L"  \n    \n ");
         std::wistream is(&sb);
@@ -118,6 +116,7 @@ int main(int, char**)
         assert(std::wstring(s) == L"");
         assert(is.gcount() == 0);
     }
+#endif // TEST_HAS_NO_WIDE_CHARACTERS
 #ifndef TEST_HAS_NO_EXCEPTIONS
     {
         testbuf<char> sb(" ");
@@ -137,6 +136,7 @@ int main(int, char**)
         assert(std::string(s) == " ");
         assert(is.gcount() == 1);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L" ");
         std::basic_istream<wchar_t> is(&sb);
@@ -155,6 +155,7 @@ int main(int, char**)
         assert(std::wstring(s) == L" ");
         assert(is.gcount() == 1);
     }
+#endif // TEST_HAS_NO_WIDE_CHARACTERS
 
     {
         testbuf<char> sb;
@@ -174,6 +175,7 @@ int main(int, char**)
         assert(std::basic_string<char>(s) == "");
         assert(is.gcount() == 0);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb;
         std::basic_istream<wchar_t> is(&sb);
@@ -192,7 +194,8 @@ int main(int, char**)
         assert(std::basic_string<wchar_t>(s) == L"");
         assert(is.gcount() == 0);
     }
-#endif
+#endif // TEST_HAS_NO_WIDE_CHARACTERS
+#endif // TEST_HAS_NO_EXCEPTIONS
 
   return 0;
 }

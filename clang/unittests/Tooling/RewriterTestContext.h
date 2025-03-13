@@ -70,7 +70,7 @@ class RewriterTestContext {
         llvm::MemoryBuffer::getMemBuffer(Content);
     InMemoryFileSystem->addFile(Name, 0, std::move(Source));
 
-    auto Entry = Files.getFile(Name);
+    auto Entry = Files.getOptionalFileRef(Name);
     assert(Entry);
     return Sources.createFileID(*Entry, SourceLocation(), SrcMgr::C_User);
   }
@@ -87,7 +87,7 @@ class RewriterTestContext {
     llvm::raw_fd_ostream OutStream(FD, true);
     OutStream << Content;
     OutStream.close();
-    auto File = Files.getFile(Path);
+    auto File = Files.getOptionalFileRef(Path);
     assert(File);
 
     StringRef Found =
@@ -109,7 +109,6 @@ class RewriterTestContext {
     std::string Result;
     llvm::raw_string_ostream OS(Result);
     Rewrite.getEditBuffer(ID).write(OS);
-    OS.flush();
     return Result;
   }
 

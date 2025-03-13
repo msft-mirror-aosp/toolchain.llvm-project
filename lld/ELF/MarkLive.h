@@ -9,12 +9,10 @@
 #ifndef LLD_ELF_MARKLIVE_H
 #define LLD_ELF_MARKLIVE_H
 
-namespace lld {
-namespace elf {
+namespace lld::elf {
+struct Ctx;
 
-template <class ELFT> void markLive();
-
-} // namespace elf
-} // namespace lld
+template <class ELFT> void markLive(Ctx &);
+}
 
 #endif // LLD_ELF_MARKLIVE_H

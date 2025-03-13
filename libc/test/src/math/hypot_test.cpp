@@ -8,13 +8,18 @@
 
 #include "HypotTest.h"
 
-#include "include/math.h"
 #include "src/math/hypot.h"
 
-using HypotTest = HypotTestTemplate<double>;
+using LlvmLibcHypotTest = HypotTestTemplate<double>;
 
-TEST_F(HypotTest, SpecialNumbers) { testSpecialNumbers(&__llvm_libc::hypot); }
+TEST_F(LlvmLibcHypotTest, SpecialNumbers) {
+  test_special_numbers(&LIBC_NAMESPACE::hypot);
+}
 
-TEST_F(HypotTest, SubnormalRange) { testSubnormalRange(&__llvm_libc::hypot); }
+TEST_F(LlvmLibcHypotTest, SubnormalRange) {
+  test_subnormal_range(&LIBC_NAMESPACE::hypot);
+}
 
-TEST_F(HypotTest, NormalRange) { testNormalRange(&__llvm_libc::hypot); }
+TEST_F(LlvmLibcHypotTest, NormalRange) {
+  test_normal_range(&LIBC_NAMESPACE::hypot);
+}

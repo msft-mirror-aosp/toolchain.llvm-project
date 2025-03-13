@@ -9,6 +9,7 @@
 #ifndef PROFILE_INSTRPROFILINGUTIL_H
 #define PROFILE_INSTRPROFILINGUTIL_H
 
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
 
@@ -68,9 +69,24 @@ void *lprofPtrFetchAdd(void **Mem, long ByteIncr);
 /* Temporarily suspend SIGKILL. Return value of 1 means a restore is needed.
  * Other return values mean no restore is needed.
  */
-int lprofSuspendSigKill();
+int lprofSuspendSigKill(void);
 
 /* Restore previously suspended SIGKILL. */
-void lprofRestoreSigKill();
+void lprofRestoreSigKill(void);
+
+static inline size_t lprofRoundUpTo(size_t x, size_t boundary) {
+  return (x + boundary - 1) & ~(boundary - 1);
+}
+
+static inline size_t lprofRoundDownTo(size_t x, size_t boundary) {
+  return x & ~(boundary - 1);
+}
+
+int lprofReleaseMemoryPagesToOS(uintptr_t Begin, uintptr_t End);
+
+typedef void (*AtExit_Fn_ptr)(void);
+
+/* Call atexit and perform other platform-specific bookkeeping. */
+int lprofAtExit(AtExit_Fn_ptr);
 
 #endif /* PROFILE_INSTRPROFILINGUTIL_H */

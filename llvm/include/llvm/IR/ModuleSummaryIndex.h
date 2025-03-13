@@ -19,10 +19,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Module.h"
@@ -38,12 +38,16 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace llvm {
+
+template <class GraphType> struct GraphTraits;
 
 namespace yaml {
 
@@ -65,20 +69,30 @@ struct CalleeInfo {
   // added to HotnessType enum.
   uint32_t Hotness : 3;
 
+  // True if at least one of the calls to the callee is a tail call.
+  bool HasTailCall : 1;
+
   /// The value stored in RelBlockFreq has to be interpreted as the digits of
   /// a scaled number with a scale of \p -ScaleShift.
-  uint32_t RelBlockFreq : 29;
+  static constexpr unsigned RelBlockFreqBits = 28;
+  uint32_t RelBlockFreq : RelBlockFreqBits;
   static constexpr int32_t ScaleShift = 8;
-  static constexpr uint64_t MaxRelBlockFreq = (1 << 29) - 1;
+  static constexpr uint64_t MaxRelBlockFreq = (1 << RelBlockFreqBits) - 1;
 
   CalleeInfo()
-      : Hotness(static_cast<uint32_t>(HotnessType::Unknown)), RelBlockFreq(0) {}
-  explicit CalleeInfo(HotnessType Hotness, uint64_t RelBF)
-      : Hotness(static_cast<uint32_t>(Hotness)), RelBlockFreq(RelBF) {}
+      : Hotness(static_cast<uint32_t>(HotnessType::Unknown)),
+        HasTailCall(false), RelBlockFreq(0) {}
+  explicit CalleeInfo(HotnessType Hotness, bool HasTC, uint64_t RelBF)
+      : Hotness(static_cast<uint32_t>(Hotness)), HasTailCall(HasTC),
+        RelBlockFreq(RelBF) {}
 
   void updateHotness(const HotnessType OtherHotness) {
     Hotness = std::max(Hotness, static_cast<uint32_t>(OtherHotness));
   }
+
+  bool hasTailCall() const { return HasTailCall; }
+
+  void setHasTailCall(const bool HasTC) { HasTailCall = HasTC; }
 
   HotnessType getHotness() const { return HotnessType(Hotness); }
 
@@ -144,7 +158,7 @@ struct alignas(8) GlobalValueSummaryInfo {
     StringRef Name;
   } U;
 
-  GlobalValueSummaryInfo(bool HaveGVs) : U(HaveGVs) {}
+  inline GlobalValueSummaryInfo(bool HaveGVs);
 
   /// List of global value summary structures for a particular value held
   /// in the GlobalValueMap. Requires a vector in the case of multiple
@@ -186,7 +200,12 @@ struct ValueInfo {
     return getRef()->second.SummaryList;
   }
 
+  // Even if the index is built with GVs available, we may not have one for
+  // summary entries synthesized for profiled indirect call targets.
+  bool hasName() const { return !haveGVs() || getValue(); }
+
   StringRef name() const {
+    assert(!haveGVs() || getRef()->second.U.GV);
     return haveGVs() ? getRef()->second.U.GV->getName()
                      : getRef()->second.U.Name;
   }
@@ -223,7 +242,14 @@ struct ValueInfo {
     return RefAndFlags.getPointer();
   }
 
-  bool isDSOLocal() const;
+  /// Returns the most constraining visibility among summaries. The
+  /// visibilities, ordered from least to most constraining, are: default,
+  /// protected and hidden.
+  GlobalValue::VisibilityTypes getELFVisibility() const;
+
+  /// Checks if all summaries are DSO local (have the flag set). When DSOLocal
+  /// propagation has been done, set the parameter to enable fast check.
+  bool isDSOLocal(bool WithDSOLocalPropagation = false) const;
 
   /// Checks if all copies are eligible for auto-hiding (have flag set).
   bool canAutoHide() const;
@@ -276,12 +302,183 @@ template <> struct DenseMapInfo<ValueInfo> {
   static unsigned getHashValue(ValueInfo I) { return (uintptr_t)I.getRef(); }
 };
 
+// For optional hinted size reporting, holds a pair of the full stack id
+// (pre-trimming, from the full context in the profile), and the associated
+// total profiled size.
+struct ContextTotalSize {
+  uint64_t FullStackId;
+  uint64_t TotalSize;
+};
+
+/// Summary of memprof callsite metadata.
+struct CallsiteInfo {
+  // Actual callee function.
+  ValueInfo Callee;
+
+  // Used to record whole program analysis cloning decisions.
+  // The ThinLTO backend will need to create as many clones as there are entries
+  // in the vector (it is expected and should be confirmed that all such
+  // summaries in the same FunctionSummary have the same number of entries).
+  // Each index records version info for the corresponding clone of this
+  // function. The value is the callee clone it calls (becomes the appended
+  // suffix id). Index 0 is the original version, and a value of 0 calls the
+  // original callee.
+  SmallVector<unsigned> Clones{0};
+
+  // Represents stack ids in this context, recorded as indices into the
+  // StackIds vector in the summary index, which in turn holds the full 64-bit
+  // stack ids. This reduces memory as there are in practice far fewer unique
+  // stack ids than stack id references.
+  SmallVector<unsigned> StackIdIndices;
+
+  CallsiteInfo(ValueInfo Callee, SmallVector<unsigned> StackIdIndices)
+      : Callee(Callee), StackIdIndices(std::move(StackIdIndices)) {}
+  CallsiteInfo(ValueInfo Callee, SmallVector<unsigned> Clones,
+               SmallVector<unsigned> StackIdIndices)
+      : Callee(Callee), Clones(std::move(Clones)),
+        StackIdIndices(std::move(StackIdIndices)) {}
+};
+
+inline raw_ostream &operator<<(raw_ostream &OS, const CallsiteInfo &SNI) {
+  OS << "Callee: " << SNI.Callee;
+  bool First = true;
+  OS << " Clones: ";
+  for (auto V : SNI.Clones) {
+    if (!First)
+      OS << ", ";
+    First = false;
+    OS << V;
+  }
+  First = true;
+  OS << " StackIds: ";
+  for (auto Id : SNI.StackIdIndices) {
+    if (!First)
+      OS << ", ";
+    First = false;
+    OS << Id;
+  }
+  return OS;
+}
+
+// Allocation type assigned to an allocation reached by a given context.
+// More can be added, now this is cold, notcold and hot.
+// Values should be powers of two so that they can be ORed, in particular to
+// track allocations that have different behavior with different calling
+// contexts.
+enum class AllocationType : uint8_t {
+  None = 0,
+  NotCold = 1,
+  Cold = 2,
+  Hot = 4,
+  All = 7 // This should always be set to the OR of all values.
+};
+
+/// Summary of a single MIB in a memprof metadata on allocations.
+struct MIBInfo {
+  // The allocation type for this profiled context.
+  AllocationType AllocType;
+
+  // Represents stack ids in this context, recorded as indices into the
+  // StackIds vector in the summary index, which in turn holds the full 64-bit
+  // stack ids. This reduces memory as there are in practice far fewer unique
+  // stack ids than stack id references.
+  SmallVector<unsigned> StackIdIndices;
+
+  MIBInfo(AllocationType AllocType, SmallVector<unsigned> StackIdIndices)
+      : AllocType(AllocType), StackIdIndices(std::move(StackIdIndices)) {}
+};
+
+inline raw_ostream &operator<<(raw_ostream &OS, const MIBInfo &MIB) {
+  OS << "AllocType " << (unsigned)MIB.AllocType;
+  bool First = true;
+  OS << " StackIds: ";
+  for (auto Id : MIB.StackIdIndices) {
+    if (!First)
+      OS << ", ";
+    First = false;
+    OS << Id;
+  }
+  return OS;
+}
+
+/// Summary of memprof metadata on allocations.
+struct AllocInfo {
+  // Used to record whole program analysis cloning decisions.
+  // The ThinLTO backend will need to create as many clones as there are entries
+  // in the vector (it is expected and should be confirmed that all such
+  // summaries in the same FunctionSummary have the same number of entries).
+  // Each index records version info for the corresponding clone of this
+  // function. The value is the allocation type of the corresponding allocation.
+  // Index 0 is the original version. Before cloning, index 0 may have more than
+  // one allocation type.
+  SmallVector<uint8_t> Versions;
+
+  // Vector of MIBs in this memprof metadata.
+  std::vector<MIBInfo> MIBs;
+
+  // If requested, keep track of full stack contexts and total profiled sizes
+  // for each MIB. This will be a vector of the same length and order as the
+  // MIBs vector, if non-empty. Note that each MIB in the summary can have
+  // multiple of these as we trim the contexts when possible during matching.
+  // For hinted size reporting we, however, want the original pre-trimmed full
+  // stack context id for better correlation with the profile.
+  std::vector<std::vector<ContextTotalSize>> ContextSizeInfos;
+
+  AllocInfo(std::vector<MIBInfo> MIBs) : MIBs(std::move(MIBs)) {
+    Versions.push_back(0);
+  }
+  AllocInfo(SmallVector<uint8_t> Versions, std::vector<MIBInfo> MIBs)
+      : Versions(std::move(Versions)), MIBs(std::move(MIBs)) {}
+};
+
+inline raw_ostream &operator<<(raw_ostream &OS, const AllocInfo &AE) {
+  bool First = true;
+  OS << "Versions: ";
+  for (auto V : AE.Versions) {
+    if (!First)
+      OS << ", ";
+    First = false;
+    OS << (unsigned)V;
+  }
+  OS << " MIB:\n";
+  for (auto &M : AE.MIBs) {
+    OS << "\t\t" << M << "\n";
+  }
+  if (!AE.ContextSizeInfos.empty()) {
+    OS << "\tContextSizeInfo per MIB:\n";
+    for (auto Infos : AE.ContextSizeInfos) {
+      OS << "\t\t";
+      bool FirstInfo = true;
+      for (auto [FullStackId, TotalSize] : Infos) {
+        if (!FirstInfo)
+          OS << ", ";
+        FirstInfo = false;
+        OS << "{ " << FullStackId << ", " << TotalSize << " }";
+      }
+      OS << "\n";
+    }
+  }
+  return OS;
+}
+
 /// Function and variable summary information to aid decisions and
 /// implementation of importing.
 class GlobalValueSummary {
 public:
   /// Sububclass discriminator (for dyn_cast<> et al.)
   enum SummaryKind : unsigned { AliasKind, FunctionKind, GlobalVarKind };
+
+  enum ImportKind : unsigned {
+    // The global value definition corresponding to the summary should be
+    // imported from source module
+    Definition = 0,
+
+    // When its definition doesn't exist in the destination module and not
+    // imported (e.g., function is too large to be inlined), the global value
+    // declaration corresponding to the summary should be imported, or the
+    // attributes from summary should be annotated on the function declaration.
+    Declaration = 1,
+  };
 
   /// Group flags (Linkage, NotEligibleToImport, etc.) as a bitfield.
   struct GVFlags {
@@ -293,6 +490,9 @@ public:
     /// In the future this will be used to update and optimize linkage
     /// types based on global summary-based analysis.
     unsigned Linkage : 4;
+
+    /// Indicates the visibility.
+    unsigned Visibility : 2;
 
     /// Indicate if the global value cannot be imported (e.g. it cannot
     /// be renamed or references something that can't be renamed).
@@ -320,12 +520,19 @@ public:
     /// means the symbol was externally visible.
     unsigned CanAutoHide : 1;
 
+    /// This field is written by the ThinLTO indexing step to postlink combined
+    /// summary. The value is interpreted as 'ImportKind' enum defined above.
+    unsigned ImportType : 1;
+
     /// Convenience Constructors
     explicit GVFlags(GlobalValue::LinkageTypes Linkage,
+                     GlobalValue::VisibilityTypes Visibility,
                      bool NotEligibleToImport, bool Live, bool IsLocal,
-                     bool CanAutoHide)
-        : Linkage(Linkage), NotEligibleToImport(NotEligibleToImport),
-          Live(Live), DSOLocal(IsLocal), CanAutoHide(CanAutoHide) {}
+                     bool CanAutoHide, ImportKind ImportType)
+        : Linkage(Linkage), Visibility(Visibility),
+          NotEligibleToImport(NotEligibleToImport), Live(Live),
+          DSOLocal(IsLocal), CanAutoHide(CanAutoHide),
+          ImportType(static_cast<unsigned>(ImportType)) {}
   };
 
 private:
@@ -352,10 +559,13 @@ private:
   /// (either by the initializer of a global variable, or referenced
   /// from within a function). This does not include functions called, which
   /// are listed in the derived FunctionSummary object.
-  std::vector<ValueInfo> RefEdgeList;
+  /// We use SmallVector<ValueInfo, 0> instead of std::vector<ValueInfo> for its
+  /// smaller memory footprint.
+  SmallVector<ValueInfo, 0> RefEdgeList;
 
 protected:
-  GlobalValueSummary(SummaryKind K, GVFlags Flags, std::vector<ValueInfo> Refs)
+  GlobalValueSummary(SummaryKind K, GVFlags Flags,
+                     SmallVectorImpl<ValueInfo> &&Refs)
       : Kind(K), Flags(Flags), RefEdgeList(std::move(Refs)) {
     assert((K != AliasKind || Refs.empty()) &&
            "Expect no references for AliasSummary");
@@ -410,6 +620,23 @@ public:
 
   bool canAutoHide() const { return Flags.CanAutoHide; }
 
+  bool shouldImportAsDecl() const {
+    return Flags.ImportType == GlobalValueSummary::ImportKind::Declaration;
+  }
+
+  void setImportKind(ImportKind IK) { Flags.ImportType = IK; }
+
+  GlobalValueSummary::ImportKind importType() const {
+    return static_cast<ImportKind>(Flags.ImportType);
+  }
+
+  GlobalValue::VisibilityTypes getVisibility() const {
+    return (GlobalValue::VisibilityTypes)Flags.Visibility;
+  }
+  void setVisibility(GlobalValue::VisibilityTypes Vis) {
+    Flags.Visibility = (unsigned)Vis;
+  }
+
   /// Flag that this global value cannot be imported.
   void setNotEligibleToImport() { Flags.NotEligibleToImport = true; }
 
@@ -424,6 +651,8 @@ public:
   friend class ModuleSummaryIndex;
 };
 
+GlobalValueSummaryInfo::GlobalValueSummaryInfo(bool HaveGVs) : U(HaveGVs) {}
+
 /// Alias summary information.
 class AliasSummary : public GlobalValueSummary {
   ValueInfo AliaseeValueInfo;
@@ -432,12 +661,11 @@ class AliasSummary : public GlobalValueSummary {
   /// memory for time). Note that this pointer may be null (and the value info
   /// empty) when we have a distributed index where the alias is being imported
   /// (as a copy of the aliasee), but the aliasee is not.
-  GlobalValueSummary *AliaseeSummary;
+  GlobalValueSummary *AliaseeSummary = nullptr;
 
 public:
   AliasSummary(GVFlags Flags)
-      : GlobalValueSummary(AliasKind, Flags, ArrayRef<ValueInfo>{}),
-        AliaseeSummary(nullptr) {}
+      : GlobalValueSummary(AliasKind, Flags, SmallVector<ValueInfo, 0>{}) {}
 
   /// Check if this is an alias summary.
   static bool classof(const GlobalValueSummary *GVS) {
@@ -551,6 +779,60 @@ public:
     unsigned NoInline : 1;
     // Indicate if function should be always inlined.
     unsigned AlwaysInline : 1;
+    // Indicate if function never raises an exception. Can be modified during
+    // thinlink function attribute propagation
+    unsigned NoUnwind : 1;
+    // Indicate if function contains instructions that mayThrow
+    unsigned MayThrow : 1;
+
+    // If there are calls to unknown targets (e.g. indirect)
+    unsigned HasUnknownCall : 1;
+
+    // Indicate if a function must be an unreachable function.
+    //
+    // This bit is sufficient but not necessary;
+    // if this bit is on, the function must be regarded as unreachable;
+    // if this bit is off, the function might be reachable or unreachable.
+    unsigned MustBeUnreachable : 1;
+
+    FFlags &operator&=(const FFlags &RHS) {
+      this->ReadNone &= RHS.ReadNone;
+      this->ReadOnly &= RHS.ReadOnly;
+      this->NoRecurse &= RHS.NoRecurse;
+      this->ReturnDoesNotAlias &= RHS.ReturnDoesNotAlias;
+      this->NoInline &= RHS.NoInline;
+      this->AlwaysInline &= RHS.AlwaysInline;
+      this->NoUnwind &= RHS.NoUnwind;
+      this->MayThrow &= RHS.MayThrow;
+      this->HasUnknownCall &= RHS.HasUnknownCall;
+      this->MustBeUnreachable &= RHS.MustBeUnreachable;
+      return *this;
+    }
+
+    bool anyFlagSet() {
+      return this->ReadNone | this->ReadOnly | this->NoRecurse |
+             this->ReturnDoesNotAlias | this->NoInline | this->AlwaysInline |
+             this->NoUnwind | this->MayThrow | this->HasUnknownCall |
+             this->MustBeUnreachable;
+    }
+
+    operator std::string() {
+      std::string Output;
+      raw_string_ostream OS(Output);
+      OS << "funcFlags: (";
+      OS << "readNone: " << this->ReadNone;
+      OS << ", readOnly: " << this->ReadOnly;
+      OS << ", noRecurse: " << this->NoRecurse;
+      OS << ", returnDoesNotAlias: " << this->ReturnDoesNotAlias;
+      OS << ", noInline: " << this->NoInline;
+      OS << ", alwaysInline: " << this->AlwaysInline;
+      OS << ", noUnwind: " << this->NoUnwind;
+      OS << ", mayThrow: " << this->MayThrow;
+      OS << ", hasUnknownCall: " << this->HasUnknownCall;
+      OS << ", mustBeUnreachable: " << this->MustBeUnreachable;
+      OS << ")";
+      return Output;
+    }
   };
 
   /// Describes the uses of a parameter by the function.
@@ -590,20 +872,21 @@ public:
   /// Create an empty FunctionSummary (with specified call edges).
   /// Used to represent external nodes and the dummy root node.
   static FunctionSummary
-  makeDummyFunctionSummary(std::vector<FunctionSummary::EdgeTy> Edges) {
+  makeDummyFunctionSummary(SmallVectorImpl<FunctionSummary::EdgeTy> &&Edges) {
     return FunctionSummary(
         FunctionSummary::GVFlags(
             GlobalValue::LinkageTypes::AvailableExternallyLinkage,
+            GlobalValue::DefaultVisibility,
             /*NotEligibleToImport=*/true, /*Live=*/true, /*IsLocal=*/false,
-            /*CanAutoHide=*/false),
-        /*NumInsts=*/0, FunctionSummary::FFlags{}, /*EntryCount=*/0,
-        std::vector<ValueInfo>(), std::move(Edges),
-        std::vector<GlobalValue::GUID>(),
+            /*CanAutoHide=*/false, GlobalValueSummary::ImportKind::Definition),
+        /*NumInsts=*/0, FunctionSummary::FFlags{}, SmallVector<ValueInfo, 0>(),
+        std::move(Edges), std::vector<GlobalValue::GUID>(),
         std::vector<FunctionSummary::VFuncId>(),
         std::vector<FunctionSummary::VFuncId>(),
         std::vector<FunctionSummary::ConstVCall>(),
         std::vector<FunctionSummary::ConstVCall>(),
-        std::vector<FunctionSummary::ParamAccess>());
+        std::vector<FunctionSummary::ParamAccess>(),
+        std::vector<CallsiteInfo>(), std::vector<AllocInfo>());
   }
 
   /// A dummy node to reference external functions that aren't in the index
@@ -617,13 +900,10 @@ private:
   /// Function summary specific flags.
   FFlags FunFlags;
 
-  /// The synthesized entry count of the function.
-  /// This is only populated during ThinLink phase and remains unused while
-  /// generating per-module summaries.
-  uint64_t EntryCount = 0;
-
   /// List of <CalleeValueInfo, CalleeInfo> call edge pairs from this function.
-  std::vector<EdgeTy> CallGraphEdgeList;
+  /// We use SmallVector<ValueInfo, 0> instead of std::vector<ValueInfo> for its
+  /// smaller memory footprint.
+  SmallVector<EdgeTy, 0> CallGraphEdgeList;
 
   std::unique_ptr<TypeIdInfo> TIdInfo;
 
@@ -631,18 +911,38 @@ private:
   using ParamAccessesTy = std::vector<ParamAccess>;
   std::unique_ptr<ParamAccessesTy> ParamAccesses;
 
+  /// Optional list of memprof callsite metadata summaries. The correspondence
+  /// between the callsite summary and the callsites in the function is implied
+  /// by the order in the vector (and can be validated by comparing the stack
+  /// ids in the CallsiteInfo to those in the instruction callsite metadata).
+  /// As a memory savings optimization, we only create these for the prevailing
+  /// copy of a symbol when creating the combined index during LTO.
+  using CallsitesTy = std::vector<CallsiteInfo>;
+  std::unique_ptr<CallsitesTy> Callsites;
+
+  /// Optional list of allocation memprof metadata summaries. The correspondence
+  /// between the alloc memprof summary and the allocation callsites in the
+  /// function is implied by the order in the vector (and can be validated by
+  /// comparing the stack ids in the AllocInfo to those in the instruction
+  /// memprof metadata).
+  /// As a memory savings optimization, we only create these for the prevailing
+  /// copy of a symbol when creating the combined index during LTO.
+  using AllocsTy = std::vector<AllocInfo>;
+  std::unique_ptr<AllocsTy> Allocs;
+
 public:
   FunctionSummary(GVFlags Flags, unsigned NumInsts, FFlags FunFlags,
-                  uint64_t EntryCount, std::vector<ValueInfo> Refs,
-                  std::vector<EdgeTy> CGEdges,
+                  SmallVectorImpl<ValueInfo> &&Refs,
+                  SmallVectorImpl<EdgeTy> &&CGEdges,
                   std::vector<GlobalValue::GUID> TypeTests,
                   std::vector<VFuncId> TypeTestAssumeVCalls,
                   std::vector<VFuncId> TypeCheckedLoadVCalls,
                   std::vector<ConstVCall> TypeTestAssumeConstVCalls,
                   std::vector<ConstVCall> TypeCheckedLoadConstVCalls,
-                  std::vector<ParamAccess> Params)
+                  std::vector<ParamAccess> Params, CallsitesTy CallsiteList,
+                  AllocsTy AllocList)
       : GlobalValueSummary(FunctionKind, Flags, std::move(Refs)),
-        InstCount(NumInsts), FunFlags(FunFlags), EntryCount(EntryCount),
+        InstCount(NumInsts), FunFlags(FunFlags),
         CallGraphEdgeList(std::move(CGEdges)) {
     if (!TypeTests.empty() || !TypeTestAssumeVCalls.empty() ||
         !TypeCheckedLoadVCalls.empty() || !TypeTestAssumeConstVCalls.empty() ||
@@ -654,6 +954,10 @@ public:
                      std::move(TypeCheckedLoadConstVCalls)});
     if (!Params.empty())
       ParamAccesses = std::make_unique<ParamAccessesTy>(std::move(Params));
+    if (!CallsiteList.empty())
+      Callsites = std::make_unique<CallsitesTy>(std::move(CallsiteList));
+    if (!AllocList.empty())
+      Allocs = std::make_unique<AllocsTy>(std::move(AllocList));
   }
   // Gets the number of readonly and writeonly refs in RefEdgeList
   std::pair<unsigned, unsigned> specialRefCounts() const;
@@ -666,17 +970,17 @@ public:
   /// Get function summary flags.
   FFlags fflags() const { return FunFlags; }
 
+  void setNoRecurse() { FunFlags.NoRecurse = true; }
+
+  void setNoUnwind() { FunFlags.NoUnwind = true; }
+
   /// Get the instruction count recorded for this function.
   unsigned instCount() const { return InstCount; }
 
-  /// Get the synthetic entry count for this function.
-  uint64_t entryCount() const { return EntryCount; }
-
-  /// Set the synthetic entry count for this function.
-  void setEntryCount(uint64_t EC) { EntryCount = EC; }
-
   /// Return the list of <CalleeValueInfo, CalleeInfo> pairs.
   ArrayRef<EdgeTy> calls() const { return CallGraphEdgeList; }
+
+  SmallVector<EdgeTy, 0> &mutableCalls() { return CallGraphEdgeList; }
 
   void addCall(EdgeTy E) { CallGraphEdgeList.push_back(E); }
 
@@ -750,6 +1054,34 @@ public:
   }
 
   const TypeIdInfo *getTypeIdInfo() const { return TIdInfo.get(); };
+
+  ArrayRef<CallsiteInfo> callsites() const {
+    if (Callsites)
+      return *Callsites;
+    return {};
+  }
+
+  CallsitesTy &mutableCallsites() {
+    assert(Callsites);
+    return *Callsites;
+  }
+
+  void addCallsite(CallsiteInfo &Callsite) {
+    if (!Callsites)
+      Callsites = std::make_unique<CallsitesTy>();
+    Callsites->push_back(Callsite);
+  }
+
+  ArrayRef<AllocInfo> allocs() const {
+    if (Allocs)
+      return *Allocs;
+    return {};
+  }
+
+  AllocsTy &mutableAllocs() {
+    assert(Allocs);
+    return *Allocs;
+  }
 
   friend struct GraphTraits<ValueInfo>;
 };
@@ -847,7 +1179,7 @@ public:
   } VarFlags;
 
   GlobalVarSummary(GVFlags Flags, GVarFlags VarFlags,
-                   std::vector<ValueInfo> Refs)
+                   SmallVectorImpl<ValueInfo> &&Refs)
       : GlobalValueSummary(GlobalVarKind, Flags, std::move(Refs)),
         VarFlags(VarFlags) {}
 
@@ -964,19 +1296,26 @@ using ModuleHash = std::array<uint32_t, 5>;
 using const_gvsummary_iterator = GlobalValueSummaryMapTy::const_iterator;
 using gvsummary_iterator = GlobalValueSummaryMapTy::iterator;
 
-/// String table to hold/own module path strings, which additionally holds the
-/// module ID assigned to each module during the plugin step, as well as a hash
+/// String table to hold/own module path strings, as well as a hash
 /// of the module. The StringMap makes a copy of and owns inserted strings.
-using ModulePathStringTableTy = StringMap<std::pair<uint64_t, ModuleHash>>;
+using ModulePathStringTableTy = StringMap<ModuleHash>;
 
 /// Map of global value GUID to its summary, used to identify values defined in
 /// a particular module, and provide efficient access to their summary.
 using GVSummaryMapTy = DenseMap<GlobalValue::GUID, GlobalValueSummary *>;
 
+/// Map of a module name to the GUIDs and summaries we will import from that
+/// module.
+using ModuleToSummariesForIndexTy =
+    std::map<std::string, GVSummaryMapTy, std::less<>>;
+
+/// A set of global value summary pointers.
+using GVSummaryPtrSet = std::unordered_set<GlobalValueSummary *>;
+
 /// Map of a type GUID to type id string and summary (multimap used
 /// in case of GUID conflicts).
 using TypeIdSummaryMapTy =
-    std::multimap<GlobalValue::GUID, std::pair<std::string, TypeIdSummary>>;
+    std::multimap<GlobalValue::GUID, std::pair<StringRef, TypeIdSummary>>;
 
 /// The following data structures summarize type metadata information.
 /// For type metadata overview see https://llvm.org/docs/TypeMetadata.html.
@@ -1012,6 +1351,9 @@ private:
   /// Holds strings for combined index, mapping to the corresponding module ID.
   ModulePathStringTableTy ModulePathStringTable;
 
+  BumpPtrAllocator TypeIdSaverAlloc;
+  UniqueStringSaver TypeIdSaver;
+
   /// Mapping from type identifier GUIDs to type identifier and its summary
   /// information. Produced by thin link.
   TypeIdSummaryMapTy TypeIdMap;
@@ -1020,12 +1362,12 @@ private:
   /// with that type identifier's metadata. Produced by per module summary
   /// analysis and consumed by thin link. For more information, see description
   /// above where TypeIdCompatibleVtableInfo is defined.
-  std::map<std::string, TypeIdCompatibleVtableInfo, std::less<>>
+  std::map<StringRef, TypeIdCompatibleVtableInfo, std::less<>>
       TypeIdCompatibleVtableMap;
 
   /// Mapping from original ID to GUID. If original ID can map to multiple
   /// GUIDs, it will be mapped to 0.
-  std::map<GlobalValue::GUID, GlobalValue::GUID> OidGuidMap;
+  DenseMap<GlobalValue::GUID, GlobalValue::GUID> OidGuidMap;
 
   /// Indicates that summary-based GlobalValue GC has run, and values with
   /// GVFlags::Live==false are really dead. Otherwise, all values must be
@@ -1037,8 +1379,18 @@ private:
   /// read/write only.
   bool WithAttributePropagation = false;
 
+  /// Indicates that summary-based DSOLocal propagation has run and the flag in
+  /// every summary of a GV is synchronized.
+  bool WithDSOLocalPropagation = false;
+
+  /// Indicates that we have whole program visibility.
+  bool WithWholeProgramVisibility = false;
+
   /// Indicates that summary-based synthetic entry count propagation has run
   bool HasSyntheticEntryCounts = false;
+
+  /// Indicates that we linked with allocator supporting hot/cold new operators.
+  bool WithSupportsHotColdNew = false;
 
   /// Indicates that distributed backend should skip compilation of the
   /// module. Flag is suppose to be set by distributed ThinLTO indexing
@@ -1056,6 +1408,9 @@ private:
   // True if the index was created for a module compiled with -fsplit-lto-unit.
   bool EnableSplitLTOUnit;
 
+  // True if the index was created for a module compiled with -funified-lto
+  bool UnifiedLTO;
+
   // True if some of the modules were compiled with -fsplit-lto-unit and
   // some were not. Set when the combined index is created during the thin link.
   bool PartiallySplitLTOUnits = false;
@@ -1063,17 +1418,32 @@ private:
   /// True if some of the FunctionSummary contains a ParamAccess.
   bool HasParamAccess = false;
 
-  std::set<std::string> CfiFunctionDefs;
-  std::set<std::string> CfiFunctionDecls;
+  std::set<std::string, std::less<>> CfiFunctionDefs;
+  std::set<std::string, std::less<>> CfiFunctionDecls;
 
   // Used in cases where we want to record the name of a global, but
   // don't have the string owned elsewhere (e.g. the Strtab on a module).
-  StringSaver Saver;
   BumpPtrAllocator Alloc;
+  StringSaver Saver;
 
   // The total number of basic blocks in the module in the per-module summary or
   // the total number of basic blocks in the LTO unit in the combined index.
-  uint64_t BlockCount;
+  // FIXME: Putting this in the distributed ThinLTO index files breaks LTO
+  // backend caching on any BB change to any linked file. It is currently not
+  // used except in the case of a SamplePGO partial profile, and should be
+  // reevaluated/redesigned to allow more effective incremental builds in that
+  // case.
+  uint64_t BlockCount = 0;
+
+  // List of unique stack ids (hashes). We use a 4B index of the id in the
+  // stack id lists on the alloc and callsite summaries for memory savings,
+  // since the number of unique ids is in practice much smaller than the
+  // number of stack id references in the summaries.
+  std::vector<uint64_t> StackIds;
+
+  // Temporary map while building StackIds list. Clear when index is completely
+  // built via releaseTemporaryMemory.
+  DenseMap<uint64_t, unsigned> StackIdToIndex;
 
   // YAML I/O support.
   friend yaml::MappingTraits<ModuleSummaryIndex>;
@@ -1086,16 +1456,18 @@ private:
 
 public:
   // See HaveGVs variable comment.
-  ModuleSummaryIndex(bool HaveGVs, bool EnableSplitLTOUnit = false)
-      : HaveGVs(HaveGVs), EnableSplitLTOUnit(EnableSplitLTOUnit), Saver(Alloc),
-        BlockCount(0) {}
+  ModuleSummaryIndex(bool HaveGVs, bool EnableSplitLTOUnit = false,
+                     bool UnifiedLTO = false)
+      : TypeIdSaver(TypeIdSaverAlloc), HaveGVs(HaveGVs),
+        EnableSplitLTOUnit(EnableSplitLTOUnit), UnifiedLTO(UnifiedLTO),
+        Saver(Alloc) {}
 
   // Current version for the module summary in bitcode files.
   // The BitcodeSummaryVersion should be bumped whenever we introduce changes
   // in the way some record are interpreted, like flags for instance.
   // Note that incrementing this may require changes in both BitcodeReader.cpp
   // and BitcodeWriter.cpp.
-  static constexpr uint64_t BitcodeSummaryVersion = 9;
+  static constexpr uint64_t BitcodeSummaryVersion = 12;
 
   // Regular LTO module name for ASM writer
   static constexpr const char *getRegularLTOModuleName() {
@@ -1117,6 +1489,31 @@ public:
   const_gvsummary_iterator end() const { return GlobalValueMap.end(); }
   size_t size() const { return GlobalValueMap.size(); }
 
+  const std::vector<uint64_t> &stackIds() const { return StackIds; }
+
+  unsigned addOrGetStackIdIndex(uint64_t StackId) {
+    auto Inserted = StackIdToIndex.insert({StackId, StackIds.size()});
+    if (Inserted.second)
+      StackIds.push_back(StackId);
+    return Inserted.first->second;
+  }
+
+  uint64_t getStackIdAtIndex(unsigned Index) const {
+    assert(StackIds.size() > Index);
+    return StackIds[Index];
+  }
+
+  // Facility to release memory from data structures only needed during index
+  // construction (including while building combined index). Currently this only
+  // releases the temporary map used while constructing a correspondence between
+  // stack ids and their index in the StackIds vector. Mostly impactful when
+  // building a large combined index.
+  void releaseTemporaryMemory() {
+    assert(StackIdToIndex.size() == StackIds.size());
+    StackIdToIndex.clear();
+    StackIds.shrink_to_fit();
+  }
+
   /// Convenience function for doing a DFS on a ValueInfo. Marks the function in
   /// the FunctionHasParent map.
   static void discoverNodes(ValueInfo V,
@@ -1135,7 +1532,7 @@ public:
         dyn_cast<FunctionSummary>(V.getSummaryList().front().get());
     assert(F != nullptr && "Expected FunctionSummary node");
 
-    for (auto &C : F->calls()) {
+    for (const auto &C : F->calls()) {
       // Insert node if necessary
       auto S = FunctionHasParent.emplace(C.first, true);
 
@@ -1165,19 +1562,14 @@ public:
       discoverNodes(ValueInfo(HaveGVs, &S), FunctionHasParent);
     }
 
-    std::vector<FunctionSummary::EdgeTy> Edges;
+    SmallVector<FunctionSummary::EdgeTy, 0> Edges;
     // create edges to all roots in the Index
     for (auto &P : FunctionHasParent) {
       if (P.second)
         continue; // skip over non-root nodes
       Edges.push_back(std::make_pair(P.first, CalleeInfo{}));
     }
-    if (Edges.empty()) {
-      // Failed to find root - return an empty node
-      return FunctionSummary::makeDummyFunctionSummary({});
-    }
-    auto CallGraphRoot = FunctionSummary::makeDummyFunctionSummary(Edges);
-    return CallGraphRoot;
+    return FunctionSummary::makeDummyFunctionSummary(std::move(Edges));
   }
 
   bool withGlobalValueDeadStripping() const {
@@ -1192,6 +1584,12 @@ public:
     WithAttributePropagation = true;
   }
 
+  bool withDSOLocalPropagation() const { return WithDSOLocalPropagation; }
+  void setWithDSOLocalPropagation() { WithDSOLocalPropagation = true; }
+
+  bool withWholeProgramVisibility() const { return WithWholeProgramVisibility; }
+  void setWithWholeProgramVisibility() { WithWholeProgramVisibility = true; }
+
   bool isReadOnly(const GlobalVarSummary *GVS) const {
     return WithAttributePropagation && GVS->maybeReadOnly();
   }
@@ -1199,8 +1597,8 @@ public:
     return WithAttributePropagation && GVS->maybeWriteOnly();
   }
 
-  bool hasSyntheticEntryCounts() const { return HasSyntheticEntryCounts; }
-  void setHasSyntheticEntryCounts() { HasSyntheticEntryCounts = true; }
+  bool withSupportsHotColdNew() const { return WithSupportsHotColdNew; }
+  void setWithSupportsHotColdNew() { WithSupportsHotColdNew = true; }
 
   bool skipModuleByDistributedBackend() const {
     return SkipModuleByDistributedBackend;
@@ -1211,6 +1609,9 @@ public:
 
   bool enableSplitLTOUnit() const { return EnableSplitLTOUnit; }
   void setEnableSplitLTOUnit() { EnableSplitLTOUnit = true; }
+
+  bool hasUnifiedLTO() const { return UnifiedLTO; }
+  void setUnifiedLTO() { UnifiedLTO = true; }
 
   bool partiallySplitLTOUnits() const { return PartiallySplitLTOUnits; }
   void setPartiallySplitLTOUnits() { PartiallySplitLTOUnits = true; }
@@ -1266,11 +1667,19 @@ public:
     return I == OidGuidMap.end() ? 0 : I->second;
   }
 
-  std::set<std::string> &cfiFunctionDefs() { return CfiFunctionDefs; }
-  const std::set<std::string> &cfiFunctionDefs() const { return CfiFunctionDefs; }
+  std::set<std::string, std::less<>> &cfiFunctionDefs() {
+    return CfiFunctionDefs;
+  }
+  const std::set<std::string, std::less<>> &cfiFunctionDefs() const {
+    return CfiFunctionDefs;
+  }
 
-  std::set<std::string> &cfiFunctionDecls() { return CfiFunctionDecls; }
-  const std::set<std::string> &cfiFunctionDecls() const { return CfiFunctionDecls; }
+  std::set<std::string, std::less<>> &cfiFunctionDecls() {
+    return CfiFunctionDecls;
+  }
+  const std::set<std::string, std::less<>> &cfiFunctionDecls() const {
+    return CfiFunctionDecls;
+  }
 
   /// Add a global value summary for a value.
   void addGlobalValueSummary(const GlobalValue &GV,
@@ -1302,10 +1711,9 @@ public:
                        GlobalValue::GUID OrigGUID) {
     if (OrigGUID == 0 || ValueGUID == OrigGUID)
       return;
-    if (OidGuidMap.count(OrigGUID) && OidGuidMap[OrigGUID] != ValueGUID)
-      OidGuidMap[OrigGUID] = 0;
-    else
-      OidGuidMap[OrigGUID] = ValueGUID;
+    auto [It, Inserted] = OidGuidMap.try_emplace(OrigGUID, ValueGUID);
+    if (!Inserted && It->second != ValueGUID)
+      It->second = 0;
   }
 
   /// Find the summary for ValueInfo \p VI in module \p ModuleId, or nullptr if
@@ -1347,35 +1755,33 @@ public:
                                             bool PerModuleIndex = true) const;
 
   /// Table of modules, containing module hash and id.
-  const StringMap<std::pair<uint64_t, ModuleHash>> &modulePaths() const {
+  const StringMap<ModuleHash> &modulePaths() const {
     return ModulePathStringTable;
   }
 
   /// Table of modules, containing hash and id.
-  StringMap<std::pair<uint64_t, ModuleHash>> &modulePaths() {
-    return ModulePathStringTable;
-  }
-
-  /// Get the module ID recorded for the given module path.
-  uint64_t getModuleId(const StringRef ModPath) const {
-    return ModulePathStringTable.lookup(ModPath).first;
-  }
+  StringMap<ModuleHash> &modulePaths() { return ModulePathStringTable; }
 
   /// Get the module SHA1 hash recorded for the given module path.
   const ModuleHash &getModuleHash(const StringRef ModPath) const {
     auto It = ModulePathStringTable.find(ModPath);
     assert(It != ModulePathStringTable.end() && "Module not registered");
-    return It->second.second;
+    return It->second;
   }
 
   /// Convenience method for creating a promoted global name
   /// for the given value name of a local, and its original module's ID.
   static std::string getGlobalNameForLocal(StringRef Name, ModuleHash ModHash) {
+    std::string Suffix = utostr((uint64_t(ModHash[0]) << 32) |
+                                ModHash[1]); // Take the first 64 bits
+    return getGlobalNameForLocal(Name, Suffix);
+  }
+
+  static std::string getGlobalNameForLocal(StringRef Name, StringRef Suffix) {
     SmallString<256> NewName(Name);
     NewName += ".llvm.";
-    NewName += utostr((uint64_t(ModHash[0]) << 32) |
-                      ModHash[1]); // Take the first 64 bits
-    return std::string(NewName.str());
+    NewName += Suffix;
+    return std::string(NewName);
   }
 
   /// Helper to obtain the unpromoted name for a global value (or the original
@@ -1391,13 +1797,19 @@ public:
 
   /// Add a new module with the given \p Hash, mapped to the given \p
   /// ModID, and return a reference to the module.
-  ModuleInfo *addModule(StringRef ModPath, uint64_t ModId,
-                        ModuleHash Hash = ModuleHash{{0}}) {
-    return &*ModulePathStringTable.insert({ModPath, {ModId, Hash}}).first;
+  ModuleInfo *addModule(StringRef ModPath, ModuleHash Hash = ModuleHash{{0}}) {
+    return &*ModulePathStringTable.insert({ModPath, Hash}).first;
   }
 
   /// Return module entry for module with the given \p ModPath.
   ModuleInfo *getModule(StringRef ModPath) {
+    auto It = ModulePathStringTable.find(ModPath);
+    assert(It != ModulePathStringTable.end() && "Module not registered");
+    return &*It;
+  }
+
+  /// Return module entry for module with the given \p ModPath.
+  const ModuleInfo *getModule(StringRef ModPath) const {
     auto It = ModulePathStringTable.find(ModPath);
     assert(It != ModulePathStringTable.end() && "Module not registered");
     return &*It;
@@ -1417,11 +1829,11 @@ public:
   /// the ThinLTO backends.
   TypeIdSummary &getOrInsertTypeIdSummary(StringRef TypeId) {
     auto TidIter = TypeIdMap.equal_range(GlobalValue::getGUID(TypeId));
-    for (auto It = TidIter.first; It != TidIter.second; ++It)
-      if (It->second.first == TypeId)
-        return It->second.second;
-    auto It = TypeIdMap.insert(
-        {GlobalValue::getGUID(TypeId), {std::string(TypeId), TypeIdSummary()}});
+    for (auto &[GUID, TypeIdPair] : make_range(TidIter))
+      if (TypeIdPair.first == TypeId)
+        return TypeIdPair.second;
+    auto It = TypeIdMap.insert({GlobalValue::getGUID(TypeId),
+                                {TypeIdSaver.save(TypeId), TypeIdSummary()}});
     return It->second.second;
   }
 
@@ -1429,9 +1841,9 @@ public:
   /// summary map) or null (if not present). This may be used when importing.
   const TypeIdSummary *getTypeIdSummary(StringRef TypeId) const {
     auto TidIter = TypeIdMap.equal_range(GlobalValue::getGUID(TypeId));
-    for (auto It = TidIter.first; It != TidIter.second; ++It)
-      if (It->second.first == TypeId)
-        return &It->second.second;
+    for (const auto &[GUID, TypeIdPair] : make_range(TidIter))
+      if (TypeIdPair.first == TypeId)
+        return &TypeIdPair.second;
     return nullptr;
   }
 
@@ -1450,16 +1862,16 @@ public:
   /// the ThinLTO backends.
   TypeIdCompatibleVtableInfo &
   getOrInsertTypeIdCompatibleVtableSummary(StringRef TypeId) {
-    return TypeIdCompatibleVtableMap[std::string(TypeId)];
+    return TypeIdCompatibleVtableMap[TypeIdSaver.save(TypeId)];
   }
 
   /// For the given \p TypeId, this returns the TypeIdCompatibleVtableMap
   /// entry if present in the summary map. This may be used when importing.
-  Optional<TypeIdCompatibleVtableInfo>
+  std::optional<TypeIdCompatibleVtableInfo>
   getTypeIdCompatibleVtableSummary(StringRef TypeId) const {
     auto I = TypeIdCompatibleVtableMap.find(TypeId);
     if (I == TypeIdCompatibleVtableMap.end())
-      return None;
+      return std::nullopt;
     return I->second;
   }
 
@@ -1473,9 +1885,9 @@ public:
   template <class Map>
   void
   collectDefinedGVSummariesPerModule(Map &ModuleToDefinedGVSummaries) const {
-    for (auto &GlobalList : *this) {
+    for (const auto &GlobalList : *this) {
       auto GUID = GlobalList.first;
-      for (auto &Summary : GlobalList.second.SummaryList) {
+      for (const auto &Summary : GlobalList.second.SummaryList) {
         ModuleToDefinedGVSummaries[Summary->modulePath()][GUID] = Summary.get();
       }
     }
@@ -1495,11 +1907,16 @@ public:
   /// Print out strongly connected components for debugging.
   void dumpSCCs(raw_ostream &OS);
 
-  /// Analyze index and detect unmodified globals
+  /// Do the access attribute and DSOLocal propagation in combined index.
   void propagateAttributes(const DenseSet<GlobalValue::GUID> &PreservedSymbols);
 
   /// Checks if we can import global variable from another module.
-  bool canImportGlobalVar(GlobalValueSummary *S, bool AnalyzeRefs) const;
+  bool canImportGlobalVar(const GlobalValueSummary *S, bool AnalyzeRefs) const;
+
+  /// Same as above but checks whether the global var is importable as a
+  /// declaration.
+  bool canImportGlobalVar(const GlobalValueSummary *S, bool AnalyzeRefs,
+                          bool &CanImportDecl) const;
 };
 
 /// GraphTraits definition to build SCC for the index
@@ -1511,10 +1928,11 @@ template <> struct GraphTraits<ValueInfo> {
     return P.first;
   }
   using ChildIteratorType =
-      mapped_iterator<std::vector<FunctionSummary::EdgeTy>::iterator,
+      mapped_iterator<SmallVector<FunctionSummary::EdgeTy, 0>::iterator,
                       decltype(&valueInfoFromEdge)>;
 
-  using ChildEdgeIteratorType = std::vector<FunctionSummary::EdgeTy>::iterator;
+  using ChildEdgeIteratorType =
+      SmallVector<FunctionSummary::EdgeTy, 0>::iterator;
 
   static NodeRef getEntryNode(ValueInfo V) { return V; }
 

@@ -9,6 +9,7 @@
 #include "Annotations.h"
 #include "DumpAST.h"
 #include "TestTU.h"
+#include "clang/AST/ASTTypeTraits.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -16,7 +17,11 @@
 namespace clang {
 namespace clangd {
 namespace {
+using testing::Contains;
+using testing::Not;
 using testing::SizeIs;
+
+MATCHER_P(withDetail, str, "") { return arg.detail == str; }
 
 TEST(DumpASTTests, BasicInfo) {
   std::pair</*Code=*/std::string, /*Expected=*/std::string> Cases[] = {
@@ -44,6 +49,41 @@ declaration: Function - root
       )"},
       {R"cpp(
 namespace root {
+struct S { static const int x = 0; ~S(); };
+int y = S::x + root::S().x;
+}
+      )cpp",
+       R"(
+declaration: Namespace - root
+  declaration: CXXRecord - S
+    declaration: Var - x
+      type: Qualified - const
+        type: Builtin - int
+      expression: IntegerLiteral - 0
+    declaration: CXXDestructor
+      type: Record - S
+      type: FunctionProto
+        type: Builtin - void
+    declaration: CXXConstructor
+    declaration: CXXConstructor
+  declaration: Var - y
+    type: Builtin - int
+    expression: ExprWithCleanups
+      expression: BinaryOperator - +
+        expression: ImplicitCast - LValueToRValue
+          expression: DeclRef - x
+            specifier: TypeSpec
+              type: Record - S
+        expression: ImplicitCast - LValueToRValue
+          expression: Member - x
+            expression: CXXBindTemporary
+              expression: CXXTemporaryObject - S
+                type: Elaborated
+                  specifier: Namespace - root::
+                  type: Record - S
+      )"},
+      {R"cpp(
+namespace root {
 struct S { static const int x = 0; };
 int y = S::x + root::S().x;
 }
@@ -61,19 +101,17 @@ declaration: Namespace - root
     declaration: CXXDestructor
   declaration: Var - y
     type: Builtin - int
-    expression: ExprWithCleanups
-      expression: BinaryOperator - +
-        expression: ImplicitCast - LValueToRValue
-          expression: DeclRef - x
-            specifier: TypeSpec
+    expression: BinaryOperator - +
+      expression: ImplicitCast - LValueToRValue
+        expression: DeclRef - x
+          specifier: TypeSpec
+            type: Record - S
+      expression: ImplicitCast - LValueToRValue
+        expression: Member - x
+          expression: CXXTemporaryObject - S
+            type: Elaborated
+              specifier: Namespace - root::
               type: Record - S
-        expression: ImplicitCast - LValueToRValue
-          expression: Member - x
-            expression: MaterializeTemporary - rvalue
-              expression: CXXTemporaryObject - S
-                type: Elaborated
-                  specifier: Namespace - root::
-                  type: Record - S
       )"},
       {R"cpp(
 namespace root {
@@ -116,7 +154,8 @@ declaration: Var - root
         expression: DeclRef - operator+
       expression: MaterializeTemporary - lvalue
         expression: CXXTemporaryObject - Foo
-          type: Record - Foo
+          type: Elaborated
+            type: Record - Foo
       expression: IntegerLiteral - 42
       )"},
       {R"cpp(
@@ -157,6 +196,19 @@ TEST(DumpASTTests, Range) {
   EXPECT_EQ(Node.children.front().range, Case.range("type"));
 }
 
+TEST(DumpASTTests, NoRange) {
+  auto TU = TestTU::withHeaderCode("void funcFromHeader();");
+  TU.Code = "int varFromSource;";
+  ParsedAST AST = TU.build();
+  auto Node = dumpAST(
+      DynTypedNode::create(*AST.getASTContext().getTranslationUnitDecl()),
+      AST.getTokens(), AST.getASTContext());
+  ASSERT_THAT(Node.children, Contains(withDetail("varFromSource")));
+  ASSERT_THAT(Node.children, Not(Contains(withDetail("funcFromHeader"))));
+  EXPECT_THAT(Node.arcana, testing::StartsWith("TranslationUnitDecl "));
+  ASSERT_FALSE(Node.range) << "Expected no range for translation unit";
+}
+
 TEST(DumpASTTests, Arcana) {
   ParsedAST AST = TestTU::withCode("int x;").build();
   auto Node = dumpAST(DynTypedNode::create(findDecl(AST, "x")), AST.getTokens(),
@@ -165,6 +217,17 @@ TEST(DumpASTTests, Arcana) {
   EXPECT_THAT(Node.arcana, testing::EndsWith(" 'int'"));
   ASSERT_THAT(Node.children, SizeIs(1)) << "Expected one child typeloc";
   EXPECT_THAT(Node.children.front().arcana, testing::StartsWith("QualType "));
+}
+
+TEST(DumpASTTests, UnbalancedBraces) {
+  // Test that we don't crash while trying to compute a source range for the
+  // node whose ending brace is missing, and also that the source range is
+  // not empty.
+  Annotations Case("/*error-ok*/ $func[[int main() {]]");
+  ParsedAST AST = TestTU::withCode(Case.code()).build();
+  auto Node = dumpAST(DynTypedNode::create(findDecl(AST, "main")),
+                      AST.getTokens(), AST.getASTContext());
+  ASSERT_EQ(Node.range, Case.range("func"));
 }
 
 } // namespace

@@ -1,41 +1,20 @@
 // REQUIRES: x86-registered-target
-// RUN: %clang_cc1 -fno-experimental-new-pass-manager -triple x86_64-unknown-unknown -S -finstrument-functions -O2 -o - %s | FileCheck %s
-// RUN: %clang_cc1 -fno-experimental-new-pass-manager -triple x86_64-unknown-unknown -S -finstrument-functions-after-inlining -O2 -o - %s | FileCheck -check-prefix=NOINLINE %s
+// RUN: %clang_cc1 -disable-llvm-passes -triple x86_64-unknown-unknown -finstrument-functions -O0 -o - -emit-llvm %s | FileCheck %s
+// RUN: %clang_cc1 -disable-llvm-passes -triple x86_64-unknown-unknown -finstrument-functions -O2 -o - -emit-llvm %s | FileCheck %s
+// RUN: %clang_cc1 -disable-llvm-passes -triple x86_64-unknown-unknown -finstrument-functions-after-inlining -O2 -o - -emit-llvm %s | FileCheck -check-prefix=NOINLINE %s
 
-// RUN: %clang_cc1 -fexperimental-new-pass-manager -triple x86_64-unknown-unknown -S -finstrument-functions -O2 -o - %s | FileCheck %s
-// RUN: %clang_cc1 -fexperimental-new-pass-manager -triple x86_64-unknown-unknown -S -finstrument-functions-after-inlining -O2 -o - %s | FileCheck -check-prefix=NOINLINE %s
-
-// It's not so nice having asm tests in Clang, but we need to check that we set
-// up the pipeline correctly in order to have the instrumentation inserted.
-
-int leaf(int x) {
+__attribute__((always_inline)) int leaf(int x) {
   return x;
-// CHECK-LABEL: leaf:
-// CHECK: callq __cyg_profile_func_enter
-// CHECK-NOT: cyg_profile
-// CHECK: callq __cyg_profile_func_exit
-// CHECK-NOT: cyg_profile
-// CHECK: ret
+// CHECK-LABEL: define {{.*}} @leaf(i32 noundef %x) #0 {
 }
 
 int root(int x) {
   return leaf(x);
-// CHECK-LABEL: root:
-// CHECK: callq __cyg_profile_func_enter
-// CHECK-NOT: cyg_profile
-
-// Inlined from leaf():
-// CHECK: callq __cyg_profile_func_enter
-// CHECK-NOT: cyg_profile
-// CHECK: callq __cyg_profile_func_exit
-
-// CHECK-NOT: cyg_profile
-// CHECK: callq __cyg_profile_func_exit
-// CHECK: ret
-
-// NOINLINE-LABEL: root:
-// NOINLINE: callq __cyg_profile_func_enter
-// NOINLINE-NOT: cyg_profile
-// NOINLINE: callq __cyg_profile_func_exit
-// NOINLINE: ret
+// CHECK-LABEL: define {{.*}} @root(i32 noundef %x) #1 {
+// NOINLINE-LABEL: define {{.*}} @root(i32 noundef %x) #1 {
 }
+
+// CHECK: attributes #0 = { {{.*}}"instrument-function-entry"="__cyg_profile_func_enter" "instrument-function-exit"="__cyg_profile_func_exit"
+// CHECK: attributes #1 = { {{.*}}"instrument-function-entry"="__cyg_profile_func_enter" "instrument-function-exit"="__cyg_profile_func_exit"
+// NOINLINE: attributes #0 = { {{.*}}"instrument-function-entry-inlined"="__cyg_profile_func_enter" "instrument-function-exit-inlined"="__cyg_profile_func_exit"
+// NOINLINE: attributes #1 = { {{.*}}"instrument-function-entry-inlined"="__cyg_profile_func_enter" "instrument-function-exit-inlined"="__cyg_profile_func_exit"

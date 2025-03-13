@@ -6,7 +6,7 @@
 // CHECK-CXX2A-DAG: @_ZN7PR422765State1mE = linkonce_odr constant [2 x { i64, i64 }] [{ {{.*}} @_ZN7PR422765State2f1Ev {{.*}}, i64 0 }, { {{.*}} @_ZN7PR422765State2f2Ev {{.*}}, i64 0 }], comdat
 
 struct A { int x, y[2]; int arr[3]; };
-// CHECK-LABEL: define i32 @_Z1fi(
+// CHECK-LABEL: define{{.*}} i32 @_Z1fi(
 int f(int i) {
   // CHECK: call void {{.*}}memcpy{{.*}}({{.*}}, {{.*}} @__const._Z1fi.a
   constexpr A a = {1, 2, 3, 4, 5, 6};
@@ -15,15 +15,14 @@ int f(int i) {
   return [] (int n, int A::*p) {
     // CHECK: br i1
     return (n >= 0
-      // CHECK: getelementptr inbounds [3 x i32], [3 x i32]* getelementptr inbounds ({{.*}} @__const._Z1fi.a, i32 0, i32 2), i64 0, i64 %
+      // CHECK: getelementptr inbounds [3 x i32], ptr getelementptr inbounds nuw ({{.*}} @__const._Z1fi.a, i32 0, i32 2), i64 0, i64 %
       ? a.arr[n]
       // CHECK: br i1
       : (n == -1
-        // CHECK: getelementptr inbounds i8, i8* bitcast ({{.*}} @__const._Z1fi.a to i8*), i64 %
-        // CHECK: bitcast i8* %{{.*}} to i32*
+        // CHECK: getelementptr inbounds i8, ptr @__const._Z1fi.a, i64 %
         // CHECK: load i32
         ? a.*p
-        // CHECK: getelementptr inbounds [2 x i32], [2 x i32]* getelementptr inbounds ({{.*}} @__const._Z1fi.a, i32 0, i32 1), i64 0, i64 %
+        // CHECK: getelementptr inbounds [2 x i32], ptr getelementptr inbounds nuw ({{.*}} @__const._Z1fi.a, i32 0, i32 1), i64 0, i64 %
         // CHECK: load i32
         : a.y[2 - n]));
   }(i, &A::x);
@@ -36,11 +35,11 @@ namespace PR42276 {
     using l = void (State::*)();
     static constexpr l m[]{&State::f1, &State::f2};
   };
-  // CHECK-LABEL: define void @_ZN7PR422765State16syncDirtyObjectsEv(
+  // CHECK-LABEL: define{{.*}} void @_ZN7PR422765State16syncDirtyObjectsEv(
   void State::syncDirtyObjects() {
     for (int i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
-      // CHECK-CXX11: getelementptr inbounds [2 x { i64, i64 }], [2 x { i64, i64 }]* @_ZN7PR422765State1mE.const, i64 0, i64 %
-      // CHECK-CXX2A: getelementptr inbounds [2 x { i64, i64 }], [2 x { i64, i64 }]* @_ZN7PR422765State1mE, i64 0, i64 %
+      // CHECK-CXX11: getelementptr inbounds [2 x { i64, i64 }], ptr @_ZN7PR422765State1mE.const, i64 0, i64 %
+      // CHECK-CXX2A: getelementptr inbounds [2 x { i64, i64 }], ptr @_ZN7PR422765State1mE, i64 0, i64 %
       (this->*m[i])();
   }
 }

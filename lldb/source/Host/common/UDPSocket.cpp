@@ -9,6 +9,7 @@
 #include "lldb/Host/common/UDPSocket.h"
 
 #include "lldb/Host/Config.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 
 #if LLDB_ENABLE_POSIX
@@ -21,20 +22,17 @@
 using namespace lldb;
 using namespace lldb_private;
 
-namespace {
-
-const int kDomain = AF_INET;
-const int kType = SOCK_DGRAM;
+static const int kDomain = AF_INET;
+static const int kType = SOCK_DGRAM;
 
 static const char *g_not_supported_error = "Not supported";
-}
 
-UDPSocket::UDPSocket(NativeSocket socket) : Socket(ProtocolUdp, true, true) {
+UDPSocket::UDPSocket(NativeSocket socket)
+    : Socket(ProtocolUdp, /*should_close=*/true) {
   m_socket = socket;
 }
 
-UDPSocket::UDPSocket(bool should_close, bool child_processes_inherit)
-    : Socket(ProtocolUdp, should_close, child_processes_inherit) {}
+UDPSocket::UDPSocket(bool should_close) : Socket(ProtocolUdp, should_close) {}
 
 size_t UDPSocket::Send(const void *buf, const size_t num_bytes) {
   return ::sendto(m_socket, static_cast<const char *>(buf), num_bytes, 0,
@@ -42,30 +40,24 @@ size_t UDPSocket::Send(const void *buf, const size_t num_bytes) {
 }
 
 Status UDPSocket::Connect(llvm::StringRef name) {
-  return Status("%s", g_not_supported_error);
+  return Status::FromErrorStringWithFormat("%s", g_not_supported_error);
 }
 
 Status UDPSocket::Listen(llvm::StringRef name, int backlog) {
-  return Status("%s", g_not_supported_error);
-}
-
-Status UDPSocket::Accept(Socket *&socket) {
-  return Status("%s", g_not_supported_error);
+  return Status::FromErrorStringWithFormat("%s", g_not_supported_error);
 }
 
 llvm::Expected<std::unique_ptr<UDPSocket>>
-UDPSocket::Connect(llvm::StringRef name, bool child_processes_inherit) {
+UDPSocket::CreateConnected(llvm::StringRef name) {
   std::unique_ptr<UDPSocket> socket;
 
-  Log *log(lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_CONNECTION));
+  Log *log = GetLog(LLDBLog::Connection);
   LLDB_LOG(log, "host/port = {0}", name);
 
   Status error;
-  std::string host_str;
-  std::string port_str;
-  int32_t port = INT32_MIN;
-  if (!DecodeHostAndPort(name, host_str, port_str, port, &error))
-    return error.ToError();
+  llvm::Expected<HostAndPort> host_port = DecodeHostAndPort(name);
+  if (!host_port)
+    return host_port.takeError();
 
   // At this point we have setup the receive port, now we need to setup the UDP
   // send socket
@@ -76,25 +68,25 @@ UDPSocket::Connect(llvm::StringRef name, bool child_processes_inherit) {
   ::memset(&hints, 0, sizeof(hints));
   hints.ai_family = kDomain;
   hints.ai_socktype = kType;
-  int err = ::getaddrinfo(host_str.c_str(), port_str.c_str(), &hints,
+  int err = ::getaddrinfo(host_port->hostname.c_str(), std::to_string(host_port->port).c_str(), &hints,
                           &service_info_list);
   if (err != 0) {
-    error.SetErrorStringWithFormat(
+    error = Status::FromErrorStringWithFormat(
 #if defined(_WIN32) && defined(UNICODE)
-        "getaddrinfo(%s, %s, &hints, &info) returned error %i (%S)",
+        "getaddrinfo(%s, %d, &hints, &info) returned error %i (%S)",
 #else
-        "getaddrinfo(%s, %s, &hints, &info) returned error %i (%s)",
+        "getaddrinfo(%s, %d, &hints, &info) returned error %i (%s)",
 #endif
-        host_str.c_str(), port_str.c_str(), err, gai_strerror(err));
+        host_port->hostname.c_str(), host_port->port, err, gai_strerror(err));
     return error.ToError();
   }
 
   for (struct addrinfo *service_info_ptr = service_info_list;
        service_info_ptr != nullptr;
        service_info_ptr = service_info_ptr->ai_next) {
-    auto send_fd = CreateSocket(
-        service_info_ptr->ai_family, service_info_ptr->ai_socktype,
-        service_info_ptr->ai_protocol, child_processes_inherit, error);
+    auto send_fd =
+        CreateSocket(service_info_ptr->ai_family, service_info_ptr->ai_socktype,
+                     service_info_ptr->ai_protocol, error);
     if (error.Success()) {
       socket.reset(new UDPSocket(send_fd));
       socket->m_sockaddr = service_info_ptr;
@@ -112,12 +104,12 @@ UDPSocket::Connect(llvm::StringRef name, bool child_processes_inherit) {
 
   // Only bind to the loopback address if we are expecting a connection from
   // localhost to avoid any firewall issues.
-  const bool bind_addr_success = (host_str == "127.0.0.1" || host_str == "localhost")
-                                     ? bind_addr.SetToLocalhost(kDomain, port)
-                                     : bind_addr.SetToAnyAddress(kDomain, port);
+  const bool bind_addr_success = (host_port->hostname == "127.0.0.1" || host_port->hostname == "localhost")
+                                     ? bind_addr.SetToLocalhost(kDomain, host_port->port)
+                                     : bind_addr.SetToAnyAddress(kDomain, host_port->port);
 
   if (!bind_addr_success) {
-    error.SetErrorString("Failed to get hostspec to bind for");
+    error = Status::FromErrorString("Failed to get hostspec to bind for");
     return error.ToError();
   }
 

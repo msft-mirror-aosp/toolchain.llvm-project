@@ -7,7 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/Config/mlir-config.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Iterators.h"
+#include "mlir/IR/RegionKindInterface.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 using namespace mlir;
 
@@ -29,23 +33,49 @@ unsigned short PatternBenefit::getBenefit() const {
 // Pattern
 //===----------------------------------------------------------------------===//
 
+//===----------------------------------------------------------------------===//
+// OperationName Root Constructors
+
 Pattern::Pattern(StringRef rootName, PatternBenefit benefit,
+                 MLIRContext *context, ArrayRef<StringRef> generatedNames)
+    : Pattern(OperationName(rootName, context).getAsOpaquePointer(),
+              RootKind::OperationName, generatedNames, benefit, context) {}
+
+//===----------------------------------------------------------------------===//
+// MatchAnyOpTypeTag Root Constructors
+
+Pattern::Pattern(MatchAnyOpTypeTag tag, PatternBenefit benefit,
+                 MLIRContext *context, ArrayRef<StringRef> generatedNames)
+    : Pattern(nullptr, RootKind::Any, generatedNames, benefit, context) {}
+
+//===----------------------------------------------------------------------===//
+// MatchInterfaceOpTypeTag Root Constructors
+
+Pattern::Pattern(MatchInterfaceOpTypeTag tag, TypeID interfaceID,
+                 PatternBenefit benefit, MLIRContext *context,
+                 ArrayRef<StringRef> generatedNames)
+    : Pattern(interfaceID.getAsOpaquePointer(), RootKind::InterfaceID,
+              generatedNames, benefit, context) {}
+
+//===----------------------------------------------------------------------===//
+// MatchTraitOpTypeTag Root Constructors
+
+Pattern::Pattern(MatchTraitOpTypeTag tag, TypeID traitID,
+                 PatternBenefit benefit, MLIRContext *context,
+                 ArrayRef<StringRef> generatedNames)
+    : Pattern(traitID.getAsOpaquePointer(), RootKind::TraitID, generatedNames,
+              benefit, context) {}
+
+//===----------------------------------------------------------------------===//
+// General Constructors
+
+Pattern::Pattern(const void *rootValue, RootKind rootKind,
+                 ArrayRef<StringRef> generatedNames, PatternBenefit benefit,
                  MLIRContext *context)
-    : rootKind(OperationName(rootName, context)), benefit(benefit) {}
-Pattern::Pattern(PatternBenefit benefit, MatchAnyOpTypeTag tag)
-    : benefit(benefit) {}
-Pattern::Pattern(StringRef rootName, ArrayRef<StringRef> generatedNames,
-                 PatternBenefit benefit, MLIRContext *context)
-    : Pattern(rootName, benefit, context) {
-  generatedOps.reserve(generatedNames.size());
-  std::transform(generatedNames.begin(), generatedNames.end(),
-                 std::back_inserter(generatedOps), [context](StringRef name) {
-                   return OperationName(name, context);
-                 });
-}
-Pattern::Pattern(ArrayRef<StringRef> generatedNames, PatternBenefit benefit,
-                 MLIRContext *context, MatchAnyOpTypeTag tag)
-    : Pattern(benefit, tag) {
+    : rootValue(rootValue), rootKind(rootKind), benefit(benefit),
+      contextAndHasBoundedRecursion(context, false) {
+  if (generatedNames.empty())
+    return;
   generatedOps.reserve(generatedNames.size());
   std::transform(generatedNames.begin(), generatedNames.end(),
                  std::back_inserter(generatedOps), [context](StringRef name) {
@@ -70,211 +100,326 @@ LogicalResult RewritePattern::match(Operation *op) const {
 void RewritePattern::anchor() {}
 
 //===----------------------------------------------------------------------===//
-// PDLValue
+// RewriterBase
 //===----------------------------------------------------------------------===//
 
-void PDLValue::print(raw_ostream &os) {
-  if (!impl) {
-    os << "<Null-PDLValue>";
-    return;
-  }
-  if (Value val = impl.dyn_cast<Value>()) {
-    os << val;
-    return;
-  }
-  AttrOpTypeImplT aotImpl = impl.get<AttrOpTypeImplT>();
-  if (Attribute attr = aotImpl.dyn_cast<Attribute>())
-    os << attr;
-  else if (Operation *op = aotImpl.dyn_cast<Operation *>())
-    os << *op;
-  else
-    os << aotImpl.get<Type>();
+bool RewriterBase::Listener::classof(const OpBuilder::Listener *base) {
+  return base->getKind() == OpBuilder::ListenerBase::Kind::RewriterBaseListener;
 }
 
-//===----------------------------------------------------------------------===//
-// PDLPatternModule
-//===----------------------------------------------------------------------===//
-
-void PDLPatternModule::mergeIn(PDLPatternModule &&other) {
-  // Ignore the other module if it has no patterns.
-  if (!other.pdlModule)
-    return;
-  // Steal the other state if we have no patterns.
-  if (!pdlModule) {
-    constraintFunctions = std::move(other.constraintFunctions);
-    createFunctions = std::move(other.createFunctions);
-    rewriteFunctions = std::move(other.rewriteFunctions);
-    pdlModule = std::move(other.pdlModule);
-    return;
-  }
-  // Steal the functions of the other module.
-  for (auto &it : constraintFunctions)
-    registerConstraintFunction(it.first(), std::move(it.second));
-  for (auto &it : createFunctions)
-    registerCreateFunction(it.first(), std::move(it.second));
-  for (auto &it : rewriteFunctions)
-    registerRewriteFunction(it.first(), std::move(it.second));
-
-  // Merge the pattern operations from the other module into this one.
-  Block *block = pdlModule->getBody();
-  block->getTerminator()->erase();
-  block->getOperations().splice(block->end(),
-                                other.pdlModule->getBody()->getOperations());
-}
-
-//===----------------------------------------------------------------------===//
-// Function Registry
-
-void PDLPatternModule::registerConstraintFunction(
-    StringRef name, PDLConstraintFunction constraintFn) {
-  auto it = constraintFunctions.try_emplace(name, std::move(constraintFn));
-  (void)it;
-  assert(it.second &&
-         "constraint with the given name has already been registered");
-}
-void PDLPatternModule::registerCreateFunction(StringRef name,
-                                              PDLCreateFunction createFn) {
-  auto it = createFunctions.try_emplace(name, std::move(createFn));
-  (void)it;
-  assert(it.second && "native create function with the given name has "
-                      "already been registered");
-}
-void PDLPatternModule::registerRewriteFunction(StringRef name,
-                                               PDLRewriteFunction rewriteFn) {
-  auto it = rewriteFunctions.try_emplace(name, std::move(rewriteFn));
-  (void)it;
-  assert(it.second && "native rewrite function with the given name has "
-                      "already been registered");
-}
-
-//===----------------------------------------------------------------------===//
-// PatternRewriter
-//===----------------------------------------------------------------------===//
-
-PatternRewriter::~PatternRewriter() {
+RewriterBase::~RewriterBase() {
   // Out of line to provide a vtable anchor for the class.
 }
 
-/// This method performs the final replacement for a pattern, where the
-/// results of the operation are updated to use the specified list of SSA
-/// values.
-void PatternRewriter::replaceOp(Operation *op, ValueRange newValues) {
-  // Notify the rewriter subclass that we're about to replace this root.
-  notifyRootReplaced(op);
+void RewriterBase::replaceAllOpUsesWith(Operation *from, ValueRange to) {
+  // Notify the listener that we're about to replace this op.
+  if (auto *rewriteListener = dyn_cast_if_present<Listener>(listener))
+    rewriteListener->notifyOperationReplaced(from, to);
 
+  replaceAllUsesWith(from->getResults(), to);
+}
+
+void RewriterBase::replaceAllOpUsesWith(Operation *from, Operation *to) {
+  // Notify the listener that we're about to replace this op.
+  if (auto *rewriteListener = dyn_cast_if_present<Listener>(listener))
+    rewriteListener->notifyOperationReplaced(from, to);
+
+  replaceAllUsesWith(from->getResults(), to->getResults());
+}
+
+/// This method replaces the results of the operation with the specified list of
+/// values. The number of provided values must match the number of results of
+/// the operation. The replaced op is erased.
+void RewriterBase::replaceOp(Operation *op, ValueRange newValues) {
   assert(op->getNumResults() == newValues.size() &&
          "incorrect # of replacement values");
-  op->replaceAllUsesWith(newValues);
 
-  notifyOperationRemoved(op);
-  op->erase();
+  // Replace all result uses. Also notifies the listener of modifications.
+  replaceAllOpUsesWith(op, newValues);
+
+  // Erase op and notify listener.
+  eraseOp(op);
+}
+
+/// This method replaces the results of the operation with the specified new op
+/// (replacement). The number of results of the two operations must match. The
+/// replaced op is erased.
+void RewriterBase::replaceOp(Operation *op, Operation *newOp) {
+  assert(op && newOp && "expected non-null op");
+  assert(op->getNumResults() == newOp->getNumResults() &&
+         "ops have different number of results");
+
+  // Replace all result uses. Also notifies the listener of modifications.
+  replaceAllOpUsesWith(op, newOp->getResults());
+
+  // Erase op and notify listener.
+  eraseOp(op);
 }
 
 /// This method erases an operation that is known to have no uses. The uses of
 /// the given operation *must* be known to be dead.
-void PatternRewriter::eraseOp(Operation *op) {
+void RewriterBase::eraseOp(Operation *op) {
   assert(op->use_empty() && "expected 'op' to have no uses");
-  notifyOperationRemoved(op);
-  op->erase();
+  auto *rewriteListener = dyn_cast_if_present<Listener>(listener);
+
+  // Fast path: If no listener is attached, the op can be dropped in one go.
+  if (!rewriteListener) {
+    op->erase();
+    return;
+  }
+
+  // Helper function that erases a single op.
+  auto eraseSingleOp = [&](Operation *op) {
+#ifndef NDEBUG
+    // All nested ops should have been erased already.
+    assert(
+        llvm::all_of(op->getRegions(), [&](Region &r) { return r.empty(); }) &&
+        "expected empty regions");
+    // All users should have been erased already if the op is in a region with
+    // SSA dominance.
+    if (!op->use_empty() && op->getParentOp())
+      assert(mayBeGraphRegion(*op->getParentRegion()) &&
+             "expected that op has no uses");
+#endif // NDEBUG
+    rewriteListener->notifyOperationErased(op);
+
+    // Explicitly drop all uses in case the op is in a graph region.
+    op->dropAllUses();
+    op->erase();
+  };
+
+  // Nested ops must be erased one-by-one, so that listeners have a consistent
+  // view of the IR every time a notification is triggered. Users must be
+  // erased before definitions. I.e., post-order, reverse dominance.
+  std::function<void(Operation *)> eraseTree = [&](Operation *op) {
+    // Erase nested ops.
+    for (Region &r : llvm::reverse(op->getRegions())) {
+      // Erase all blocks in the right order. Successors should be erased
+      // before predecessors because successor blocks may use values defined
+      // in predecessor blocks. A post-order traversal of blocks within a
+      // region visits successors before predecessors. Repeat the traversal
+      // until the region is empty. (The block graph could be disconnected.)
+      while (!r.empty()) {
+        SmallVector<Block *> erasedBlocks;
+        // Some blocks may have invalid successor, use a set including nullptr
+        // to avoid null pointer.
+        llvm::SmallPtrSet<Block *, 4> visited{nullptr};
+        for (Block *b : llvm::post_order_ext(&r.front(), visited)) {
+          // Visit ops in reverse order.
+          for (Operation &op :
+               llvm::make_early_inc_range(ReverseIterator::makeIterable(*b)))
+            eraseTree(&op);
+          // Do not erase the block immediately. This is not supprted by the
+          // post_order iterator.
+          erasedBlocks.push_back(b);
+        }
+        for (Block *b : erasedBlocks) {
+          // Explicitly drop all uses in case there is a cycle in the block
+          // graph.
+          for (BlockArgument bbArg : b->getArguments())
+            bbArg.dropAllUses();
+          b->dropAllUses();
+          eraseBlock(b);
+        }
+      }
+    }
+    // Then erase the enclosing op.
+    eraseSingleOp(op);
+  };
+
+  eraseTree(op);
 }
 
-void PatternRewriter::eraseBlock(Block *block) {
+void RewriterBase::eraseBlock(Block *block) {
+  assert(block->use_empty() && "expected 'block' to have no uses");
+
   for (auto &op : llvm::make_early_inc_range(llvm::reverse(*block))) {
     assert(op.use_empty() && "expected 'op' to have no uses");
     eraseOp(&op);
   }
+
+  // Notify the listener that the block is about to be removed.
+  if (auto *rewriteListener = dyn_cast_if_present<Listener>(listener))
+    rewriteListener->notifyBlockErased(block);
+
   block->erase();
 }
 
-/// Merge the operations of block 'source' into the end of block 'dest'.
-/// 'source's predecessors must be empty or only contain 'dest`.
-/// 'argValues' is used to replace the block arguments of 'source' after
-/// merging.
-void PatternRewriter::mergeBlocks(Block *source, Block *dest,
-                                  ValueRange argValues) {
-  assert(llvm::all_of(source->getPredecessors(),
-                      [dest](Block *succ) { return succ == dest; }) &&
-         "expected 'source' to have no predecessors or only 'dest'");
+void RewriterBase::finalizeOpModification(Operation *op) {
+  // Notify the listener that the operation was modified.
+  if (auto *rewriteListener = dyn_cast_if_present<Listener>(listener))
+    rewriteListener->notifyOperationModified(op);
+}
+
+void RewriterBase::replaceAllUsesExcept(
+    Value from, Value to, const SmallPtrSetImpl<Operation *> &preservedUsers) {
+  return replaceUsesWithIf(from, to, [&](OpOperand &use) {
+    Operation *user = use.getOwner();
+    return !preservedUsers.contains(user);
+  });
+}
+
+void RewriterBase::replaceUsesWithIf(Value from, Value to,
+                                     function_ref<bool(OpOperand &)> functor,
+                                     bool *allUsesReplaced) {
+  bool allReplaced = true;
+  for (OpOperand &operand : llvm::make_early_inc_range(from.getUses())) {
+    bool replace = functor(operand);
+    if (replace)
+      modifyOpInPlace(operand.getOwner(), [&]() { operand.set(to); });
+    allReplaced &= replace;
+  }
+  if (allUsesReplaced)
+    *allUsesReplaced = allReplaced;
+}
+
+void RewriterBase::replaceUsesWithIf(ValueRange from, ValueRange to,
+                                     function_ref<bool(OpOperand &)> functor,
+                                     bool *allUsesReplaced) {
+  assert(from.size() == to.size() && "incorrect number of replacements");
+  bool allReplaced = true;
+  for (auto it : llvm::zip_equal(from, to)) {
+    bool r;
+    replaceUsesWithIf(std::get<0>(it), std::get<1>(it), functor,
+                      /*allUsesReplaced=*/&r);
+    allReplaced &= r;
+  }
+  if (allUsesReplaced)
+    *allUsesReplaced = allReplaced;
+}
+
+void RewriterBase::inlineBlockBefore(Block *source, Block *dest,
+                                     Block::iterator before,
+                                     ValueRange argValues) {
   assert(argValues.size() == source->getNumArguments() &&
          "incorrect # of argument replacement values");
 
-  // Replace all of the successor arguments with the provided values.
-  for (auto it : llvm::zip(source->getArguments(), argValues))
-    std::get<0>(it).replaceAllUsesWith(std::get<1>(it));
-
-  // Splice the operations of the 'source' block into the 'dest' block and erase
-  // it.
-  dest->getOperations().splice(dest->end(), source->getOperations());
-  source->dropAllUses();
-  source->erase();
-}
-
-// Merge the operations of block 'source' before the operation 'op'. Source
-// block should not have existing predecessors or successors.
-void PatternRewriter::mergeBlockBefore(Block *source, Operation *op,
-                                       ValueRange argValues) {
+  // The source block will be deleted, so it should not have any users (i.e.,
+  // there should be no predecessors).
   assert(source->hasNoPredecessors() &&
          "expected 'source' to have no predecessors");
-  assert(source->hasNoSuccessors() &&
-         "expected 'source' to have no successors");
 
-  // Split the block containing 'op' into two, one containing all operations
-  // before 'op' (prologue) and another (epilogue) containing 'op' and all
-  // operations after it.
-  Block *prologue = op->getBlock();
-  Block *epilogue = splitBlock(prologue, op->getIterator());
+  if (dest->end() != before) {
+    // The source block will be inserted in the middle of the dest block, so
+    // the source block should have no successors. Otherwise, the remainder of
+    // the dest block would be unreachable.
+    assert(source->hasNoSuccessors() &&
+           "expected 'source' to have no successors");
+  } else {
+    // The source block will be inserted at the end of the dest block, so the
+    // dest block should have no successors. Otherwise, the inserted operations
+    // will be unreachable.
+    assert(dest->hasNoSuccessors() && "expected 'dest' to have no successors");
+  }
 
-  // Merge the source block at the end of the prologue.
-  mergeBlocks(source, prologue, argValues);
+  // Replace all of the successor arguments with the provided values.
+  for (auto it : llvm::zip(source->getArguments(), argValues))
+    replaceAllUsesWith(std::get<0>(it), std::get<1>(it));
 
-  // Merge the epilogue at the end the prologue.
-  mergeBlocks(epilogue, prologue);
+  // Move operations from the source block to the dest block and erase the
+  // source block.
+  if (!listener) {
+    // Fast path: If no listener is attached, move all operations at once.
+    dest->getOperations().splice(before, source->getOperations());
+  } else {
+    while (!source->empty())
+      moveOpBefore(&source->front(), dest, before);
+  }
+
+  // Erase the source block.
+  assert(source->empty() && "expected 'source' to be empty");
+  eraseBlock(source);
+}
+
+void RewriterBase::inlineBlockBefore(Block *source, Operation *op,
+                                     ValueRange argValues) {
+  inlineBlockBefore(source, op->getBlock(), op->getIterator(), argValues);
+}
+
+void RewriterBase::mergeBlocks(Block *source, Block *dest,
+                               ValueRange argValues) {
+  inlineBlockBefore(source, dest, dest->end(), argValues);
 }
 
 /// Split the operations starting at "before" (inclusive) out of the given
 /// block into a new block, and return it.
-Block *PatternRewriter::splitBlock(Block *block, Block::iterator before) {
-  return block->splitBlock(before);
-}
+Block *RewriterBase::splitBlock(Block *block, Block::iterator before) {
+  // Fast path: If no listener is attached, split the block directly.
+  if (!listener)
+    return block->splitBlock(before);
 
-/// 'op' and 'newOp' are known to have the same number of results, replace the
-/// uses of op with uses of newOp
-void PatternRewriter::replaceOpWithResultsOfAnotherOp(Operation *op,
-                                                      Operation *newOp) {
-  assert(op->getNumResults() == newOp->getNumResults() &&
-         "replacement op doesn't match results of original op");
-  if (op->getNumResults() == 1)
-    return replaceOp(op, newOp->getResult(0));
-  return replaceOp(op, newOp->getResults());
+  // `createBlock` sets the insertion point at the beginning of the new block.
+  InsertionGuard g(*this);
+  Block *newBlock =
+      createBlock(block->getParent(), std::next(block->getIterator()));
+
+  // If `before` points to end of the block, no ops should be moved.
+  if (before == block->end())
+    return newBlock;
+
+  // Move ops one-by-one from the end of `block` to the beginning of `newBlock`.
+  // Stop when the operation pointed to by `before` has been moved.
+  while (before->getBlock() != newBlock)
+    moveOpBefore(&block->back(), newBlock, newBlock->begin());
+
+  return newBlock;
 }
 
 /// Move the blocks that belong to "region" before the given position in
 /// another region.  The two regions must be different.  The caller is in
 /// charge to update create the operation transferring the control flow to the
 /// region and pass it the correct block arguments.
-void PatternRewriter::inlineRegionBefore(Region &region, Region &parent,
-                                         Region::iterator before) {
-  parent.getBlocks().splice(before, region.getBlocks());
+void RewriterBase::inlineRegionBefore(Region &region, Region &parent,
+                                      Region::iterator before) {
+  // Fast path: If no listener is attached, move all blocks at once.
+  if (!listener) {
+    parent.getBlocks().splice(before, region.getBlocks());
+    return;
+  }
+
+  // Move blocks from the beginning of the region one-by-one.
+  while (!region.empty())
+    moveBlockBefore(&region.front(), &parent, before);
 }
-void PatternRewriter::inlineRegionBefore(Region &region, Block *before) {
+void RewriterBase::inlineRegionBefore(Region &region, Block *before) {
   inlineRegionBefore(region, *before->getParent(), before->getIterator());
 }
 
-/// Clone the blocks that belong to "region" before the given position in
-/// another region "parent". The two regions must be different. The caller is
-/// responsible for creating or updating the operation transferring flow of
-/// control to the region and passing it the correct block arguments.
-void PatternRewriter::cloneRegionBefore(Region &region, Region &parent,
-                                        Region::iterator before,
-                                        BlockAndValueMapping &mapping) {
-  region.cloneInto(&parent, before, mapping);
-}
-void PatternRewriter::cloneRegionBefore(Region &region, Region &parent,
-                                        Region::iterator before) {
-  BlockAndValueMapping mapping;
-  cloneRegionBefore(region, parent, before, mapping);
-}
-void PatternRewriter::cloneRegionBefore(Region &region, Block *before) {
-  cloneRegionBefore(region, *before->getParent(), before->getIterator());
+void RewriterBase::moveBlockBefore(Block *block, Block *anotherBlock) {
+  moveBlockBefore(block, anotherBlock->getParent(),
+                  anotherBlock->getIterator());
 }
 
+void RewriterBase::moveBlockBefore(Block *block, Region *region,
+                                   Region::iterator iterator) {
+  Region *currentRegion = block->getParent();
+  Region::iterator nextIterator = std::next(block->getIterator());
+  block->moveBefore(region, iterator);
+  if (listener)
+    listener->notifyBlockInserted(block, /*previous=*/currentRegion,
+                                  /*previousIt=*/nextIterator);
+}
+
+void RewriterBase::moveOpBefore(Operation *op, Operation *existingOp) {
+  moveOpBefore(op, existingOp->getBlock(), existingOp->getIterator());
+}
+
+void RewriterBase::moveOpBefore(Operation *op, Block *block,
+                                Block::iterator iterator) {
+  Block *currentBlock = op->getBlock();
+  Block::iterator nextIterator = std::next(op->getIterator());
+  op->moveBefore(block, iterator);
+  if (listener)
+    listener->notifyOperationInserted(
+        op, /*previous=*/InsertPoint(currentBlock, nextIterator));
+}
+
+void RewriterBase::moveOpAfter(Operation *op, Operation *existingOp) {
+  moveOpAfter(op, existingOp->getBlock(), existingOp->getIterator());
+}
+
+void RewriterBase::moveOpAfter(Operation *op, Block *block,
+                               Block::iterator iterator) {
+  assert(iterator != block->end() && "cannot move after end of block");
+  moveOpBefore(op, block, std::next(iterator));
+}

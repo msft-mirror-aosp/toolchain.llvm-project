@@ -114,13 +114,17 @@ define void @f_non_leaf(i32 %x, i32 %y) !prof !14 {
 ; WIN64-NEXT:    jne .LBB1_2 # encoding: [0x75,A]
 ; WIN64-NEXT:    # fixup A - offset: 1, value: .LBB1_2-1, kind: FK_PCRel_1
 ; WIN64-NEXT:  # %bb.1: # %bb1
+; WIN64-NEXT:    .seh_startepilogue
 ; WIN64-NEXT:    popq %rbx # encoding: [0x5b]
+; WIN64-NEXT:    .seh_endepilogue
 ; WIN64-NEXT:    jmp foo # TAILCALL
 ; WIN64-NEXT:    # encoding: [0xeb,A]
 ; WIN64-NEXT:    # fixup A - offset: 1, value: foo-1, kind: FK_PCRel_1
 ; WIN64-NEXT:  .LBB1_2: # %bb2
 ; WIN64-NEXT:    nop # encoding: [0x90]
+; WIN64-NEXT:    .seh_startepilogue
 ; WIN64-NEXT:    popq %rbx # encoding: [0x5b]
+; WIN64-NEXT:    .seh_endepilogue
 ; WIN64-NEXT:    jmp bar # TAILCALL
 ; WIN64-NEXT:    # encoding: [0xeb,A]
 ; WIN64-NEXT:    # fixup A - offset: 1, value: bar-1, kind: FK_PCRel_1
@@ -141,8 +145,8 @@ bb2:
 
 }
 
-declare x86_thiscallcc zeroext i1 @baz(i8*, i32)
-define x86_thiscallcc zeroext i1 @BlockPlacementTest(i8* %this, i32 %x) !prof !14 {
+declare x86_thiscallcc zeroext i1 @baz(ptr, i32)
+define x86_thiscallcc zeroext i1 @BlockPlacementTest(ptr %this, i32 %x) !prof !14 {
 ; CHECK32-LABEL: BlockPlacementTest:
 ; CHECK32:       # %bb.0: # %entry
 ; CHECK32-NEXT:    movl {{[0-9]+}}(%esp), %edx # encoding: [0x8b,0x54,0x24,0x04]
@@ -211,7 +215,7 @@ land.rhs:
   br i1 %tobool7, label %lor.rhs, label %land.end
 
 lor.rhs:
-  %call = tail call x86_thiscallcc zeroext i1 @baz(i8* %this, i32 %x) #2
+  %call = tail call x86_thiscallcc zeroext i1 @baz(ptr %this, i32 %x) #2
   br label %land.end
 
 land.end:

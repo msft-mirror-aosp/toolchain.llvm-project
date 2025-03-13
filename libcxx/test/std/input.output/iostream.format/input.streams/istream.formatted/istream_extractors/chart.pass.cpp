@@ -13,6 +13,8 @@
 
 #include <istream>
 #include <cassert>
+#include <streambuf>
+
 #include "test_macros.h"
 
 template <class CharT>
@@ -67,6 +69,7 @@ int main(int, char**)
         assert(!is.fail());
         assert(c == 'c');
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L"   abc");
         std::wistream is(&sb);
@@ -84,6 +87,7 @@ int main(int, char**)
         assert(!is.fail());
         assert(c == L'c');
     }
+#endif
 #ifndef TEST_HAS_NO_EXCEPTIONS
     {
         testbuf<char> sb;
@@ -103,6 +107,7 @@ int main(int, char**)
         assert(is.eof());
         assert(threw);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb;
         std::basic_istream<wchar_t> is(&sb);
@@ -121,6 +126,7 @@ int main(int, char**)
         assert(is.eof());
         assert(threw);
     }
+#endif
     {
         testbuf<char> sb;
         std::basic_istream<char> is(&sb);
@@ -139,6 +145,7 @@ int main(int, char**)
         assert(is.eof());
         assert(threw);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb;
         std::basic_istream<wchar_t> is(&sb);
@@ -157,6 +164,7 @@ int main(int, char**)
         assert(is.eof());
         assert(threw);
     }
+#endif
 #endif // TEST_HAS_NO_EXCEPTIONS
 
     return 0;

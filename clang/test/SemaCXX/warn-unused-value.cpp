@@ -1,6 +1,7 @@
 // RUN: %clang_cc1 -fsyntax-only -verify -Wunused-value %s
 // RUN: %clang_cc1 -fsyntax-only -verify -Wunused-value -std=c++98 %s
 // RUN: %clang_cc1 -fsyntax-only -verify -Wunused-value -std=c++11 %s
+// RUN: %clang_cc1 -fsyntax-only -verify -Wunused-value -std=c++17 %s
 
 // PR4806
 namespace test0 {
@@ -101,6 +102,16 @@ void f() {
   Bad b;
   (void)typeid(b.f()); // expected-warning {{expression with side effects will be evaluated despite being used as an operand to 'typeid'}}
 
+  extern Bad * pb;
+  // This typeid can throw but that is not a side-effect that we care about
+  // warning for since this is idiomatic code
+  (void)typeid(*pb);
+  (void)sizeof(typeid(*pb));
+  (void)typeid(*++pb); // expected-warning {{expression with side effects will be evaluated despite being used as an operand to 'typeid'}}
+  (void)sizeof(typeid(*++pb)); // expected-warning {{expression with side effects has no effect in an unevaluated context}}
+  // FIXME: we should not warn about this in an unevaluated context
+  // expected-warning@-2 {{expression with side effects will be evaluated despite being used as an operand to 'typeid'}}
+
   // A dereference of a volatile pointer is a side effecting operation, however
   // since it is idiomatic code, and the alternatives induce higher maintenance
   // costs, it is allowed.
@@ -138,3 +149,32 @@ void volatile_array() {
   (void)arr3;
   (void)arr4;
 }
+
+#if __cplusplus >= 201103L // C++11 or later
+namespace test5 {
+int v[(5, 6)]; // expected-warning {{left operand of comma operator has no effect}}
+void foo() {
+  new double[false ? (1, 2) : 3]
+            // FIXME: We shouldn't diagnose the unreachable constant expression
+            // here.
+            [false ? (1, 2) : 3]; // expected-warning {{left operand of comma operator has no effect}}
+}
+} // namespace test5
+
+// comma operator diagnostics should be suppressed in a SFINAE context.
+template <typename T, int = (T{},0)> int c(int) { return 0; }
+template <typename T, int> int c(double) { return 1; }
+int foo() { return c<int>(0); }
+
+#endif
+
+#if __cplusplus >= 201703L // C++17 or later
+namespace test6 {
+auto b() {
+  if constexpr (false)
+    return (1,0);
+  else
+    return (1.0,0.0); // expected-warning {{left operand of comma operator has no effect}}
+}
+} // namespace test6
+#endif

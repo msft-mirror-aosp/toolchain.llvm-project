@@ -1,10 +1,10 @@
-# RUN: llvm-mc %s -triple=riscv32 -riscv-no-aliases -mattr=+f -show-encoding \
+# RUN: llvm-mc %s -triple=riscv32 -M no-aliases -mattr=+f -show-encoding \
 # RUN:     | FileCheck -check-prefixes=CHECK-INST,CHECK-ENC %s
 # RUN: llvm-mc -filetype=obj -triple riscv32 -mattr=+v < %s \
 # RUN:     | llvm-objdump -d --mattr=+v - \
 # RUN:     | FileCheck -check-prefix=CHECK-INST-ALIAS %s
 #
-# RUN: llvm-mc %s -triple=riscv64 -riscv-no-aliases -mattr=+f -show-encoding \
+# RUN: llvm-mc %s -triple=riscv64 -M no-aliases -mattr=+f -show-encoding \
 # RUN:     | FileCheck -check-prefixes=CHECK-INST,CHECK-ENC %s
 # RUN: llvm-mc -filetype=obj -triple riscv64 -mattr=+v < %s \
 # RUN:     | llvm-objdump -d --mattr=+v - \
@@ -55,6 +55,20 @@ csrrs t2, 0x009, zero
 csrrs t1, vxrm, zero
 # uimm12
 csrrs t2, 0x00a, zero
+
+# vcsr
+# name
+# CHECK-INST: csrrs t1, vcsr, zero
+# CHECK-ENC:  encoding: [0x73,0x23,0xf0,0x00]
+# CHECK-INST-ALIAS: csrr t1, vcsr
+# uimm12
+# CHECK-INST: csrrs t2, vcsr, zero
+# CHECK-ENC:  encoding: [0xf3,0x23,0xf0,0x00]
+# CHECK-INST-ALIAS: csrr t2, vcsr
+# name
+csrrs t1, vcsr, zero
+# uimm12
+csrrs t2, 0x00f, zero
 
 # vl
 # name

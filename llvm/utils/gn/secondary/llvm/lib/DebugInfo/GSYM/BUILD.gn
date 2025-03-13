@@ -3,9 +3,12 @@ static_library("GSYM") {
   deps = [
     "//llvm/lib/MC",
     "//llvm/lib/Support",
+    "//llvm/lib/TargetParser",
   ]
   sources = [
+    "CallSiteInfo.cpp",
     "DwarfTransformer.cpp",
+    "ExtractRanges.cpp",
     "FileWriter.cpp",
     "FunctionInfo.cpp",
     "GsymCreator.cpp",
@@ -14,7 +17,7 @@ static_library("GSYM") {
     "InlineInfo.cpp",
     "LineTable.cpp",
     "LookupResult.cpp",
+    "MergedFunctionsInfo.cpp",
     "ObjectFileTransformer.cpp",
-    "Range.cpp",
   ]
 }

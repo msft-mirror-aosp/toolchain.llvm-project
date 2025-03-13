@@ -22,17 +22,21 @@
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/StringList.h"
+#include "lldb/Utility/StructuredData.h"
 #include "lldb/lldb-forward.h"
 #include "lldb/lldb-private.h"
+
 #include <mutex>
+#include <optional>
+#include <stack>
+#include <unordered_map>
 
 namespace lldb_private {
 class CommandInterpreter;
 
 class CommandInterpreterRunResult {
 public:
-  CommandInterpreterRunResult()
-      : m_num_errors(0), m_result(lldb::eCommandInterpreterResultSuccess) {}
+  CommandInterpreterRunResult() = default;
 
   uint32_t GetNumErrors() const { return m_num_errors; }
 
@@ -50,8 +54,9 @@ protected:
   void SetResult(lldb::CommandInterpreterResult result) { m_result = result; }
 
 private:
-  int m_num_errors;
-  lldb::CommandInterpreterResult m_result;
+  int m_num_errors = 0;
+  lldb::CommandInterpreterResult m_result =
+      lldb::eCommandInterpreterResultSuccess;
 };
 
 class CommandInterpreterRunOptions {
@@ -88,24 +93,21 @@ public:
   /// \param[in] add_to_history
   ///    If \b true add the commands to the command history. If \b false, don't
   ///    add them.
+  /// \param[in] handle_repeats
+  ///    If \b true then treat empty lines as repeat commands even if the
+  ///    interpreter is non-interactive.
   CommandInterpreterRunOptions(LazyBool stop_on_continue,
                                LazyBool stop_on_error, LazyBool stop_on_crash,
                                LazyBool echo_commands, LazyBool echo_comments,
                                LazyBool print_results, LazyBool print_errors,
-                               LazyBool add_to_history)
+                               LazyBool add_to_history, LazyBool handle_repeats)
       : m_stop_on_continue(stop_on_continue), m_stop_on_error(stop_on_error),
         m_stop_on_crash(stop_on_crash), m_echo_commands(echo_commands),
         m_echo_comment_commands(echo_comments), m_print_results(print_results),
-        m_print_errors(print_errors), m_add_to_history(add_to_history) {}
+        m_print_errors(print_errors), m_add_to_history(add_to_history),
+        m_allow_repeats(handle_repeats) {}
 
-  CommandInterpreterRunOptions()
-      : m_stop_on_continue(eLazyBoolCalculate),
-        m_stop_on_error(eLazyBoolCalculate),
-        m_stop_on_crash(eLazyBoolCalculate),
-        m_echo_commands(eLazyBoolCalculate),
-        m_echo_comment_commands(eLazyBoolCalculate),
-        m_print_results(eLazyBoolCalculate), m_print_errors(eLazyBoolCalculate),
-        m_add_to_history(eLazyBoolCalculate) {}
+  CommandInterpreterRunOptions() = default;
 
   void SetSilent(bool silent) {
     LazyBool value = silent ? eLazyBoolNo : eLazyBoolYes;
@@ -185,16 +187,23 @@ public:
     m_spawn_thread = spawn_thread ? eLazyBoolYes : eLazyBoolNo;
   }
 
-  LazyBool m_stop_on_continue;
-  LazyBool m_stop_on_error;
-  LazyBool m_stop_on_crash;
-  LazyBool m_echo_commands;
-  LazyBool m_echo_comment_commands;
-  LazyBool m_print_results;
-  LazyBool m_print_errors;
-  LazyBool m_add_to_history;
+  bool GetAllowRepeats() const { return DefaultToNo(m_allow_repeats); }
+
+  void SetAllowRepeats(bool allow_repeats) {
+    m_allow_repeats = allow_repeats ? eLazyBoolYes : eLazyBoolNo;
+  }
+
+  LazyBool m_stop_on_continue = eLazyBoolCalculate;
+  LazyBool m_stop_on_error = eLazyBoolCalculate;
+  LazyBool m_stop_on_crash = eLazyBoolCalculate;
+  LazyBool m_echo_commands = eLazyBoolCalculate;
+  LazyBool m_echo_comment_commands = eLazyBoolCalculate;
+  LazyBool m_print_results = eLazyBoolCalculate;
+  LazyBool m_print_errors = eLazyBoolCalculate;
+  LazyBool m_add_to_history = eLazyBoolCalculate;
   LazyBool m_auto_handle_events;
   LazyBool m_spawn_thread;
+  LazyBool m_allow_repeats = eLazyBoolCalculate;
 
 private:
   static bool DefaultToYes(LazyBool flag) {
@@ -228,65 +237,121 @@ public:
     eBroadcastBitAsynchronousErrorData = (1 << 4)
   };
 
-  enum ChildrenTruncatedWarningStatus // tristate boolean to manage children
-                                      // truncation warning
-  { eNoTruncation = 0,                // never truncated
-    eUnwarnedTruncation = 1,          // truncated but did not notify
-    eWarnedTruncation = 2             // truncated and notified
+  /// Tristate boolean to manage children omission warnings.
+  enum ChildrenOmissionWarningStatus {
+    eNoOmission = 0,       ///< No children were omitted.
+    eUnwarnedOmission = 1, ///< Children omitted, and not yet notified.
+    eWarnedOmission = 2    ///< Children omitted and notified.
   };
 
   enum CommandTypes {
-    eCommandTypesBuiltin = 0x0001, // native commands such as "frame"
-    eCommandTypesUserDef = 0x0002, // scripted commands
-    eCommandTypesAliases = 0x0004, // aliases such as "po"
-    eCommandTypesHidden = 0x0008,  // commands prefixed with an underscore
-    eCommandTypesAllThem = 0xFFFF  // all commands
+    eCommandTypesBuiltin = 0x0001, //< native commands such as "frame"
+    eCommandTypesUserDef = 0x0002, //< scripted commands
+    eCommandTypesUserMW = 0x0004,  //< multiword commands (command containers)
+    eCommandTypesAliases = 0x0008, //< aliases such as "po"
+    eCommandTypesHidden = 0x0010,  //< commands prefixed with an underscore
+    eCommandTypesAllThem = 0xFFFF  //< all commands
   };
+
+  // The CommandAlias and CommandInterpreter both have a hand in
+  // substituting for alias commands.  They work by writing special tokens
+  // in the template form of the Alias command, and then detecting them when the
+  // command is executed.  These are the special tokens:
+  static const char *g_no_argument;
+  static const char *g_need_argument;
+  static const char *g_argument;
 
   CommandInterpreter(Debugger &debugger, bool synchronous_execution);
 
-  ~CommandInterpreter() override;
+  ~CommandInterpreter() override = default;
 
   // These two functions fill out the Broadcaster interface:
 
-  static ConstString &GetStaticBroadcasterClass();
+  static llvm::StringRef GetStaticBroadcasterClass();
 
-  ConstString &GetBroadcasterClass() const override {
+  llvm::StringRef GetBroadcasterClass() const override {
     return GetStaticBroadcasterClass();
   }
 
   void SourceInitFileCwd(CommandReturnObject &result);
-  void SourceInitFileHome(CommandReturnObject &result, bool is_repl = false);
+  void SourceInitFileHome(CommandReturnObject &result, bool is_repl);
+  void SourceInitFileGlobal(CommandReturnObject &result);
 
   bool AddCommand(llvm::StringRef name, const lldb::CommandObjectSP &cmd_sp,
                   bool can_replace);
 
-  bool AddUserCommand(llvm::StringRef name, const lldb::CommandObjectSP &cmd_sp,
-                      bool can_replace);
+  Status AddUserCommand(llvm::StringRef name,
+                        const lldb::CommandObjectSP &cmd_sp, bool can_replace);
 
   lldb::CommandObjectSP GetCommandSPExact(llvm::StringRef cmd,
-                                          bool include_aliases) const;
+                                          bool include_aliases = false) const;
 
   CommandObject *GetCommandObject(llvm::StringRef cmd,
                                   StringList *matches = nullptr,
                                   StringList *descriptions = nullptr) const;
 
+  CommandObject *GetUserCommandObject(llvm::StringRef cmd,
+                                      StringList *matches = nullptr,
+                                      StringList *descriptions = nullptr) const;
+
+  CommandObject *
+  GetAliasCommandObject(llvm::StringRef cmd, StringList *matches = nullptr,
+                        StringList *descriptions = nullptr) const;
+
+  /// Determine whether a root level, built-in command with this name exists.
   bool CommandExists(llvm::StringRef cmd) const;
 
+  /// Determine whether an alias command with this name exists
   bool AliasExists(llvm::StringRef cmd) const;
 
+  /// Determine whether a root-level user command with this name exists.
   bool UserCommandExists(llvm::StringRef cmd) const;
+
+  /// Determine whether a root-level user multiword command with this name
+  /// exists.
+  bool UserMultiwordCommandExists(llvm::StringRef cmd) const;
+
+  /// Look up the command pointed to by path encoded in the arguments of
+  /// the incoming command object.  If all the path components exist
+  /// and are all actual commands - not aliases, and the leaf command is a
+  /// multiword command, return the command.  Otherwise return nullptr, and put
+  /// a useful diagnostic in the Status object.
+  ///
+  /// \param[in] path
+  ///    An Args object holding the path in its arguments
+  /// \param[in] leaf_is_command
+  ///    If true, return the container of the leaf name rather than looking up
+  ///    the whole path as a leaf command.  The leaf needn't exist in this case.
+  /// \param[in,out] result
+  ///    If the path is not found, this error shows where we got off track.
+  /// \return
+  ///    If found, a pointer to the CommandObjectMultiword pointed to by path,
+  ///    or to the container of the leaf element is is_leaf_command.
+  ///    Returns nullptr under two circumstances:
+  ///      1) The command in not found (check error.Fail)
+  ///      2) is_leaf is true and the path has only a leaf.  We don't have a
+  ///         dummy "contains everything MWC, so we return null here, but
+  ///         in this case error.Success is true.
+
+  CommandObjectMultiword *
+  VerifyUserMultiwordCmdPath(Args &path, bool leaf_is_command, Status &result);
 
   CommandAlias *AddAlias(llvm::StringRef alias_name,
                          lldb::CommandObjectSP &command_obj_sp,
                          llvm::StringRef args_string = llvm::StringRef());
 
-  // Remove a command if it is removable (python or regex command)
-  bool RemoveCommand(llvm::StringRef cmd);
+  /// Remove a command if it is removable (python or regex command). If \b force
+  /// is provided, the command is removed regardless of its removable status.
+  bool RemoveCommand(llvm::StringRef cmd, bool force = false);
 
   bool RemoveAlias(llvm::StringRef alias_name);
 
   bool GetAliasFullName(llvm::StringRef cmd, std::string &full_name) const;
+
+  bool RemoveUserMultiword(llvm::StringRef multiword_name);
+
+  // Do we want to allow top-level user multiword commands to be deleted?
+  void RemoveAllUserMultiword() { m_user_mw_dict.clear(); }
 
   bool RemoveUser(llvm::StringRef alias_name);
 
@@ -300,21 +365,21 @@ public:
                                   CommandReturnObject &result);
 
   bool HandleCommand(const char *command_line, LazyBool add_to_history,
-                     CommandReturnObject &result,
-                     ExecutionContext *override_context = nullptr,
-                     bool repeat_on_empty_command = true,
-                     bool no_context_switching = false);
+                     const ExecutionContext &override_context,
+                     CommandReturnObject &result);
 
-  bool WasInterrupted() const;
+  bool HandleCommand(const char *command_line, LazyBool add_to_history,
+                     CommandReturnObject &result,
+                     bool force_repeat_command = false);
+
+  bool InterruptCommand();
 
   /// Execute a list of commands in sequence.
   ///
   /// \param[in] commands
   ///    The list of commands to execute.
   /// \param[in,out] context
-  ///    The execution context in which to run the commands. Can be nullptr in
-  ///    which case the default
-  ///    context will be used.
+  ///    The execution context in which to run the commands.
   /// \param[in] options
   ///    This object holds the options used to control when to stop, whether to
   ///    execute commands,
@@ -324,8 +389,13 @@ public:
   ///    safely,
   ///    and failed with some explanation if we aborted executing the commands
   ///    at some point.
-  void HandleCommands(const StringList &commands, ExecutionContext *context,
-                      CommandInterpreterRunOptions &options,
+  void HandleCommands(const StringList &commands,
+                      const ExecutionContext &context,
+                      const CommandInterpreterRunOptions &options,
+                      CommandReturnObject &result);
+
+  void HandleCommands(const StringList &commands,
+                      const CommandInterpreterRunOptions &options,
                       CommandReturnObject &result);
 
   /// Execute a list of commands from a file.
@@ -333,9 +403,7 @@ public:
   /// \param[in] file
   ///    The file from which to read in commands.
   /// \param[in,out] context
-  ///    The execution context in which to run the commands. Can be nullptr in
-  ///    which case the default
-  ///    context will be used.
+  ///    The execution context in which to run the commands.
   /// \param[in] options
   ///    This object holds the options used to control when to stop, whether to
   ///    execute commands,
@@ -345,15 +413,19 @@ public:
   ///    safely,
   ///    and failed with some explanation if we aborted executing the commands
   ///    at some point.
-  void HandleCommandsFromFile(FileSpec &file, ExecutionContext *context,
-                              CommandInterpreterRunOptions &options,
+  void HandleCommandsFromFile(FileSpec &file, const ExecutionContext &context,
+                              const CommandInterpreterRunOptions &options,
+                              CommandReturnObject &result);
+
+  void HandleCommandsFromFile(FileSpec &file,
+                              const CommandInterpreterRunOptions &options,
                               CommandReturnObject &result);
 
   CommandObject *GetCommandObjectForCommand(llvm::StringRef &command_line);
 
   /// Returns the auto-suggestion string that should be added to the given
   /// command line.
-  llvm::Optional<std::string> GetAutoSuggestionForCommand(llvm::StringRef line);
+  std::optional<std::string> GetAutoSuggestionForCommand(llvm::StringRef line);
 
   // This handles command line completion.
   void HandleCompletion(CompletionRequest &request);
@@ -391,12 +463,7 @@ public:
 
   Debugger &GetDebugger() { return m_debugger; }
 
-  ExecutionContext GetExecutionContext() {
-    const bool thread_and_frame_only_if_stopped = true;
-    return m_exe_ctx_ref.Lock(thread_and_frame_only_if_stopped);
-  }
-
-  void UpdateExecutionContext(ExecutionContext *override_context);
+  ExecutionContext GetExecutionContext() const;
 
   lldb::PlatformSP GetPlatform(bool prefer_target_platform);
 
@@ -418,6 +485,8 @@ public:
 
   bool HasUserCommands() const;
 
+  bool HasUserMultiwordCommands() const;
+
   bool HasAliasOptions() const;
 
   void BuildAliasCommandArgs(CommandObject *alias_cmd_obj,
@@ -425,6 +494,7 @@ public:
                              std::string &raw_input_string,
                              CommandReturnObject &result);
 
+  /// Picks the number out of a string of the form "%NNN", otherwise return 0.
   int GetOptionArgumentPosition(const char *in_string);
 
   void SkipLLDBInitFiles(bool skip_lldbinit_files) {
@@ -441,7 +511,8 @@ public:
                               StringList &commands_help,
                               bool search_builtin_commands,
                               bool search_user_commands,
-                              bool search_alias_commands);
+                              bool search_alias_commands,
+                              bool search_user_mw_commands);
 
   bool GetBatchCommandMode() { return m_batch_command_mode; }
 
@@ -452,21 +523,33 @@ public:
   }
 
   void ChildrenTruncated() {
-    if (m_truncation_warning == eNoTruncation)
-      m_truncation_warning = eUnwarnedTruncation;
+    if (m_truncation_warning == eNoOmission)
+      m_truncation_warning = eUnwarnedOmission;
   }
 
-  bool TruncationWarningNecessary() {
-    return (m_truncation_warning == eUnwarnedTruncation);
+  void SetReachedMaximumDepth() {
+    if (m_max_depth_warning == eNoOmission)
+      m_max_depth_warning = eUnwarnedOmission;
   }
 
-  void TruncationWarningGiven() { m_truncation_warning = eWarnedTruncation; }
+  void PrintWarningsIfNecessary(Stream &s, const std::string &cmd_name) {
+    if (m_truncation_warning == eUnwarnedOmission) {
+      s.Printf("*** Some of the displayed variables have more members than the "
+               "debugger will show by default. To show all of them, you can "
+               "either use the --show-all-children option to %s or raise the "
+               "limit by changing the target.max-children-count setting.\n",
+               cmd_name.c_str());
+      m_truncation_warning = eWarnedOmission;
+    }
 
-  const char *TruncationWarningText() {
-    return "*** Some of your variables have more members than the debugger "
-           "will show by default. To show all of them, you can either use the "
-           "--show-all-children option to %s or raise the limit by changing "
-           "the target.max-children-count setting.\n";
+    if (m_max_depth_warning == eUnwarnedOmission) {
+      s.Printf("*** Some of the displayed variables have a greater depth of "
+               "members than the debugger will show by default. To increase "
+               "the limit, use the --depth option to %s, or raise the limit by "
+               "changing the target.max-children-depth setting.\n",
+               cmd_name.c_str());
+      m_max_depth_warning = eWarnedOmission;
+    }
   }
 
   CommandHistory &GetCommandHistory() { return m_command_history; }
@@ -492,8 +575,17 @@ public:
   bool GetPromptOnQuit() const;
   void SetPromptOnQuit(bool enable);
 
+  bool GetSaveTranscript() const;
+  void SetSaveTranscript(bool enable);
+
   bool GetSaveSessionOnQuit() const;
   void SetSaveSessionOnQuit(bool enable);
+
+  bool GetOpenTranscriptInEditor() const;
+  void SetOpenTranscriptInEditor(bool enable);
+
+  FileSpec GetSaveSessionDirectory() const;
+  void SetSaveSessionDirectory(llvm::StringRef path);
 
   bool GetEchoCommands() const;
   void SetEchoCommands(bool enable);
@@ -501,8 +593,16 @@ public:
   bool GetEchoCommentCommands() const;
   void SetEchoCommentCommands(bool enable);
 
+  bool GetRepeatPreviousCommand() const;
+
+  bool GetRequireCommandOverwrite() const;
+
   const CommandObject::CommandMap &GetUserCommands() const {
     return m_user_dict;
+  }
+
+  const CommandObject::CommandMap &GetUserMultiwordCommands() const {
+    return m_user_mw_dict;
   }
 
   const CommandObject::CommandMap &GetCommands() const {
@@ -521,7 +621,7 @@ public:
   /// \return True if the exit code was successfully set; false if the
   ///         interpreter doesn't allow custom exit codes.
   /// \see AllowExitCodeOnQuit
-  LLVM_NODISCARD bool SetQuitExitCode(int exit_code);
+  [[nodiscard]] bool SetQuitExitCode(int exit_code);
 
   /// Returns the exit code that the user has specified when running the
   /// 'quit' command.
@@ -549,24 +649,41 @@ public:
   /// \return \b true if the session transcript was successfully written to
   /// disk, \b false otherwise.
   bool SaveTranscript(CommandReturnObject &result,
-                      llvm::Optional<std::string> output_file = llvm::None);
+                      std::optional<std::string> output_file = std::nullopt);
 
   FileSpec GetCurrentSourceDir();
 
+  bool IsInteractive();
+
+  bool IOHandlerInterrupt(IOHandler &io_handler) override;
+
+  Status PreprocessCommand(std::string &command);
+  Status PreprocessToken(std::string &token);
+
+  void IncreaseCommandUsage(const CommandObject &cmd_obj) {
+    ++m_command_usages[cmd_obj.GetCommandName()];
+  }
+
+  llvm::json::Value GetStatistics();
+  const StructuredData::Array &GetTranscript() const;
+
 protected:
   friend class Debugger;
+
+  // This checks just the RunCommandInterpreter interruption state.  It is only
+  // meant to be used in Debugger::InterruptRequested
+  bool WasInterrupted() const;
 
   // IOHandlerDelegate functions
   void IOHandlerInputComplete(IOHandler &io_handler,
                               std::string &line) override;
 
-  ConstString IOHandlerGetControlSequence(char ch) override {
+  llvm::StringRef IOHandlerGetControlSequence(char ch) override {
+    static constexpr llvm::StringLiteral control_sequence("quit\n");
     if (ch == 'd')
-      return ConstString("quit\n");
-    return ConstString();
+      return control_sequence;
+    return {};
   }
-
-  bool IOHandlerInterrupt(IOHandler &io_handler) override;
 
   void GetProcessOutput();
 
@@ -581,7 +698,9 @@ protected:
                                      StringList *descriptions = nullptr) const;
 
 private:
-  Status PreprocessCommand(std::string &command);
+  void OverrideExecutionContext(const ExecutionContext &override_context);
+
+  void RestoreExecutionContext();
 
   void SourceInitFile(FileSpec file, CommandReturnObject &result);
 
@@ -593,10 +712,11 @@ private:
 
   void FindCommandsForApropos(llvm::StringRef word, StringList &commands_found,
                               StringList &commands_help,
-                              CommandObject::CommandMap &command_map);
+                              const CommandObject::CommandMap &command_map);
 
   // An interruptible wrapper around the stream output
-  void PrintCommandOutput(Stream &stream, llvm::StringRef str);
+  void PrintCommandOutput(IOHandler &io_handler, llvm::StringRef str,
+                          bool is_stdout);
 
   bool EchoCommandNonInteractive(llvm::StringRef line,
                                  const Flags &io_handler_flags) const;
@@ -615,12 +735,12 @@ private:
 
   void StartHandlingCommand();
   void FinishHandlingCommand();
-  bool InterruptCommand();
 
   Debugger &m_debugger; // The debugger session that this interpreter is
                         // associated with
-  ExecutionContextRef m_exe_ctx_ref; // The current execution context to use
-                                     // when handling commands
+  // Execution contexts that were temporarily set by some of HandleCommand*
+  // overloads.
+  std::stack<ExecutionContext> m_overriden_exe_contexts;
   bool m_synchronous_execution;
   bool m_skip_lldbinit_files;
   bool m_skip_app_init_files;
@@ -630,15 +750,20 @@ private:
   CommandObject::CommandMap
       m_alias_dict; // Stores user aliases/abbreviations for commands
   CommandObject::CommandMap m_user_dict; // Stores user-defined commands
+  CommandObject::CommandMap
+      m_user_mw_dict; // Stores user-defined multiword commands
   CommandHistory m_command_history;
   std::string m_repeat_command; // Stores the command that will be executed for
                                 // an empty command string.
   lldb::IOHandlerSP m_command_io_handler_sp;
   char m_comment_char;
   bool m_batch_command_mode;
-  ChildrenTruncatedWarningStatus m_truncation_warning; // Whether we truncated
-                                                       // children and whether
-                                                       // the user has been told
+  /// Whether we truncated a value's list of children and whether the user has
+  /// been told.
+  ChildrenOmissionWarningStatus m_truncation_warning;
+  /// Whether we reached the maximum child nesting depth and whether the user
+  /// has been told.
+  ChildrenOmissionWarningStatus m_max_depth_warning;
 
   // FIXME: Stop using this to control adding to the history and then replace
   // this with m_command_source_dirs.size().
@@ -651,11 +776,32 @@ private:
 
   // The exit code the user has requested when calling the 'quit' command.
   // No value means the user hasn't set a custom exit code so far.
-  llvm::Optional<int> m_quit_exit_code;
+  std::optional<int> m_quit_exit_code;
   // If the driver is accepts custom exit codes for the 'quit' command.
   bool m_allow_exit_code = false;
 
+  /// Command usage statistics.
+  typedef llvm::StringMap<uint64_t> CommandUsageMap;
+  CommandUsageMap m_command_usages;
+
+  /// Turn on settings `interpreter.save-transcript` for LLDB to populate
+  /// this stream. Otherwise this stream is empty.
   StreamString m_transcript_stream;
+
+  /// Contains a list of handled commands and their details. Each element in
+  /// the list is a dictionary with the following keys/values:
+  /// - "command" (string): The command that was given by the user.
+  /// - "commandName" (string): The name of the executed command.
+  /// - "commandArguments" (string): The arguments of the executed command.
+  /// - "output" (string): The output of the command. Empty ("") if no output.
+  /// - "error" (string): The error of the command. Empty ("") if no error.
+  /// - "durationInSeconds" (float): The time it took to execute the command.
+  /// - "timestampInEpochSeconds" (int): The timestamp when the command is
+  ///   executed.
+  ///
+  /// Turn on settings `interpreter.save-transcript` for LLDB to populate
+  /// this list. Otherwise this list is empty.
+  StructuredData::Array m_transcript;
 };
 
 } // namespace lldb_private

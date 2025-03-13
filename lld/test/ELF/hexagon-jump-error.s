@@ -1,6 +1,7 @@
 # REQUIRES: hexagon
 # RUN: llvm-mc -filetype=obj -triple=hexagon-unknown-elf %s -o %t.o
-# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck --implicit-check-not "out of range" %s
+## Use --threads=1 to keep emitted warnings across sections sequential.
+# RUN: not ld.lld %t.o -o /dev/null --threads=1 2>&1 | FileCheck --implicit-check-not "out of range" %s
 
 	.globl	_start
 	.type	_start, @function
@@ -24,7 +25,7 @@ if (p0) jump #1f
 .section b15, "ax"
 1:
 
-# CHECK: relocation R_HEX_B22_PCREL out of range: 8388612 is not in [-2097152, 2097151]
+# CHECK: relocation R_HEX_B22_PCREL out of range: 8388612 is not in [-8388608, 8388607]
 jump #1f
 .space (1<<23)
 .section b22, "ax"

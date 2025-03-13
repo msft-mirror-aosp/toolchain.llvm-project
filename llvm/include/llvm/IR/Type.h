@@ -14,9 +14,7 @@
 #ifndef LLVM_IR_TYPE_H
 #define LLVM_IR_TYPE_H
 
-#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
@@ -28,12 +26,13 @@
 
 namespace llvm {
 
-template<class GraphType> struct GraphTraits;
 class IntegerType;
+struct fltSemantics;
 class LLVMContext;
 class PointerType;
 class raw_ostream;
 class StringRef;
+template <typename PtrType> class SmallPtrSetImpl;
 
 /// The instances of the Type class are immutable: once they are created,
 /// they are never changed.  Also note that only one instance of a particular
@@ -64,17 +63,19 @@ public:
     VoidTyID,      ///< type with no size
     LabelTyID,     ///< Labels
     MetadataTyID,  ///< Metadata
-    X86_MMXTyID,   ///< MMX vectors (64 bits, X86 specific)
+    X86_AMXTyID,   ///< AMX vectors (8192 bits, X86 specific)
     TokenTyID,     ///< Tokens
 
     // Derived types... see DerivedTypes.h file.
-    IntegerTyID,       ///< Arbitrary bit width integers
-    FunctionTyID,      ///< Functions
-    PointerTyID,       ///< Pointers
-    StructTyID,        ///< Structures
-    ArrayTyID,         ///< Arrays
-    FixedVectorTyID,   ///< Fixed width SIMD vector type
-    ScalableVectorTyID ///< Scalable SIMD vector type
+    IntegerTyID,        ///< Arbitrary bit width integers
+    FunctionTyID,       ///< Functions
+    PointerTyID,        ///< Pointers
+    StructTyID,         ///< Structures
+    ArrayTyID,          ///< Arrays
+    FixedVectorTyID,    ///< Fixed width SIMD vector type
+    ScalableVectorTyID, ///< Scalable SIMD vector type
+    TypedPointerTyID,   ///< Typed pointer used by some GPU targets
+    TargetExtTyID,      ///< Target extension type
   };
 
 private:
@@ -143,6 +144,11 @@ public:
   /// Return true if this is 'bfloat', a 16-bit bfloat type.
   bool isBFloatTy() const { return getTypeID() == BFloatTyID; }
 
+  /// Return true if this is a 16-bit float type.
+  bool is16bitFPTy() const {
+    return getTypeID() == BFloatTyID || getTypeID() == HalfTyID;
+  }
+
   /// Return true if this is 'float', a 32-bit IEEE fp type.
   bool isFloatTy() const { return getTypeID() == FloatTyID; }
 
@@ -158,29 +164,62 @@ public:
   /// Return true if this is powerpc long double.
   bool isPPC_FP128Ty() const { return getTypeID() == PPC_FP128TyID; }
 
-  /// Return true if this is one of the six floating-point types
-  bool isFloatingPointTy() const {
-    return getTypeID() == HalfTyID || getTypeID() == BFloatTyID ||
-           getTypeID() == FloatTyID || getTypeID() == DoubleTyID ||
-           getTypeID() == X86_FP80TyID || getTypeID() == FP128TyID ||
-           getTypeID() == PPC_FP128TyID;
-  }
-
-  const fltSemantics &getFltSemantics() const {
+  /// Return true if this is a well-behaved IEEE-like type, which has a IEEE
+  /// compatible layout as defined by APFloat::isIEEE(), and does not have
+  /// non-IEEE values, such as x86_fp80's unnormal values.
+  bool isIEEELikeFPTy() const {
     switch (getTypeID()) {
-    case HalfTyID: return APFloat::IEEEhalf();
-    case BFloatTyID: return APFloat::BFloat();
-    case FloatTyID: return APFloat::IEEEsingle();
-    case DoubleTyID: return APFloat::IEEEdouble();
-    case X86_FP80TyID: return APFloat::x87DoubleExtended();
-    case FP128TyID: return APFloat::IEEEquad();
-    case PPC_FP128TyID: return APFloat::PPCDoubleDouble();
-    default: llvm_unreachable("Invalid floating type");
+    case DoubleTyID:
+    case FloatTyID:
+    case HalfTyID:
+    case BFloatTyID:
+    case FP128TyID:
+      return true;
+    default:
+      return false;
     }
   }
 
-  /// Return true if this is X86 MMX.
-  bool isX86_MMXTy() const { return getTypeID() == X86_MMXTyID; }
+  /// Return true if this is one of the floating-point types
+  bool isFloatingPointTy() const {
+    return isIEEELikeFPTy() || getTypeID() == X86_FP80TyID ||
+           getTypeID() == PPC_FP128TyID;
+  }
+
+  /// Returns true if this is a floating-point type that is an unevaluated sum
+  /// of multiple floating-point units.
+  /// An example of such a type is ppc_fp128, also known as double-double, which
+  /// consists of two IEEE 754 doubles.
+  bool isMultiUnitFPType() const {
+    return getTypeID() == PPC_FP128TyID;
+  }
+
+  const fltSemantics &getFltSemantics() const;
+
+  /// Return true if this is X86 AMX.
+  bool isX86_AMXTy() const { return getTypeID() == X86_AMXTyID; }
+
+  /// Return true if this is a target extension type.
+  bool isTargetExtTy() const { return getTypeID() == TargetExtTyID; }
+
+  /// Return true if this is a target extension type with a scalable layout.
+  bool isScalableTargetExtTy() const;
+
+  /// Return true if this is a type whose size is a known multiple of vscale.
+  bool isScalableTy(SmallPtrSetImpl<const Type *> &Visited) const;
+  bool isScalableTy() const;
+
+  /// Return true if this type is or contains a target extension type that
+  /// disallows being used as a global.
+  bool
+  containsNonGlobalTargetExtType(SmallPtrSetImpl<const Type *> &Visited) const;
+  bool containsNonGlobalTargetExtType() const;
+
+  /// Return true if this type is or contains a target extension type that
+  /// disallows being used as a local.
+  bool
+  containsNonLocalTargetExtType(SmallPtrSetImpl<const Type *> &Visited) const;
+  bool containsNonLocalTargetExtType() const;
 
   /// Return true if this is a FP type or a vector of FP.
   bool isFPOrFPVectorTy() const { return getScalarType()->isFloatingPointTy(); }
@@ -232,6 +271,9 @@ public:
     return getTypeID() == ScalableVectorTyID || getTypeID() == FixedVectorTyID;
   }
 
+  // True if this is an instance of TargetExtType of RISC-V vector tuple.
+  bool isRISCVVectorTupleTy() const;
+
   /// Return true if this type could be converted with a lossless BitCast to
   /// type 'Ty'. For example, i8* to i32*. BitCasts are valid for types of the
   /// same size only where no re-interpretation of the bits is done.
@@ -251,8 +293,8 @@ public:
   /// Return true if the type is a valid type for a register in codegen. This
   /// includes all first-class types except struct and array types.
   bool isSingleValueType() const {
-    return isFloatingPointTy() || isX86_MMXTy() || isIntegerTy() ||
-           isPointerTy() || isVectorTy();
+    return isFloatingPointTy() || isIntegerTy() || isPointerTy() ||
+           isVectorTy() || isX86_AMXTy() || isTargetExtTy();
   }
 
   /// Return true if the type is an aggregate type. This means it is valid as
@@ -268,12 +310,12 @@ public:
   bool isSized(SmallPtrSetImpl<Type*> *Visited = nullptr) const {
     // If it's a primitive, it is always sized.
     if (getTypeID() == IntegerTyID || isFloatingPointTy() ||
-        getTypeID() == PointerTyID ||
-        getTypeID() == X86_MMXTyID)
+        getTypeID() == PointerTyID || getTypeID() == X86_AMXTyID)
       return true;
     // If it is not something that can have a size (e.g. a function or label),
     // it doesn't have a size.
-    if (getTypeID() != StructTyID && getTypeID() != ArrayTyID && !isVectorTy())
+    if (getTypeID() != StructTyID && getTypeID() != ArrayTyID &&
+        !isVectorTy() && getTypeID() != TargetExtTyID)
       return false;
     // Otherwise we have to try harder to decide.
     return isSizedDerivedType(Visited);
@@ -304,6 +346,10 @@ public:
   /// ppc long double), this method returns -1.
   int getFPMantissaWidth() const;
 
+  /// Return whether the type is IEEE compatible, as defined by the eponymous
+  /// method in APFloat.
+  bool isIEEE() const;
+
   /// If this is a vector type, return the element type, otherwise return
   /// 'this'.
   inline Type *getScalarType() const {
@@ -320,7 +366,7 @@ public:
   subtype_iterator subtype_begin() const { return ContainedTys; }
   subtype_iterator subtype_end() const { return &ContainedTys[NumContainedTys];}
   ArrayRef<Type*> subtypes() const {
-    return makeArrayRef(subtype_begin(), subtype_end());
+    return ArrayRef(subtype_begin(), subtype_end());
   }
 
   using subtype_reverse_iterator = std::reverse_iterator<subtype_iterator>;
@@ -367,10 +413,12 @@ public:
     return ContainedTys[0];
   }
 
-  Type *getPointerElementType() const {
-    assert(getTypeID() == PointerTyID);
-    return ContainedTys[0];
-  }
+  inline StringRef getTargetExtName() const;
+
+  /// Given vector type, change the element type,
+  /// whilst keeping the old number of elements.
+  /// For non-vectors simply returns \p EltTy.
+  inline Type *getWithNewType(Type *EltTy) const;
 
   /// Given an integer or vector type, change the lane bitwidth to NewBitwidth,
   /// whilst keeping the old number of lanes.
@@ -404,7 +452,7 @@ public:
   static Type *getX86_FP80Ty(LLVMContext &C);
   static Type *getFP128Ty(LLVMContext &C);
   static Type *getPPC_FP128Ty(LLVMContext &C);
-  static Type *getX86_MMXTy(LLVMContext &C);
+  static Type *getX86_AMXTy(LLVMContext &C);
   static Type *getTokenTy(LLVMContext &C);
   static IntegerType *getIntNTy(LLVMContext &C, unsigned N);
   static IntegerType *getInt1Ty(LLVMContext &C);
@@ -427,48 +475,18 @@ public:
     }
     llvm_unreachable("Unsupported type in Type::getScalarTy");
   }
-  static Type *getFloatingPointTy(LLVMContext &C, const fltSemantics &S) {
-    Type *Ty;
-    if (&S == &APFloat::IEEEhalf())
-      Ty = Type::getHalfTy(C);
-    else if (&S == &APFloat::BFloat())
-      Ty = Type::getBFloatTy(C);
-    else if (&S == &APFloat::IEEEsingle())
-      Ty = Type::getFloatTy(C);
-    else if (&S == &APFloat::IEEEdouble())
-      Ty = Type::getDoubleTy(C);
-    else if (&S == &APFloat::x87DoubleExtended())
-      Ty = Type::getX86_FP80Ty(C);
-    else if (&S == &APFloat::IEEEquad())
-      Ty = Type::getFP128Ty(C);
-    else {
-      assert(&S == &APFloat::PPCDoubleDouble() && "Unknown FP format");
-      Ty = Type::getPPC_FP128Ty(C);
-    }
-    return Ty;
-  }
+  static Type *getFloatingPointTy(LLVMContext &C, const fltSemantics &S);
 
   //===--------------------------------------------------------------------===//
-  // Convenience methods for getting pointer types with one of the above builtin
-  // types as pointee.
+  // Convenience methods for getting pointer types.
   //
-  static PointerType *getHalfPtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getBFloatPtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getFloatPtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getDoublePtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getX86_FP80PtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getFP128PtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getPPC_FP128PtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getX86_MMXPtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getIntNPtrTy(LLVMContext &C, unsigned N, unsigned AS = 0);
-  static PointerType *getInt1PtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getInt8PtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getInt16PtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getInt32PtrTy(LLVMContext &C, unsigned AS = 0);
-  static PointerType *getInt64PtrTy(LLVMContext &C, unsigned AS = 0);
+  static Type *getWasm_ExternrefTy(LLVMContext &C);
+  static Type *getWasm_FuncrefTy(LLVMContext &C);
 
   /// Return a pointer to the current type. This is equivalent to
-  /// PointerType::get(Foo, AddrSpace).
+  /// PointerType::get(Ctx, AddrSpace).
+  /// TODO: Remove this after opaque pointer transition is complete.
+  LLVM_DEPRECATED("Use PointerType::get instead", "PointerType::get")
   PointerType *getPointerTo(unsigned AddrSpace = 0) const;
 
 private:

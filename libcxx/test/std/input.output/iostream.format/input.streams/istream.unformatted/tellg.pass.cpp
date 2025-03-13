@@ -12,6 +12,7 @@
 
 #include <istream>
 #include <cassert>
+#include <streambuf>
 
 #include "test_macros.h"
 
@@ -56,11 +57,13 @@ int main(int, char**)
         std::istream is(&sb);
         assert(is.tellg() == 5);
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L" 123456789");
         std::wistream is(&sb);
         assert(is.tellg() == 5);
     }
+#endif
 
   return 0;
 }

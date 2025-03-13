@@ -9,8 +9,9 @@
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -52,7 +53,6 @@ public:
     std::string Buffer;
     raw_string_ostream OS(Buffer);
     OS << Printer->formatHex(i);
-    OS.flush();
     return Buffer;
   }
 };
@@ -60,7 +60,7 @@ public:
 
 TEST_F(MCInstPrinterTest, formatHex) {
   if (!Printer)
-    return;
+    GTEST_SKIP();
 
   EXPECT_EQ("0x1", formatHex<int64_t>(1));
   EXPECT_EQ("0x7fffffffffffffff",

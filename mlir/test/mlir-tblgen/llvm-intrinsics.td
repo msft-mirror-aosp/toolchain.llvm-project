@@ -20,11 +20,61 @@
 // The second operand is overloadable, but the first operand needs to
 // match the result type.
 // CHECK: [1]
-// It has no additional traits.
-// CHECK: []
+// It has no side effects.
+// CHECK: [NoMemoryEffect]
 // It has a result.
-// CHECK: 1>
+// CHECK: 1,
+// It does not implement the access group interface.
+// CHECK: 0,
+// It does not implement the alias analysis interface.
+// CHECK: 0>
 // CHECK: Arguments<(ins LLVM_Type, LLVM_Type
+
+//---------------------------------------------------------------------------//
+
+// This checks that we can define an op that takes in an access group metadata.
+//
+// RUN: cat %S/../../../llvm/include/llvm/IR/Intrinsics.td \
+// RUN: | grep -v "llvm/IR/Intrinsics" \
+// RUN: | mlir-tblgen -gen-llvmir-intrinsics -I %S/../../../llvm/include/ --llvmir-intrinsics-filter=ptrmask --llvmir-intrinsics-access-group-regexp=ptrmask \
+// RUN: | FileCheck --check-prefix=GROUPS %s
+
+// GROUPS-LABEL: def LLVM_ptrmask
+// GROUPS: LLVM_IntrOp<"ptrmask
+// It has no side effects.
+// GROUPS: [NoMemoryEffect]
+// It has a result.
+// GROUPS: 1,
+// It implements the access group interface.
+// GROUPS: 1,
+// It does not implement the alias analysis interface.
+// GROUPS: 0>
+// It has an access group attribute.
+// GROUPS: OptionalAttr<LLVM_AccessGroupArrayAttr>:$access_groups
+
+//---------------------------------------------------------------------------//
+
+// This checks that we can define an op that takes in alias analysis metadata.
+//
+// RUN: cat %S/../../../llvm/include/llvm/IR/Intrinsics.td \
+// RUN: | grep -v "llvm/IR/Intrinsics" \
+// RUN: | mlir-tblgen -gen-llvmir-intrinsics -I %S/../../../llvm/include/ --llvmir-intrinsics-filter=ptrmask --llvmir-intrinsics-alias-analysis-regexp=ptrmask \
+// RUN: | FileCheck --check-prefix=ALIAS %s
+
+// ALIAS-LABEL: def LLVM_ptrmask
+// ALIAS: LLVM_IntrOp<"ptrmask
+// It has no side effects.
+// ALIAS: [NoMemoryEffect]
+// It has a result.
+// ALIAS: 1,
+// It does not implement the access group interface.
+// ALIAS: 0,
+// It implements the alias analysis interface.
+// ALIAS: 1>
+// It has alias scopes, noalias, and tbaa.
+// ALIAS: OptionalAttr<LLVM_AliasScopeArrayAttr>:$alias_scopes
+// ALIAS: OptionalAttr<LLVM_AliasScopeArrayAttr>:$noalias_scopes
+// ALIAS: OptionalAttr<LLVM_TBAATagArrayAttr>:$tbaa
 
 //---------------------------------------------------------------------------//
 

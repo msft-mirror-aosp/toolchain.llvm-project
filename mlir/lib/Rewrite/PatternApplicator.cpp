@@ -15,46 +15,70 @@
 #include "ByteCode.h"
 #include "llvm/Support/Debug.h"
 
+#define DEBUG_TYPE "pattern-application"
+
 using namespace mlir;
 using namespace mlir::detail;
 
 PatternApplicator::PatternApplicator(
-    const FrozenRewritePatternList &frozenPatternList)
+    const FrozenRewritePatternSet &frozenPatternList)
     : frozenPatternList(frozenPatternList) {
   if (const PDLByteCode *bytecode = frozenPatternList.getPDLByteCode()) {
     mutableByteCodeState = std::make_unique<PDLByteCodeMutableState>();
     bytecode->initializeMutableState(*mutableByteCodeState);
   }
 }
-PatternApplicator::~PatternApplicator() {}
+PatternApplicator::~PatternApplicator() = default;
 
-#define DEBUG_TYPE "pattern-match"
+#ifndef NDEBUG
+/// Log a message for a pattern that is impossible to match.
+static void logImpossibleToMatch(const Pattern &pattern) {
+  llvm::dbgs() << "Ignoring pattern '" << pattern.getRootKind()
+               << "' because it is impossible to match or cannot lead "
+                  "to legal IR (by cost model)\n";
+}
+
+/// Log IR after pattern application.
+static Operation *getDumpRootOp(Operation *op) {
+  Operation *isolatedParent =
+      op->getParentWithTrait<mlir::OpTrait::IsIsolatedFromAbove>();
+  if (isolatedParent)
+    return isolatedParent;
+  return op;
+}
+static void logSucessfulPatternApplication(Operation *op) {
+  llvm::dbgs() << "// *** IR Dump After Pattern Application ***\n";
+  op->dump();
+  llvm::dbgs() << "\n\n";
+}
+#endif
 
 void PatternApplicator::applyCostModel(CostModel model) {
   // Apply the cost model to the bytecode patterns first, and then the native
   // patterns.
   if (const PDLByteCode *bytecode = frozenPatternList.getPDLByteCode()) {
-    for (auto it : llvm::enumerate(bytecode->getPatterns()))
+    for (const auto &it : llvm::enumerate(bytecode->getPatterns()))
       mutableByteCodeState->updatePatternBenefit(it.index(), model(it.value()));
   }
 
-  // Separate patterns by root kind to simplify lookup later on.
+  // Copy over the patterns so that we can sort by benefit based on the cost
+  // model. Patterns that are already impossible to match are ignored.
   patterns.clear();
-  anyOpPatterns.clear();
-  for (const auto &pat : frozenPatternList.getNativePatterns()) {
-    // If the pattern is always impossible to match, just ignore it.
-    if (pat.getBenefit().isImpossibleToMatch()) {
-      LLVM_DEBUG({
-        llvm::dbgs()
-            << "Ignoring pattern '" << pat.getRootKind()
-            << "' because it is impossible to match (by pattern benefit)\n";
-      });
-      continue;
+  for (const auto &it : frozenPatternList.getOpSpecificNativePatterns()) {
+    for (const RewritePattern *pattern : it.second) {
+      if (pattern->getBenefit().isImpossibleToMatch())
+        LLVM_DEBUG(logImpossibleToMatch(*pattern));
+      else
+        patterns[it.first].push_back(pattern);
     }
-    if (Optional<OperationName> opName = pat.getRootKind())
-      patterns[*opName].push_back(&pat);
+  }
+  anyOpPatterns.clear();
+  for (const RewritePattern &pattern :
+       frozenPatternList.getMatchAnyOpNativePatterns()) {
+    if (pattern.getBenefit().isImpossibleToMatch())
+      LLVM_DEBUG(logImpossibleToMatch(pattern));
     else
-      anyOpPatterns.push_back(&pat);
+      anyOpPatterns.push_back(&pattern);
   }
 
   // Sort the patterns using the provided cost model.
@@ -66,11 +90,7 @@ void PatternApplicator::applyCostModel(CostModel model) {
     // Special case for one pattern in the list, which is the most common case.
     if (list.size() == 1) {
       if (model(*list.front()).isImpossibleToMatch()) {
-        LLVM_DEBUG({
-          llvm::dbgs() << "Ignoring pattern '" << list.front()->getRootKind()
-                       << "' because it is impossible to match or cannot lead "
-                          "to legal IR (by cost model)\n";
-        });
+        LLVM_DEBUG(logImpossibleToMatch(*list.front()));
         list.clear();
       }
       return;
@@ -85,11 +105,7 @@ void PatternApplicator::applyCostModel(CostModel model) {
     // impossible to match.
     std::stable_sort(list.begin(), list.end(), cmp);
     while (!list.empty() && benefits[list.back()].isImpossibleToMatch()) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "Ignoring pattern '" << list.back()->getRootKind()
-                     << "' because it is impossible to match or cannot lead to "
-                        "legal IR (by cost model)\n";
-      });
+      LLVM_DEBUG(logImpossibleToMatch(*list.back()));
       list.pop_back();
     }
   };
@@ -100,7 +116,10 @@ void PatternApplicator::applyCostModel(CostModel model) {
 
 void PatternApplicator::walkAllPatterns(
     function_ref<void(const Pattern &)> walk) {
-  for (const Pattern &it : frozenPatternList.getNativePatterns())
+  for (const auto &it : frozenPatternList.getOpSpecificNativePatterns())
+    for (const auto &pattern : it.second)
+      walk(*pattern);
+  for (const Pattern &it : frozenPatternList.getMatchAnyOpNativePatterns())
     walk(it);
   if (const PDLByteCode *bytecode = frozenPatternList.getPDLByteCode()) {
     for (const Pattern &it : bytecode->getPatterns())
@@ -129,28 +148,41 @@ LogicalResult PatternApplicator::matchAndRewrite(
 
   // Process the patterns for that match the specific operation type, and any
   // operation type in an interleaved fashion.
-  auto opIt = opPatterns.begin(), opE = opPatterns.end();
-  auto anyIt = anyOpPatterns.begin(), anyE = anyOpPatterns.end();
-  auto pdlIt = pdlMatches.begin(), pdlE = pdlMatches.end();
-  while (true) {
+  unsigned opIt = 0, opE = opPatterns.size();
+  unsigned anyIt = 0, anyE = anyOpPatterns.size();
+  unsigned pdlIt = 0, pdlE = pdlMatches.size();
+  LogicalResult result = failure();
+  do {
     // Find the next pattern with the highest benefit.
     const Pattern *bestPattern = nullptr;
-    const PDLByteCode::MatchResult *pdlMatch = nullptr;
+    unsigned *bestPatternIt = &opIt;
+
     /// Operation specific patterns.
-    if (opIt != opE)
-      bestPattern = *(opIt++);
+    if (opIt < opE)
+      bestPattern = opPatterns[opIt];
     /// Operation agnostic patterns.
-    if (anyIt != anyE &&
-        (!bestPattern || bestPattern->getBenefit() < (*anyIt)->getBenefit()))
-      bestPattern = *(anyIt++);
-    /// PDL patterns.
-    if (pdlIt != pdlE &&
-        (!bestPattern || bestPattern->getBenefit() < pdlIt->benefit)) {
-      pdlMatch = pdlIt;
-      bestPattern = (pdlIt++)->pattern;
+    if (anyIt < anyE &&
+        (!bestPattern ||
+         bestPattern->getBenefit() < anyOpPatterns[anyIt]->getBenefit())) {
+      bestPatternIt = &anyIt;
+      bestPattern = anyOpPatterns[anyIt];
     }
+
+    const PDLByteCode::MatchResult *pdlMatch = nullptr;
+    /// PDL patterns.
+    if (pdlIt < pdlE && (!bestPattern || bestPattern->getBenefit() <
+                                             pdlMatches[pdlIt].benefit)) {
+      bestPatternIt = &pdlIt;
+      pdlMatch = &pdlMatches[pdlIt];
+      bestPattern = pdlMatch->pattern;
+    }
+
     if (!bestPattern)
       break;
+
+    // Update the pattern iterator on failure so that this pattern isn't
+    // attempted again.
+    ++(*bestPatternIt);
 
     // Check that the pattern can be applied.
     if (canApply && !canApply(*bestPattern))
@@ -159,20 +191,50 @@ LogicalResult PatternApplicator::matchAndRewrite(
     // Try to match and rewrite this pattern. The patterns are sorted by
     // benefit, so if we match we can immediately rewrite. For PDL patterns, the
     // match has already been performed, we just need to rewrite.
-    rewriter.setInsertionPoint(op);
-    LogicalResult result = success();
-    if (pdlMatch) {
-      bytecode->rewrite(rewriter, *pdlMatch, *mutableByteCodeState);
-    } else {
-      result = static_cast<const RewritePattern *>(bestPattern)
-                   ->matchAndRewrite(op, rewriter);
-    }
-    if (succeeded(result) && (!onSuccess || succeeded(onSuccess(*bestPattern))))
-      return success();
+    bool matched = false;
+    op->getContext()->executeAction<ApplyPatternAction>(
+        [&]() {
+          rewriter.setInsertionPoint(op);
+#ifndef NDEBUG
+          // Operation `op` may be invalidated after applying the rewrite
+          // pattern.
+          Operation *dumpRootOp = getDumpRootOp(op);
+#endif
+          if (pdlMatch) {
+            result =
+                bytecode->rewrite(rewriter, *pdlMatch, *mutableByteCodeState);
+          } else {
+            LLVM_DEBUG(llvm::dbgs() << "Trying to match \""
+                                    << bestPattern->getDebugName() << "\"\n");
 
-    // Perform any necessary cleanups.
-    if (onFailure)
-      onFailure(*bestPattern);
-  }
-  return failure();
+            const auto *pattern =
+                static_cast<const RewritePattern *>(bestPattern);
+            result = pattern->matchAndRewrite(op, rewriter);
+
+            LLVM_DEBUG(llvm::dbgs()
+                       << "\"" << bestPattern->getDebugName() << "\" result "
+                       << succeeded(result) << "\n");
+          }
+
+          // Process the result of the pattern application.
+          if (succeeded(result) && onSuccess && failed(onSuccess(*bestPattern)))
+            result = failure();
+          if (succeeded(result)) {
+            LLVM_DEBUG(logSucessfulPatternApplication(dumpRootOp));
+            matched = true;
+            return;
+          }
+
+          // Perform any necessary cleanups.
+          if (onFailure)
+            onFailure(*bestPattern);
+        },
+        {op}, *bestPattern);
+    if (matched)
+      break;
+  } while (true);
+
+  if (mutableByteCodeState)
+    mutableByteCodeState->cleanupAfterMatchAndRewrite();
+  return result;
 }

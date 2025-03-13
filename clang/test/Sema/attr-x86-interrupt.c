@@ -3,6 +3,7 @@
 // RUN: %clang_cc1 -triple x86_64-pc-win32  -fsyntax-only -verify %s
 // RUN: %clang_cc1 -triple i386-pc-win32  -fsyntax-only -verify %s
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnux32  -fsyntax-only -verify %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu  -fsyntax-only -verify %s -DNOCALLERSAVE=1
 
 struct a {
   int b;

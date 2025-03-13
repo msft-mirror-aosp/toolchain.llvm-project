@@ -11,9 +11,6 @@ some of these things by going through an example, explaining how to use
 Python scripting to find a bug in a program that searches for text in a
 large binary tree.
 
-.. contents::
-   :local:
-
 The Test Program and Input
 --------------------------
 
@@ -36,7 +33,7 @@ the input text file:
 
 ::
 
-   % ./dictionary Romeo-and-Juliet.txt
+   $ ./dictionary Romeo-and-Juliet.txt
    Dictionary loaded.
    Enter search word: love
    Yes!
@@ -45,7 +42,7 @@ the input text file:
    Enter search word: Romeo
    No!
    Enter search word: ^D
-   %
+   $
 
 Using Depth First Search
 ------------------------
@@ -78,13 +75,13 @@ later explanations:
    12:     if root_word == word:
    13:         return cur_path
    14:     elif word < root_word:
-   15:         if left_child_ptr.GetValue() == None:
+   15:         if left_child_ptr.GetValue() is None:
    16:             return ""
    17:         else:
    18:             cur_path = cur_path + "L"
    19:             return DFS (left_child_ptr, word, cur_path)
    20:     else:
-   21:         if right_child_ptr.GetValue() == None:
+   21:         if right_child_ptr.GetValue() is None:
    22:             return ""
    23:         else:
    24:             cur_path = cur_path + "R"
@@ -110,10 +107,10 @@ kind of Python variable will it be? The answers are to use the LLDB API
 functions, provided as part of the LLDB Python module. Running Python
 from inside LLDB, LLDB will automatically give us our current frame
 object as a Python variable, "lldb.frame". This variable has the type
-"SBFrame" (see the LLDB API for more information about SBFrame
+`SBFrame` (see the LLDB API for more information about `SBFrame`
 objects). One of the things we can do with a frame object, is to ask it
 to find and return its local variable. We will call the API function
-"FindVariable" on the lldb.frame object to give us our dictionary
+`SBFrame.FindVariable` on the lldb.frame object to give us our dictionary
 variable as a Python variable:
 
 ::
@@ -125,11 +122,11 @@ current frame to find the variable named "dictionary" and return it. We then
 store the returned value in the Python variable named "root". This answers the
 question of HOW to get the variable, but it still doesn't explain WHAT actually
 gets put into "root". If you examine the LLDB API, you will find that the
-SBFrame method "FindVariable" returns an object of type SBValue. SBValue
+`SBFrame` method "FindVariable" returns an object of type `SBValue`. `SBValue`
 objects are used, among other things, to wrap up program variables and values.
-There are many useful methods defined in the SBValue class to allow you to get
+There are many useful methods defined in the `SBValue` class to allow you to get
 information or children values out of SBValues. For complete information, see
-the header file SBValue.h. The SBValue methods that we use in our DFS function
+the header file SBValue.h. The `SBValue` methods that we use in our DFS function
 are ``GetChildMemberWithName()``, ``GetSummary()``, and ``GetValue()``.
 
 
@@ -184,7 +181,7 @@ you would do something like this:
 
 ::
 
-   % lldb
+   $ lldb
    (lldb) process attach -n "dictionary"
    Architecture set to: x86_64.
    Process 521 stopped
@@ -500,12 +497,11 @@ tree_utils.py - Example Python functions using LLDB's API, including DFS
    """
    # ===-- tree_utils.py ---------------------------------------*- Python -*-===//
    #
-   #                     The LLVM Compiler Infrastructure
+   #  Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+   #  See https://llvm.org/LICENSE.txt for license information.
+   #  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
    #
-   # This file is distributed under the University of Illinois Open Source
-   # License. See LICENSE.TXT for details.
-   #
-   # ===---------------------------------------------------------------------===//
+   # ===----------------------------------------------------------------------===//
 
    tree_utils.py  - A set of functions for examining binary
    search trees, based on the example search tree defined in
@@ -623,12 +619,11 @@ dictionary.c - Sample dictionary program, with bug
 
    //===-- dictionary.c ---------------------------------------------*- C -*-===//
    //
-   //                     The LLVM Compiler Infrastructure
+   // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+   // See https://llvm.org/LICENSE.txt for license information.
+   // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
    //
-   // This file is distributed under the University of Illinois Open Source
-   // License. See LICENSE.TXT for details.
-   //
-   //===---------------------------------------------------------------------===//
+   //===----------------------------------------------------------------------===//
    #include <ctype.h>
    #include <stdio.h>
    #include <stdlib.h>

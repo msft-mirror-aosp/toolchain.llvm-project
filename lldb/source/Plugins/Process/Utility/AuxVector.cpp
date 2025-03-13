@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AuxVector.h"
+#include <optional>
 
 AuxVector::AuxVector(const lldb_private::DataExtractor &data) {
   ParseAuxv(data);
@@ -29,12 +30,12 @@ void AuxVector::ParseAuxv(const lldb_private::DataExtractor &data) {
   }
 }
 
-llvm::Optional<uint64_t>
+std::optional<uint64_t>
 AuxVector::GetAuxValue(enum EntryType entry_type) const {
   auto it = m_auxv_entries.find(static_cast<uint64_t>(entry_type));
   if (it != m_auxv_entries.end())
     return it->second;
-  return llvm::None;
+  return std::nullopt;
 }
 
 void AuxVector::DumpToLog(lldb_private::Log *log) const {
@@ -82,6 +83,7 @@ const char *AuxVector::GetEntryName(EntryType type) const {
     case ENTRY_NAME(AUXV_AT_SECURE);         break;
     case ENTRY_NAME(AUXV_AT_BASE_PLATFORM);  break;
     case ENTRY_NAME(AUXV_AT_RANDOM);         break;
+    case ENTRY_NAME(AUXV_AT_HWCAP2);         break;
     case ENTRY_NAME(AUXV_AT_EXECFN);         break;
     case ENTRY_NAME(AUXV_AT_SYSINFO);        break;
     case ENTRY_NAME(AUXV_AT_SYSINFO_EHDR);   break;

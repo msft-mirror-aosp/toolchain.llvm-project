@@ -10,7 +10,9 @@
 #define LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_GNU_H
 
 #include "Cuda.h"
+#include "LazyDetector.h"
 #include "ROCm.h"
+#include "SYCL.h"
 #include "clang/Driver/Tool.h"
 #include "clang/Driver/ToolChain.h"
 #include <set>
@@ -22,12 +24,12 @@ struct DetectedMultilibs {
   /// The set of multilibs that the detected installation supports.
   MultilibSet Multilibs;
 
-  /// The primary multilib appropriate for the given flags.
-  Multilib SelectedMultilib;
+  /// The multilibs appropriate for the given flags.
+  llvm::SmallVector<Multilib> SelectedMultilibs;
 
   /// On Biarch systems, this corresponds to the default multilib when
   /// targeting the non-default multilib. Otherwise, it is empty.
-  llvm::Optional<Multilib> BiarchSibling;
+  std::optional<Multilib> BiarchSibling;
 };
 
 bool findMIPSMultilibs(const Driver &D, const llvm::Triple &TargetTriple,
@@ -201,7 +203,7 @@ public:
     Multilib SelectedMultilib;
     /// On Biarch systems, this corresponds to the default multilib when
     /// targeting the non-default multilib. Otherwise, it is empty.
-    llvm::Optional<Multilib> BiarchSibling;
+    std::optional<Multilib> BiarchSibling;
 
     GCCVersion Version;
 
@@ -217,8 +219,7 @@ public:
 
   public:
     explicit GCCInstallationDetector(const Driver &D) : IsValid(false), D(D) {}
-    void init(const llvm::Triple &TargetTriple, const llvm::opt::ArgList &Args,
-              ArrayRef<std::string> ExtraTripleAliases = None);
+    void init(const llvm::Triple &TargetTriple, const llvm::opt::ArgList &Args);
 
     /// Check whether we detected a valid GCC install.
     bool isValid() const { return IsValid; }
@@ -286,8 +287,9 @@ public:
 
 protected:
   GCCInstallationDetector GCCInstallation;
-  CudaInstallationDetector CudaInstallation;
-  RocmInstallationDetector RocmInstallation;
+  LazyDetector<CudaInstallationDetector> CudaInstallation;
+  LazyDetector<RocmInstallationDetector> RocmInstallation;
+  LazyDetector<SYCLInstallationDetector> SYCLInstallation;
 
 public:
   Generic_GCC(const Driver &D, const llvm::Triple &Triple,
@@ -296,9 +298,10 @@ public:
 
   void printVerboseInfo(raw_ostream &OS) const override;
 
-  bool IsUnwindTablesDefault(const llvm::opt::ArgList &Args) const override;
+  UnwindTableLevel
+  getDefaultUnwindTableLevel(const llvm::opt::ArgList &Args) const override;
   bool isPICDefault() const override;
-  bool isPIEDefault() const override;
+  bool isPIEDefault(const llvm::opt::ArgList &Args) const override;
   bool isPICDefaultForced() const override;
   bool IsIntegratedAssemblerDefault() const override;
   llvm::opt::DerivedArgList *
@@ -309,11 +312,6 @@ protected:
   Tool *getTool(Action::ActionClass AC) const override;
   Tool *buildAssembler() const override;
   Tool *buildLinker() const override;
-
-  virtual std::string getMultiarchTriple(const Driver &D,
-                                         const llvm::Triple &TargetTriple,
-                                         StringRef SysRoot) const
-  { return TargetTriple.str(); }
 
   /// \name ToolChain Implementation Helper Functions
   /// @{
@@ -340,6 +338,9 @@ protected:
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
 
+  void addSYCLIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                          llvm::opt::ArgStringList &CC1Args) const override;
+
   virtual void
   addLibCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
                         llvm::opt::ArgStringList &CC1Args) const;
@@ -347,16 +348,15 @@ protected:
   addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
                            llvm::opt::ArgStringList &CC1Args) const;
 
-  bool
-  addGCCLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
-                           llvm::opt::ArgStringList &CC1Args) const;
+  bool addGCCLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
+                                   llvm::opt::ArgStringList &CC1Args,
+                                   StringRef DebianMultiarch) const;
 
-  bool addLibStdCXXIncludePaths(Twine Base, Twine Suffix, StringRef GCCTriple,
-                                StringRef GCCMultiarchTriple,
-                                StringRef TargetMultiarchTriple,
+  bool addLibStdCXXIncludePaths(Twine IncludeDir, StringRef Triple,
                                 Twine IncludeSuffix,
                                 const llvm::opt::ArgList &DriverArgs,
-                                llvm::opt::ArgStringList &CC1Args) const;
+                                llvm::opt::ArgStringList &CC1Args,
+                                bool DetectDebian = false) const;
 
   /// @}
 

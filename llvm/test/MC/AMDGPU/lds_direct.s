@@ -1,4 +1,4 @@
-// RUN: llvm-mc -arch=amdgcn -mcpu=gfx900 -show-encoding %s | FileCheck %s --check-prefix=GFX9
+// RUN: llvm-mc -triple=amdgcn -mcpu=gfx900 -show-encoding %s | FileCheck %s --check-prefix=GFX9
 
 //---------------------------------------------------------------------------//
 // VOP1/3
@@ -86,7 +86,7 @@ v_pk_mad_i16 v0, src_lds_direct, v0, v0
 // GFX9: v_pk_mad_i16 v0, src_lds_direct, v0, v0 ; encoding: [0x00,0x40,0x80,0xd3,0xfe,0x00,0x02,0x1c]
 
 v_pk_add_i16 v0, src_lds_direct, v0
-// GFX9: v_pk_add_i16 v0, src_lds_direct, v0 ; encoding: [0x00,0x00,0x82,0xd3,0xfe,0x00,0x02,0x18]
+// GFX9: v_pk_add_i16 v0, src_lds_direct, v0 ; encoding: [0x00,0x40,0x82,0xd3,0xfe,0x00,0x02,0x18]
 
 //---------------------------------------------------------------------------//
 // VOPC

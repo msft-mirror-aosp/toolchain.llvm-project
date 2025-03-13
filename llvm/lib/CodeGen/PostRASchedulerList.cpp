@@ -25,18 +25,16 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/ScheduleDAGInstrs.h"
+#include "llvm/CodeGen/ScheduleDAGMutation.h"
 #include "llvm/CodeGen/ScheduleHazardRecognizer.h"
-#include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
-#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -72,7 +70,7 @@ DebugMod("postra-sched-debugmod",
                       cl::desc("Debug control MBBs that are scheduled"),
                       cl::init(0), cl::Hidden);
 
-AntiDepBreaker::~AntiDepBreaker() { }
+AntiDepBreaker::~AntiDepBreaker() = default;
 
 namespace {
   class PostRAScheduler : public MachineFunctionPass {
@@ -87,10 +85,10 @@ namespace {
       AU.setPreservesCFG();
       AU.addRequired<AAResultsWrapperPass>();
       AU.addRequired<TargetPassConfig>();
-      AU.addRequired<MachineDominatorTree>();
-      AU.addPreserved<MachineDominatorTree>();
-      AU.addRequired<MachineLoopInfo>();
-      AU.addPreserved<MachineLoopInfo>();
+      AU.addRequired<MachineDominatorTreeWrapperPass>();
+      AU.addPreserved<MachineDominatorTreeWrapperPass>();
+      AU.addRequired<MachineLoopInfoWrapperPass>();
+      AU.addPreserved<MachineLoopInfoWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
 
@@ -100,12 +98,6 @@ namespace {
     }
 
     bool runOnMachineFunction(MachineFunction &Fn) override;
-
-  private:
-    bool enablePostRAScheduler(
-        const TargetSubtargetInfo &ST, CodeGenOpt::Level OptLevel,
-        TargetSubtargetInfo::AntiDepBreakMode &Mode,
-        TargetSubtargetInfo::RegClassVector &CriticalPathRCs) const;
   };
   char PostRAScheduler::ID = 0;
 
@@ -139,7 +131,7 @@ namespace {
     ///
     /// This is the instruction number from the top of the current block, not
     /// the SlotIndex. It is only used by the AntiDepBreaker.
-    unsigned EndIndex;
+    unsigned EndIndex = 0;
 
   public:
     SchedulePostRATDList(
@@ -184,7 +176,7 @@ namespace {
 
   private:
     /// Apply each ScheduleDAGMutation step in order.
-    void postprocessDAG();
+    void postProcessDAG();
 
     void ReleaseSucc(SUnit *SU, SDep *SuccEdge);
     void ReleaseSuccessors(SUnit *SU);
@@ -206,7 +198,7 @@ SchedulePostRATDList::SchedulePostRATDList(
     const RegisterClassInfo &RCI,
     TargetSubtargetInfo::AntiDepBreakMode AntiDepMode,
     SmallVectorImpl<const TargetRegisterClass *> &CriticalPathRCs)
-    : ScheduleDAGInstrs(MF, &MLI), AA(AA), EndIndex(0) {
+    : ScheduleDAGInstrs(MF, &MLI), AA(AA) {
 
   const InstrItineraryData *InstrItins =
       MF.getSubtarget().getInstrItineraryData();
@@ -252,8 +244,8 @@ void SchedulePostRATDList::exitRegion() {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 /// dumpSchedule - dump the scheduled Sequence.
 LLVM_DUMP_METHOD void SchedulePostRATDList::dumpSchedule() const {
-  for (unsigned i = 0, e = Sequence.size(); i != e; i++) {
-    if (SUnit *SU = Sequence[i])
+  for (const SUnit *SU : Sequence) {
+    if (SU)
       dumpNode(*SU);
     else
       dbgs() << "**** NOOP ****\n";
@@ -261,14 +253,8 @@ LLVM_DUMP_METHOD void SchedulePostRATDList::dumpSchedule() const {
 }
 #endif
 
-bool PostRAScheduler::enablePostRAScheduler(
-    const TargetSubtargetInfo &ST,
-    CodeGenOpt::Level OptLevel,
-    TargetSubtargetInfo::AntiDepBreakMode &Mode,
-    TargetSubtargetInfo::RegClassVector &CriticalPathRCs) const {
-  Mode = ST.getAntiDepBreakMode();
-  ST.getCriticalPathRCs(CriticalPathRCs);
-
+static bool enablePostRAScheduler(const TargetSubtargetInfo &ST,
+                                  CodeGenOptLevel OptLevel) {
   // Check for explicit enable/disable of post-ra scheduling.
   if (EnablePostRAScheduler.getPosition() > 0)
     return EnablePostRAScheduler;
@@ -281,24 +267,17 @@ bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
   if (skipFunction(Fn.getFunction()))
     return false;
 
-  TII = Fn.getSubtarget().getInstrInfo();
-  MachineLoopInfo &MLI = getAnalysis<MachineLoopInfo>();
-  AliasAnalysis *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+  const auto &Subtarget = Fn.getSubtarget();
   TargetPassConfig *PassConfig = &getAnalysis<TargetPassConfig>();
-
-  RegClassInfo.runOnMachineFunction(Fn);
-
-  TargetSubtargetInfo::AntiDepBreakMode AntiDepMode =
-    TargetSubtargetInfo::ANTIDEP_NONE;
-  SmallVector<const TargetRegisterClass*, 4> CriticalPathRCs;
-
   // Check that post-RA scheduling is enabled for this target.
-  // This may upgrade the AntiDepMode.
-  if (!enablePostRAScheduler(Fn.getSubtarget(), PassConfig->getOptLevel(),
-                             AntiDepMode, CriticalPathRCs))
+  if (!enablePostRAScheduler(Subtarget, PassConfig->getOptLevel()))
     return false;
 
-  // Check for antidep breaking override...
+  TII = Subtarget.getInstrInfo();
+  MachineLoopInfo &MLI = getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  AliasAnalysis *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+  TargetSubtargetInfo::AntiDepBreakMode AntiDepMode =
+      Subtarget.getAntiDepBreakMode();
   if (EnableAntiDepBreaking.getPosition() > 0) {
     AntiDepMode = (EnableAntiDepBreaking == "all")
       ? TargetSubtargetInfo::ANTIDEP_ALL
@@ -306,6 +285,9 @@ bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
          ? TargetSubtargetInfo::ANTIDEP_CRITICAL
          : TargetSubtargetInfo::ANTIDEP_NONE);
   }
+  SmallVector<const TargetRegisterClass *, 4> CriticalPathRCs;
+  Subtarget.getCriticalPathRCs(CriticalPathRCs);
+  RegClassInfo.runOnMachineFunction(Fn);
 
   LLVM_DEBUG(dbgs() << "PostRAScheduler\n");
 
@@ -409,7 +391,7 @@ void SchedulePostRATDList::schedule() {
     }
   }
 
-  postprocessDAG();
+  postProcessDAG();
 
   LLVM_DEBUG(dbgs() << "********** List Scheduling **********\n");
   LLVM_DEBUG(dump());
@@ -438,7 +420,7 @@ void SchedulePostRATDList::finishBlock() {
 }
 
 /// Apply each ScheduleDAGMutation step in order.
-void SchedulePostRATDList::postprocessDAG() {
+void SchedulePostRATDList::postProcessDAG() {
   for (auto &M : Mutations)
     M->apply(this);
 }
@@ -531,11 +513,11 @@ void SchedulePostRATDList::ListScheduleTopDown() {
   ReleaseSuccessors(&EntrySU);
 
   // Add all leaves to Available queue.
-  for (unsigned i = 0, e = SUnits.size(); i != e; ++i) {
+  for (SUnit &SUnit : SUnits) {
     // It is available if it has no predecessors.
-    if (!SUnits[i].NumPredsLeft && !SUnits[i].isAvailable) {
-      AvailableQueue.push(&SUnits[i]);
-      SUnits[i].isAvailable = true;
+    if (!SUnit.NumPredsLeft && !SUnit.isAvailable) {
+      AvailableQueue.push(&SUnit);
+      SUnit.isAvailable = true;
     }
   }
 
@@ -657,10 +639,7 @@ void SchedulePostRATDList::ListScheduleTopDown() {
 
 #ifndef NDEBUG
   unsigned ScheduledNodes = VerifyScheduledDAG(/*isBottomUp=*/false);
-  unsigned Noops = 0;
-  for (unsigned i = 0, e = Sequence.size(); i != e; ++i)
-    if (!Sequence[i])
-      ++Noops;
+  unsigned Noops = llvm::count(Sequence, nullptr);
   assert(Sequence.size() - Noops == ScheduledNodes &&
          "The number of nodes scheduled doesn't match the expected number!");
 #endif // NDEBUG

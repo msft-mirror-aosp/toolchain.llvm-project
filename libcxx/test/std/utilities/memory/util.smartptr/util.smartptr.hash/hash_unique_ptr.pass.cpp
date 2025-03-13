@@ -17,7 +17,9 @@
 // };
 
 #include <memory>
+
 #include <cassert>
+#include <functional>
 
 #include "test_macros.h"
 
@@ -33,28 +35,25 @@ void test_enabled_with_deleter() {
   using RawDel = typename std::decay<Del>::type;
   RawDel d(1);
   UPtr p(nullptr, std::forward<Del>(d));
-  test_hash_enabled_for_type<UPtr>(p);
-  test_hash_enabled_for_type<pointer>();
+  test_hash_enabled<UPtr>(p);
+  test_hash_enabled<pointer>();
 }
 
 template <class ValueT, class Del>
 void test_disabled_with_deleter() {
   using UPtr = std::unique_ptr<ValueT, Del>;
   using pointer = typename UPtr::pointer;
-  test_hash_disabled_for_type<UPtr>();
-  test_hash_disabled_for_type<pointer>();
+  test_hash_disabled<UPtr>();
+  test_hash_disabled<pointer>();
 }
 
-namespace std {
-
 template <class T>
-struct hash<::min_pointer<T, std::integral_constant<size_t, 1>>> {
-  size_t operator()(::min_pointer<T, std::integral_constant<size_t, 1>> p) const TEST_NOEXCEPT_FALSE {
+struct std::hash<min_pointer<T, std::integral_constant<std::size_t, 1>>> {
+  std::size_t operator()(min_pointer<T, std::integral_constant<size_t, 1>> p) const TEST_NOEXCEPT_FALSE {
     if (!p) return 0;
     return std::hash<T*>{}(std::addressof(*p));
   }
 };
-}
 
 struct A {};
 

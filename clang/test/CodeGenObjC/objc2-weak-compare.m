@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -triple i386-apple-darwin9 -fobjc-runtime=macosx-fragile-10.5 -fobjc-gc -emit-llvm -o %t %s
-// RUN: %clang_cc1 -x objective-c++ -triple i386-apple-darwin9 -fobjc-runtime=macosx-fragile-10.5 -fobjc-gc -emit-llvm -o %t %s
+// RUN: %clang_cc1 -Wno-error=return-type -triple i386-apple-darwin9 -fobjc-runtime=macosx-fragile-10.5 -fobjc-gc -emit-llvm -o %t %s
+// RUN: %clang_cc1 -Wno-error=return-type -x objective-c++ -triple i386-apple-darwin9 -fobjc-runtime=macosx-fragile-10.5 -fobjc-gc -emit-llvm -o %t %s
 
 @interface PBXTarget 
 {
@@ -11,7 +11,7 @@ PBXTarget * result;
 - Meth;
 @end
 
-extern void foo();
+extern void foo(void);
 @implementation PBXTarget
 - Meth {
 	if (_lastKnownTarget != result)

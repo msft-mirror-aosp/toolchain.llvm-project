@@ -1,8 +1,10 @@
+// RUN: %clang_cc1 -std=c++2a -include %s %s -ast-print -verify | FileCheck %s
+//
 // RUN: %clang_cc1 -std=c++2a -emit-pch %s -o %t-cxx2a
-// RUN: %clang_cc1 -std=c++2a -DUSE_PCH -include-pch %t-cxx2a %s -ast-print -verify | FileCheck %s
+// RUN: %clang_cc1 -std=c++2a -include-pch %t-cxx2a %s -ast-print -verify | FileCheck %s
 
 // RUN: %clang_cc1 -std=c++2a -emit-pch -fpch-instantiate-templates %s -o %t-cxx2a
-// RUN: %clang_cc1 -std=c++2a -DUSE_PCH -include-pch %t-cxx2a %s -ast-print -verify | FileCheck %s
+// RUN: %clang_cc1 -std=c++2a -include-pch %t-cxx2a %s -ast-print -verify | FileCheck %s
 
 #ifndef USE_PCH
 namespace inheriting_constructor {
@@ -10,7 +12,7 @@ namespace inheriting_constructor {
 
   template<typename X, typename Y> struct T {
     template<typename A>
-    explicit((Y{}, true)) T(A &&a) {}
+    explicit(((void)Y{}, true)) T(A &&a) {}
   };
 
   template<typename X, typename Y> struct U : T<X, Y> {
@@ -26,7 +28,7 @@ namespace inheriting_constructor {
 U<S, char> a = foo('0');
 }
 
-//CHECK: explicit((char{} , true))
+//CHECK: explicit(((void)char{} , true))
 
 #endif
 
@@ -77,8 +79,8 @@ struct A {
 B<true> b_true;
 B<false> b_false;
 #else
-//expected-note@-8 {{candidate template ignored}}
-//expected-note@-8 {{explicit constructor declared here}}
+//expected-note@-8 {{candidate template ignored}} expected-note@-8 {{implicit deduction guide declared as 'template <bool b> A(A<b>) -> A<b>'}}
+//expected-note@-8 {{explicit constructor declared here}} expected-note@-8 {{implicit deduction guide declared as 'template <bool b> explicit(b) A(B<b>) -> A<b>'}}
 //expected-note@-15+ {{candidate constructor}}
 //expected-note@-8+ {{explicit conversion function is not a candidate (explicit specifier}}
 //expected-note@-11 {{explicit constructor is not a candidate (explicit specifier}}
@@ -125,3 +127,5 @@ A a1 = { 0 };
 #endif
 
 }
+
+#define USE_PCH

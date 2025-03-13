@@ -2,6 +2,33 @@
 // Vector Instructions
 //===----------------------------------------------------------------------===//
 
+// Pseudo instructions for VM/VM512 spill/restore
+//
+// These pseudo instructions are used for only spill/restore since
+// InlineSpiller assumes storeRegToStackSlot/loadRegFromStackSlot
+// functions emit only single instruction.  Those functions emit a
+// single store/load instruction or one of these pseudo store/load
+// instructions.
+//
+// Specifies hasSideEffects = 0 to disable UnmodeledSideEffects.
+
+let mayLoad = 1, hasSideEffects = 0 in {
+def LDVMrii : Pseudo<
+    (outs VM:$vmx), (ins MEMrii:$addr),
+    "# pseudo ldvm $vmx, $addr", []>;
+def LDVM512rii : Pseudo<
+    (outs VM512:$vmx), (ins MEMrii:$addr),
+    "# pseudo ldvm512 $vmx, $addr", []>;
+}
+let mayStore = 1, hasSideEffects = 0 in {
+def STVMrii : Pseudo<
+    (outs), (ins MEMrii:$addr, VM:$vmx),
+    "# pseudo stvm $addr, $vmx", []>;
+def STVM512rii : Pseudo<
+    (outs), (ins MEMrii:$addr, VM512:$vmx),
+    "# pseudo stvm512 $addr, $vmx", []>;
+}
+
 //===----------------------------------------------------------------------===//
 // Pseudo instructions for VM512 modifications
 //===----------------------------------------------------------------------===//
@@ -41,6 +68,22 @@ let hasSideEffects = 0, isCodeGenOnly = 1, DisableEncoding = "$vl" in {
   def VFMKSyvyl : Pseudo<(outs VM512:$vmx),
                          (ins CCOp:$cf, V64:$vz, VM512:$vm, I32:$vl),
                          "# pseudo-vfmk.s.$cf $vmx, $vz, $vm">;
+}
+
+// ANDM/ORM/XORM/EQVM/NNDM/NEGM instructions using VM512
+let hasSideEffects = 0, isCodeGenOnly = 1 in {
+  def ANDMyy : Pseudo<(outs VM512:$vmx), (ins VM512:$vmy, VM512:$vmz),
+                      "# andm $vmx, $vmy, $vmz">;
+  def ORMyy : Pseudo<(outs VM512:$vmx), (ins VM512:$vmy, VM512:$vmz),
+                     "# orm $vmx, $vmy, $vmz">;
+  def XORMyy : Pseudo<(outs VM512:$vmx), (ins VM512:$vmy, VM512:$vmz),
+                      "# xorm $vmx, $vmy, $vmz">;
+  def EQVMyy : Pseudo<(outs VM512:$vmx), (ins VM512:$vmy, VM512:$vmz),
+                      "# eqvm $vmx, $vmy, $vmz">;
+  def NNDMyy : Pseudo<(outs VM512:$vmx), (ins VM512:$vmy, VM512:$vmz),
+                      "# nndm $vmx, $vmy, $vmz">;
+  def NEGMy : Pseudo<(outs VM512:$vmx), (ins VM512:$vmy),
+                     "# negm $vmx, $vmy">;
 }
 
 //===----------------------------------------------------------------------===//

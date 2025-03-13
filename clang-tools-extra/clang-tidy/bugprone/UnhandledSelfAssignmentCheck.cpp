@@ -12,9 +12,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 UnhandledSelfAssignmentCheck::UnhandledSelfAssignmentCheck(
     StringRef Name, ClangTidyContext *Context)
@@ -40,19 +38,16 @@ void UnhandledSelfAssignmentCheck::registerMatchers(MatchFinder *Finder) {
 
   // Self-check: Code compares something with 'this' pointer. We don't check
   // whether it is actually the parameter what we compare.
-  const auto HasNoSelfCheck = cxxMethodDecl(unless(anyOf(
-      hasDescendant(binaryOperator(hasAnyOperatorName("==", "!="),
-                                   has(ignoringParenCasts(cxxThisExpr())))),
-      hasDescendant(cxxOperatorCallExpr(
-          hasAnyOverloadedOperatorName("==", "!="), argumentCountIs(2),
-          has(ignoringParenCasts(cxxThisExpr())))))));
+  const auto HasNoSelfCheck = cxxMethodDecl(unless(hasDescendant(
+      binaryOperation(hasAnyOperatorName("==", "!="),
+                      hasEitherOperand(ignoringParenCasts(cxxThisExpr()))))));
 
   // Both copy-and-swap and copy-and-move method creates a copy first and
   // assign it to 'this' with swap or move.
   // In the non-template case, we can search for the copy constructor call.
   const auto HasNonTemplateSelfCopy = cxxMethodDecl(
       ofClass(cxxRecordDecl(unless(hasAncestor(classTemplateDecl())))),
-      traverse(ast_type_traits::TK_AsIs,
+      traverse(TK_AsIs,
                hasDescendant(cxxConstructExpr(hasDeclaration(cxxConstructorDecl(
                    isCopyConstructor(), ofClass(equalsBoundNode("class"))))))));
 
@@ -79,9 +74,11 @@ void UnhandledSelfAssignmentCheck::registerMatchers(MatchFinder *Finder) {
     // Matcher for standard smart pointers.
     const auto SmartPointerType = qualType(hasUnqualifiedDesugaredType(
         recordType(hasDeclaration(classTemplateSpecializationDecl(
-            hasAnyName("::std::shared_ptr", "::std::unique_ptr",
-                       "::std::weak_ptr", "::std::auto_ptr"),
-            templateArgumentCountIs(1))))));
+            anyOf(allOf(hasAnyName("::std::shared_ptr", "::std::weak_ptr",
+                                   "::std::auto_ptr"),
+                        templateArgumentCountIs(1)),
+                  allOf(hasName("::std::unique_ptr"),
+                        templateArgumentCountIs(2))))))));
 
     // We will warn only if the class has a pointer or a C array field which
     // probably causes a problem during self-assignment (e.g. first resetting
@@ -110,6 +107,4 @@ void UnhandledSelfAssignmentCheck::check(
        "operator=() does not handle self-assignment properly");
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

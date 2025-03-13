@@ -3,7 +3,7 @@
 
 // RUN: %clang_cl --target=x86_64-windows-msvc -Od -Z7 -c /Fo%t.obj -- %s
 // RUN: lld-link -debug:full -nodefaultlib -entry:main %t.obj -out:%t.exe -pdb:%t.pdb
-// RUN: env LLDB_USE_NATIVE_PDB_READER=1 %lldb -f %t.exe -s \
+// RUN: %lldb -f %t.exe -s \
 // RUN:     %p/Inputs/function-types-builtins.lldbinit | FileCheck %s
 
 // Test that we can display function signatures with simple builtin
@@ -118,7 +118,7 @@ auto aab = &unary<int(*)[5]>;
 auto aac = &unary<int(&&)[5]>;
 // CHECK: (void (*)(int (&&)[5])) aac = {{.*}}
 auto aad = &unary<int(*const)[5]>;
-// CHECK: (void (*)(int (*)[5])) aad = {{.*}}
+// CHECK: (void (*)(int (*const)[5])) aad = {{.*}}
 
 
 // same test cases with return values, note we can't overload on return type
@@ -210,9 +210,9 @@ auto null = &nullary;
 // FIXME: These currently don't work because clang-cl emits incorrect debug info
 // for std::nullptr_t.  We should fix these in clang-cl.
 auto rae = &unaryret<decltype(nullptr), 29>;
-// CHECK: (nullptr_t (*)()) rae = {{.*}}
+// CHECK: (std::nullptr_t (*)()) rae = {{.*}}
 auto aae = &unary<decltype(nullptr)>;
-// CHECK: (void (*)(nullptr_t)) aae = {{.*}}
+// CHECK: (void (*)(std::nullptr_t)) aae = {{.*}}
 
 int main(int argc, char **argv) {
   return 0;

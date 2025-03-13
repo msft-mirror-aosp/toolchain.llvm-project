@@ -13,6 +13,7 @@
 #include "clang/Basic/CharInfo.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
+#include <optional>
 #include <set>
 
 using namespace llvm;
@@ -26,10 +27,8 @@ namespace query {
 // is found before End, return StringRef().  Begin is adjusted to exclude the
 // lexed region.
 StringRef QueryParser::lexWord() {
-  Line = Line.drop_while([](char c) {
-    // Don't trim newlines.
-    return StringRef(" \t\v\f\r").contains(c);
-  });
+  // Don't trim newlines.
+  Line = Line.ltrim(" \t\v\f\r");
 
   if (Line.empty())
     // Even though the Line is empty, it contains a pointer and
@@ -111,9 +110,9 @@ template <typename QueryType> QueryRef QueryParser::parseSetOutputKind() {
                          .Case("dump", OK_DetailedAST)
                          .Default(~0u);
   if (OutKind == ~0u) {
-    return new InvalidQuery(
-        "expected 'diag', 'print', 'detailed-ast' or 'dump', got '" + ValStr +
-        "'");
+    return new InvalidQuery("expected 'diag', 'print', 'detailed-ast' or "
+                            "'dump', got '" +
+                            ValStr + "'");
   }
 
   switch (OutKind) {
@@ -128,34 +127,28 @@ template <typename QueryType> QueryRef QueryParser::parseSetOutputKind() {
   llvm_unreachable("Invalid output kind");
 }
 
-QueryRef QueryParser::parseSetTraversalKind(
-    ast_type_traits::TraversalKind QuerySession::*Var) {
+QueryRef QueryParser::parseSetTraversalKind(TraversalKind QuerySession::*Var) {
   StringRef ValStr;
   unsigned Value =
       LexOrCompleteWord<unsigned>(this, ValStr)
-          .Case("AsIs", ast_type_traits::TK_AsIs)
-          .Case("IgnoreUnlessSpelledInSource",
-                ast_type_traits::TK_IgnoreUnlessSpelledInSource)
+          .Case("AsIs", TK_AsIs)
+          .Case("IgnoreUnlessSpelledInSource", TK_IgnoreUnlessSpelledInSource)
           .Default(~0u);
   if (Value == ~0u) {
     return new InvalidQuery("expected traversal kind, got '" + ValStr + "'");
   }
-  return new SetQuery<ast_type_traits::TraversalKind>(
-      Var, static_cast<ast_type_traits::TraversalKind>(Value));
+  return new SetQuery<TraversalKind>(Var, static_cast<TraversalKind>(Value));
 }
 
 QueryRef QueryParser::endQuery(QueryRef Q) {
   StringRef Extra = Line;
-  StringRef ExtraTrimmed = Extra.drop_while(
-      [](char c) { return StringRef(" \t\v\f\r").contains(c); });
+  StringRef ExtraTrimmed = Extra.ltrim(" \t\v\f\r");
 
-  if ((!ExtraTrimmed.empty() && ExtraTrimmed[0] == '\n') ||
-      (ExtraTrimmed.size() >= 2 && ExtraTrimmed[0] == '\r' &&
-       ExtraTrimmed[1] == '\n'))
+  if (ExtraTrimmed.starts_with('\n') || ExtraTrimmed.starts_with("\r\n"))
     Q->RemainingContent = Extra;
   else {
     StringRef TrailingWord = lexWord();
-    if (!TrailingWord.empty() && TrailingWord.front() == '#') {
+    if (TrailingWord.starts_with('#')) {
       Line = Line.drop_until([](char c) { return c == '\n'; });
       Line = Line.drop_while([](char c) { return c == '\n'; });
       return endQuery(Q);
@@ -180,7 +173,8 @@ enum ParsedQueryKind {
   PQK_Unlet,
   PQK_Quit,
   PQK_Enable,
-  PQK_Disable
+  PQK_Disable,
+  PQK_File
 };
 
 enum ParsedQueryVariable {
@@ -188,6 +182,7 @@ enum ParsedQueryVariable {
   PQV_Output,
   PQV_BindRoot,
   PQV_PrintMatcher,
+  PQV_EnableProfile,
   PQV_Traversal
 };
 
@@ -219,12 +214,14 @@ QueryRef QueryParser::doParse() {
                               .Case("let", PQK_Let)
                               .Case("m", PQK_Match, /*IsCompletion=*/false)
                               .Case("match", PQK_Match)
-                              .Case("q", PQK_Quit,  /*IsCompletion=*/false)
+                              .Case("q", PQK_Quit, /*IsCompletion=*/false)
                               .Case("quit", PQK_Quit)
                               .Case("set", PQK_Set)
                               .Case("enable", PQK_Enable)
                               .Case("disable", PQK_Disable)
                               .Case("unlet", PQK_Unlet)
+                              .Case("f", PQK_File, /*IsCompletion=*/false)
+                              .Case("file", PQK_File)
                               .Default(PQK_Invalid);
 
   switch (QKind) {
@@ -270,7 +267,7 @@ QueryRef QueryParser::doParse() {
     Diagnostics Diag;
     auto MatcherSource = Line.ltrim();
     auto OrigMatcherSource = MatcherSource;
-    Optional<DynTypedMatcher> Matcher = Parser::parseMatcherExpression(
+    std::optional<DynTypedMatcher> Matcher = Parser::parseMatcherExpression(
         MatcherSource, nullptr, &QS.NamedValues, &Diag);
     if (!Matcher) {
       return makeInvalidQueryFromDiagnostics(Diag);
@@ -289,6 +286,7 @@ QueryRef QueryParser::doParse() {
             .Case("output", PQV_Output)
             .Case("bind-root", PQV_BindRoot)
             .Case("print-matcher", PQV_PrintMatcher)
+            .Case("enable-profile", PQV_EnableProfile)
             .Case("traversal", PQV_Traversal)
             .Default(PQV_Invalid);
     if (VarStr.empty())
@@ -306,6 +304,9 @@ QueryRef QueryParser::doParse() {
       break;
     case PQV_PrintMatcher:
       Q = parseSetBool(&QuerySession::PrintMatcher);
+      break;
+    case PQV_EnableProfile:
+      Q = parseSetBool(&QuerySession::EnableProfile);
       break;
     case PQV_Traversal:
       Q = parseSetTraversalKind(&QuerySession::TK);
@@ -347,6 +348,9 @@ QueryRef QueryParser::doParse() {
 
     return endQuery(new LetQuery(Name, VariantValue()));
   }
+
+  case PQK_File:
+    return new FileQuery(Line);
 
   case PQK_Invalid:
     return new InvalidQuery("unknown command: " + CommandStr);
